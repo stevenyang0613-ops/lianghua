@@ -53,3 +53,18 @@ async def test_quotes_endpoint(client):
     data = resp.json()
     assert "total" in data
     assert "bonds" in data
+
+
+from datetime import date
+from app.models.backtest import PerformanceMetrics, TradeRecord, BacktestResult
+
+def test_performance_metrics_defaults():
+    m = PerformanceMetrics()
+    assert m.total_return_pct == 0.0
+    assert m.sharpe_ratio == 0.0
+
+
+def test_trade_record():
+    t = TradeRecord(code="113044", buy_date=date(2024, 1, 1), buy_price=120.0, volume=10)
+    assert t.code == "113044"
+    assert t.profit_pct is None  # not closed yet
