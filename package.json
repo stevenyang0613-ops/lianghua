@@ -1,0 +1,10 @@
+{
+  "name": "lianghua",
+  "private": true,
+  "scripts": {
+    "dev": "chmod +x scripts/dev.sh && ./scripts/dev.sh",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
+    "dev:electron": "cd frontend && npm run dev:electron"
+  }
+}
