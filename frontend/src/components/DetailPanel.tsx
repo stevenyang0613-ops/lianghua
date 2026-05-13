@@ -1,5 +1,6 @@
-import { Card, Descriptions, Tag, Typography, Space, Statistic, Row, Col } from 'antd'
-import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import { Card, Descriptions, Tag, Typography, Space, Statistic, Row, Col, Button, Drawer } from 'antd'
+import { CloseOutlined, ArrowUpOutlined, ArrowDownOutlined, BellOutlined } from '@ant-design/icons'
 import { useAppStore } from '../stores/useAppStore'
 import { useMarketStore } from '../stores/useMarketStore'
 
@@ -7,13 +8,23 @@ const { Title, Text } = Typography
 
 export default function DetailPanel() {
   const selectedBond = useAppStore((s) => s.selectedBond)
+  const setSelectedBond = useAppStore((s) => s.setSelectedBond)
   const bonds = useMarketStore((s) => s.bonds)
   const bond = selectedBond ? bonds.get(selectedBond) : null
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768)
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
 
   if (!bond) {
+    if (isMobile) return null
     return (
-      <div style={{ width: 320, borderLeft: '1px solid #e8e8e8', height: '100%', display: 'flex', flexDirection: 'column', background: '#fff' }}>
-        <div style={{ padding: 16, borderBottom: '1px solid #f0f0f0' }}>
+      <div style={{ width: 320, borderLeft: '1px solid var(--border-color, #e8e8e8)', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #fff)' }}>
+        <div style={{ padding: 16, borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Title level={5} style={{ margin: 0 }}>详情面板</Title>
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -27,15 +38,8 @@ export default function DetailPanel() {
   const premiumColor = bond.premium_ratio < 0 ? '#52c41a' : bond.premium_ratio > 50 ? '#faad14' : undefined
   const dualLowColor = bond.dual_low < 130 ? '#52c41a' : bond.dual_low > 180 ? '#f5222d' : '#faad14'
 
-  return (
-    <div style={{ width: 320, borderLeft: '1px solid #e8e8e8', height: '100%', display: 'flex', flexDirection: 'column', background: '#fff', overflow: 'auto' }}>
-      <div style={{ padding: 16, borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>
-        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-          <Title level={5} style={{ margin: 0 }}>{bond.name}</Title>
-          <Text type="secondary">{bond.code}</Text>
-        </Space>
-      </div>
-
+  const content = (
+    <>
       <div style={{ padding: 16 }}>
         <Row gutter={16}>
           <Col span={12}>
@@ -96,6 +100,38 @@ export default function DetailPanel() {
           <Descriptions.Item label="成交额">{bond.volume.toFixed(2)} 亿元</Descriptions.Item>
         </Descriptions>
       </Card>
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <Drawer
+        title={
+          <Space>
+            <Text strong>{bond.name}</Text>
+            <Text type="secondary">{bond.code}</Text>
+          </Space>
+        }
+        placement="bottom"
+        height="70%"
+        open={!!bond}
+        onClose={() => setSelectedBond(null)}
+      >
+        {content}
+      </Drawer>
+    )
+  }
+
+  return (
+    <div style={{ width: 320, borderLeft: '1px solid var(--border-color, #e8e8e8)', height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--card-bg, #fff)', overflow: 'auto' }}>
+      <div style={{ padding: 16, borderBottom: '1px solid #f0f0f0', background: 'var(--bg-color, #fafafa)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Space direction="vertical" size={4}>
+          <Title level={5} style={{ margin: 0 }}>{bond.name}</Title>
+          <Text type="secondary">{bond.code}</Text>
+        </Space>
+        <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setSelectedBond(null)} />
+      </div>
+      {content}
     </div>
   )
 }
