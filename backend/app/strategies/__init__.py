@@ -1,9 +1,15 @@
 from app.strategies.base import Strategy
 from app.strategies.dual_low import DualLowStrategy
+from app.strategies.low_premium import LowPremiumStrategy
+from app.strategies.momentum import MomentumStrategy
+from app.strategies.multi_factor import MultiFactorStrategy
 
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "dual_low": DualLowStrategy,
+    "low_premium": LowPremiumStrategy,
+    "momentum": MomentumStrategy,
+    "multi_factor": MultiFactorStrategy,
 }
 
 
