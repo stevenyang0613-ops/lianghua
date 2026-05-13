@@ -98,3 +98,98 @@ export async function runBacktest(req: BacktestRequest): Promise<BacktestResult>
   const data = await resp.json()
   return data.result
 }
+
+// ── 交易 API ──
+
+export interface Account {
+  total_asset: number
+  cash: number
+  frozen: number
+  market_value: number
+  daily_profit: number
+  total_profit: number
+  updated_at: string
+}
+
+export interface Position {
+  code: string
+  name: string
+  volume: number
+  available_volume: number
+  cost_price: number
+  current_price: number
+  market_value: number
+  profit_pct: number
+  profit_amount: number
+}
+
+export interface TradeOrder {
+  id: string
+  code: string
+  name: string
+  side: string
+  type: string
+  price: number
+  volume: number
+  filled_volume: number
+  status: string
+  created_at: string
+  updated_at: string | null
+  reject_reason: string
+}
+
+export interface PlaceOrderRequest {
+  code: string
+  name: string
+  side: 'buy' | 'sell'
+  price: number
+  volume: number
+  order_type?: 'limit' | 'market'
+}
+
+export interface FundPoint {
+  ts: string
+  total_asset: number
+  cash: number
+  market_value: number
+  total_profit: number
+}
+
+export async function fetchAccount(): Promise<Account> {
+  return fetchJSON(`${BASE}/trade/account`)
+}
+
+export async function fetchPositions(): Promise<{ positions: Position[] }> {
+  return fetchJSON(`${BASE}/trade/positions`)
+}
+
+export async function fetchOrders(): Promise<{ orders: TradeOrder[] }> {
+  return fetchJSON(`${BASE}/trade/orders`)
+}
+
+export async function placeOrder(req: PlaceOrderRequest): Promise<TradeOrder> {
+  const resp = await fetch(`${BASE}/trade/order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!resp.ok) {
+    const text = await resp.text()
+    throw new Error(text || `HTTP ${resp.status}`)
+  }
+  return resp.json()
+}
+
+export async function cancelOrder(orderId: string): Promise<{ status: string }> {
+  return fetchJSON(`${BASE}/trade/order/${orderId}/cancel`)
+}
+
+export async function resetAccount(): Promise<{ status: string }> {
+  const resp = await fetch(`${BASE}/trade/reset`, { method: 'POST' })
+  return resp.json()
+}
+
+export async function fetchFundCurve(): Promise<{ points: FundPoint[] }> {
+  return fetchJSON(`${BASE}/trade/fund-curve`)
+}
+

@@ -10,6 +10,7 @@ from app.api.alert import router as alert_router
 from app.engine.market import MarketEngine
 from app.engine.alert import AlertEngine
 from app.engine.storage import DataStorage
+from app.engine.trade import TradeEngine
 
 
 def setup_logging():
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     market_engine = MarketEngine(refresh_interval=settings.market_refresh_interval)
     alert_engine = AlertEngine()
     storage = DataStorage(settings.db_path)
+    trade_engine = TradeEngine()
 
     async def on_market_update(bonds):
         await alert_engine.check_quotes(bonds)
@@ -41,6 +43,7 @@ async def lifespan(app: FastAPI):
     app.state.engine = market_engine
     app.state.alert_engine = alert_engine
     app.state.storage = storage
+    app.state.trade_engine = trade_engine
 
     logger.info(f"Starting {settings.app_name} on {settings.host}:{settings.port}")
     await market_engine.start()
