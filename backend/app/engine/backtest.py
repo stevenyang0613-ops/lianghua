@@ -2,16 +2,18 @@ import time
 import numpy as np
 import pandas as pd
 from datetime import date, datetime
+from itertools import product
 from typing import Optional
 
 from app.models.backtest import (
-    BacktestResult, PerformanceMetrics, TradeRecord, MonthlyReturn
+    BacktestResult, PerformanceMetrics, TradeRecord, MonthlyReturn,
+    BacktestConfig, OptimizationConfig, OptimizationResult, OptimizationResultItem
 )
 from app.strategies.base import Strategy
 
 
-def _calculate_metrics(equity: list[float]) -> PerformanceMetrics:
-    """计算绩效指标"""
+def _calculate_metrics(equity: list[float], risk_free_rate: float = 0.02) -> PerformanceMetrics:
+    """计算绩效指标，支持可配置无风险利率"""
     arr = np.array(equity)
     returns = np.diff(arr) / arr[:-1]
 
@@ -29,14 +31,15 @@ def _calculate_metrics(equity: list[float]) -> PerformanceMetrics:
     drawdowns = (arr - peak) / peak
     max_dd = float(np.min(drawdowns))
 
-    # Sharpe
+    # Sharpe (使用可配置的无风险利率)
     std = float(np.std(returns, ddof=1))
-    sharpe = float(annual_ret / std * np.sqrt(250)) if std > 0 else 0.0
+    excess_ret = annual_ret - risk_free_rate
+    sharpe = float(excess_ret / std * np.sqrt(250)) if std > 0 else 0.0
 
     # Sortino
     downside = returns[returns < 0]
     downside_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 0.0
-    sortino = float(annual_ret / downside_std * np.sqrt(250)) if downside_std > 0 else 0.0
+    sortino = float(excess_ret / downside_std * np.sqrt(250)) if downside_std > 0 else 0.0
 
     # Calmar
     calmar = float(annual_ret / abs(max_dd)) if max_dd != 0 else 0.0
@@ -51,12 +54,30 @@ def _calculate_metrics(equity: list[float]) -> PerformanceMetrics:
     )
 
 
-class BacktestEngine:
-    """回测引擎 - 向量化计算"""
+def _build_result_item(params: dict, metrics: PerformanceMetrics) -> OptimizationResultItem:
+    """将 PerformanceMetrics 展平为 OptimizationResultItem"""
+    return OptimizationResultItem(
+        params=params,
+        total_return_pct=metrics.total_return_pct,
+        annual_return_pct=metrics.annual_return_pct,
+        max_drawdown_pct=metrics.max_drawdown_pct,
+        sharpe_ratio=metrics.sharpe_ratio,
+        sortino_ratio=metrics.sortino_ratio,
+        calmar_ratio=metrics.calmar_ratio,
+        win_rate=metrics.win_rate,
+        total_trades=metrics.total_trades,
+    )
 
-    def __init__(self, commission_pct: float = 0.001, slippage_pct: float = 0.001):
-        self.commission_pct = commission_pct
-        self.slippage_pct = slippage_pct
+
+class BacktestEngine:
+    """回测引擎 - 向量化计算，支持可配置交易成本和参数优化"""
+
+    def __init__(self, config: Optional[BacktestConfig] = None):
+        cfg = config or BacktestConfig()
+        self.commission_pct = cfg.commission_pct
+        self.slippage_pct = cfg.slippage_pct
+        self.min_commission = cfg.min_commission
+        self.risk_free_rate = cfg.risk_free_rate
 
     def run(self, strategy: Strategy, data: pd.DataFrame) -> BacktestResult:
         """运行回测"""
@@ -104,7 +125,7 @@ class BacktestEngine:
                     h = holdings.pop(sig['code'])
                     sell_price = sig['price'] * (1 - self.slippage_pct)
                     sell_value = sell_price * h['volume']
-                    fee = sell_value * self.commission_pct
+                    fee = max(sell_value * self.commission_pct, self.min_commission)
                     profit = sell_value - fee - (h['buy_price'] * h['volume'])
 
                     cash += sell_value - fee
@@ -138,7 +159,7 @@ class BacktestEngine:
                 alloc = cash / n_to_buy if n_to_buy > 0 else 0
                 volume = max(1, int(alloc / buy_price))
                 cost = buy_price * volume
-                fee = cost * self.commission_pct
+                fee = max(cost * self.commission_pct, self.min_commission)
 
                 if cost + fee <= cash:
                     cash -= cost + fee
@@ -161,7 +182,7 @@ class BacktestEngine:
             equity.append(reval)
 
         # 计算指标
-        metrics = _calculate_metrics(equity)
+        metrics = _calculate_metrics(equity, self.risk_free_rate)
         metrics.total_trades = len(trades)
 
         if trades:
@@ -192,3 +213,88 @@ class BacktestEngine:
             trades=trades,
             execution_time_ms=round((time.time() - start_time) * 1000),
         )
+
+    def run_optimization(
+        self,
+        strategy_cls: type[Strategy],
+        data: pd.DataFrame,
+        optimization_config: OptimizationConfig,
+    ) -> OptimizationResult:
+        """参数优化 - 网格搜索"""
+        start_time = time.time()
+
+        # 生成参数组合网格
+        ranges = optimization_config.param_ranges
+        if not ranges:
+            raise ValueError("优化参数范围不能为空")
+
+        # 每个参数的取值范围
+        param_values = {}
+        for r in ranges:
+            values = []
+            v = r.min_val
+            while v <= r.max_val + 1e-9:
+                values.append(v)
+                v += r.step
+            param_values[r.name] = values
+
+        # 生成所有组合
+        keys = list(param_values.keys())
+        value_lists = [param_values[k] for k in keys]
+        all_combinations = list(product(*value_lists))
+
+        # 限制迭代次数
+        total_combos = len(all_combinations)
+        max_iter = min(optimization_config.max_iterations, total_combos)
+        if max_iter < total_combos:
+            # 随机采样
+            indices = np.random.choice(total_combos, size=max_iter, replace=False)
+            all_combinations = [all_combinations[i] for i in indices]
+
+        results: list[OptimizationResultItem] = []
+        metric_key = optimization_config.optimize_metric
+
+        for combo in all_combinations:
+            params = dict(zip(keys, [float(v) for v in combo]))
+
+            # 实例化策略
+            strategy = strategy_cls(**params)
+
+            # 运行回测
+            result = self.run(strategy, data)
+            metrics = result.metrics
+
+            # 获取优化目标值
+            metric_value = getattr(metrics, metric_key, 0.0)
+
+            results.append(_build_result_item(params, metrics))
+
+        # 按优化目标排序
+        results.sort(key=lambda x: getattr(x, metric_key, 0.0), reverse=True)
+        top_results = results[:optimization_config.top_n]
+
+        # 最优参数
+        best_item = top_results[0] if top_results else None
+
+        opt_result = OptimizationResult(
+            strategy_name=strategy_cls.name,
+            optimize_metric=optimization_config.optimize_metric,
+            total_combinations=total_combos,
+            best_params=best_item.params if best_item else {},
+            top_results=top_results,
+            execution_time_ms=round((time.time() - start_time) * 1000),
+        )
+
+        if best_item:
+            opt_result.best_metrics = PerformanceMetrics(
+                total_return_pct=best_item.total_return_pct,
+                annual_return_pct=best_item.annual_return_pct,
+                max_drawdown_pct=best_item.max_drawdown_pct,
+                sharpe_ratio=best_item.sharpe_ratio,
+                sortino_ratio=best_item.sortino_ratio,
+                calmar_ratio=best_item.calmar_ratio,
+                win_rate=best_item.win_rate,
+                total_trades=best_item.total_trades,
+            )
+
+        return opt_result

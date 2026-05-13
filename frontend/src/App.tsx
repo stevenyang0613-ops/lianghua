@@ -6,6 +6,7 @@ import Watchlist from './pages/Watchlist'
 import Backtest from './pages/Backtest'
 import Trade from './pages/Trade'
 import Analysis from './pages/Analysis'
+import Strategies from './pages/Strategies'
 import Settings from './pages/Settings'
 import { initDefaultUser } from './stores/useUserStore'
 
@@ -23,7 +24,7 @@ export default function App() {
         <Route path="/backtest" element={<Backtest />} />
         <Route path="/trade" element={<Trade />} />
         <Route path="/analysis" element={<Analysis />} />
-        <Route path="/strategies" element={<div style={{ padding: 24 }}><h2>策略管理</h2></div>} />
+        <Route path="/strategies" element={<Strategies />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
