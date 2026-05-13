@@ -68,3 +68,17 @@ def test_trade_record():
     t = TradeRecord(code="113044", buy_date=date(2024, 1, 1), buy_price=120.0, volume=10)
     assert t.code == "113044"
     assert t.profit_pct is None  # not closed yet
+
+
+from app.engine.backtest import _calculate_metrics
+
+
+def test_calculate_metrics_empty():
+    m = _calculate_metrics([1.0])
+    assert m.total_return_pct == 0.0
+
+
+def test_calculate_metrics_up():
+    m = _calculate_metrics([1.0, 1.1, 1.2])
+    assert m.total_return_pct > 0
+    assert m.max_drawdown_pct == 0.0
