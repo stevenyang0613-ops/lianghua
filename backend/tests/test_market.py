@@ -40,3 +40,12 @@ def test_premium_calculation():
 
     dual_low = round(price + premium, 2)
     assert dual_low == 131.3
+
+
+@pytest.mark.asyncio
+async def test_quotes_endpoint(client):
+    resp = await client.get("/api/v1/market/quotes")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "total" in data
+    assert "bonds" in data
