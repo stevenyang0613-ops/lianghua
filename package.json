@@ -5,6 +5,55 @@
     "dev": "chmod +x scripts/dev.sh && ./scripts/dev.sh",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
-    "dev:electron": "cd frontend && npm run dev:electron"
+    "dev:electron": "cd frontend && npm run dev:electron",
+    "build:frontend": "cd frontend && npm run build",
+    "build:electron": "cd frontend && npm run build && cd .. && npx electron-builder",
+    "build:mac": "cd frontend && npm run build && cd .. && npx electron-builder --mac",
+    "build:win": "cd frontend && npm run build && cd .. && npx electron-builder --win",
+    "build:linux": "cd frontend && npm run build && cd .. && npx electron-builder --linux"
+  },
+  "build": {
+    "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+    "appId": "com.lianghua.quant",
+    "productName": "LiangHua",
+    "directories": {
+      "buildResources": "resources",
+      "output": "release"
+    },
+    "files": [
+      "electron/dist/**/*",
+      "frontend/dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!__pycache__/**",
+          "!.venv/**"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": ["dmg", "zip"],
+      "artifactName": "${productName}-${version}-mac.${ext}"
+    },
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "${productName}-${version}-win.${ext}"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "artifactName": "${productName}-${version}-linux.${ext}",
+      "category": "Finance"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "LiangHua"
+    }
   }
 }
