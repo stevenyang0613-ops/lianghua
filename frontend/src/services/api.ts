@@ -193,3 +193,94 @@ export async function fetchFundCurve(): Promise<{ points: FundPoint[] }> {
   return fetchJSON(`${BASE}/trade/fund-curve`)
 }
 
+// ── 分析工具 API ──
+
+export interface ForcedRedemptionItem {
+  code: string
+  name: string
+  stock_price: number
+  conversion_price: number
+  ratio: number
+  conversion_value: number
+  premium_ratio: number
+  trigger_days: number | null
+  forced_call_days: number
+  risk_level: string
+  remaining_years: number
+}
+
+export interface DualLowItem {
+  rank: number
+  code: string
+  name: string
+  price: number
+  premium_ratio: number
+  dual_low: number
+  ytm: number
+  volume: number
+  remaining_years: number
+  stock_price: number
+  conversion_value: number
+}
+
+export interface PulseItem {
+  code: string
+  name: string
+  pulse_type: string
+  change_pct: number
+  price: number
+  volume: number
+  premium_ratio: number
+  dual_low: number
+  severity: string
+  remaining_years?: number
+}
+
+export interface RevisionItem {
+  code: string
+  name: string
+  stock_price: number
+  conversion_price: number
+  price_distance: number
+  ratio: number
+  premium_ratio: number
+  remaining_years: number
+  probability: number
+  level: string
+  distance_score: number
+  time_score: number
+  premium_score: number
+}
+
+export interface StockCorrelationItem {
+  code: string
+  name: string
+  bond_change: number
+  stock_change: number
+  elasticity: number
+  premium_ratio: number
+  conversion_value: number
+  price: number
+  stock_price: number
+  dual_low: number
+}
+
+export async function fetchForcedRedemption(): Promise<{ total: number; high_risk_count: number; items: ForcedRedemptionItem[] }> {
+  return fetchJSON(`${BASE}/analysis/forced-redemption`)
+}
+
+export async function fetchDualLowRanking(): Promise<{ total: number; items: DualLowItem[] }> {
+  return fetchJSON(`${BASE}/analysis/dual-low-ranking`)
+}
+
+export async function fetchPulseScan(): Promise<{ total: number; high_severity_count: number; items: PulseItem[] }> {
+  return fetchJSON(`${BASE}/analysis/pulse-scan`)
+}
+
+export async function fetchRevisionProbability(): Promise<{ total: number; high_probability_count: number; items: RevisionItem[] }> {
+  return fetchJSON(`${BASE}/analysis/revision-probability`)
+}
+
+export async function fetchStockCorrelation(): Promise<{ total: number; items: StockCorrelationItem[] }> {
+  return fetchJSON(`${BASE}/analysis/stock-correlation`)
+}
