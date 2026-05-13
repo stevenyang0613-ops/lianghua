@@ -1,6 +1,6 @@
 import asyncio
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
 
@@ -10,32 +10,41 @@ async def market_websocket(websocket: WebSocket):
     await websocket.accept()
     engine = websocket.app.state.engine
 
-    async def on_market_update_all(bonds):
+    async def on_market_update(bonds):
         data = [b.model_dump(mode="json") for b in bonds]
         try:
-            await websocket.send_json({"type": "tick", "data": data})
+            await websocket.send_json({"type": "tick", "data": data, "ts": engine.last_update.isoformat() if engine.last_update else None})
         except Exception:
             pass
 
-    engine.subscribe_all(on_market_update_all)
+    engine.subscribe(on_market_update)
 
-    async def poll():
+    heartbeat_task = None
+
+    async def heartbeat():
         while True:
             try:
-                bonds = await engine.refresh()
-                await on_market_update_all(bonds)
-            except Exception as e:
-                print(f"Poll error: {e}")
-            await asyncio.sleep(5)
+                await asyncio.sleep(30)
+                await websocket.send_json({"type": "ping"})
+            except Exception:
+                break
 
-    poll_task = asyncio.create_task(poll())
+    heartbeat_task = asyncio.create_task(heartbeat())
 
     try:
         while True:
             raw = await websocket.receive_text()
-            msg = json.loads(raw)
+            try:
+                msg = json.loads(raw)
+                if msg.get("type") == "pong":
+                    continue
+            except json.JSONDecodeError:
+                pass
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"[WS] Connection error: {e}")
     finally:
-        poll_task.cancel()
-        engine.unsubscribe_all(on_market_update_all)
+        if heartbeat_task:
+            heartbeat_task.cancel()
+        engine.unsubscribe(on_market_update)

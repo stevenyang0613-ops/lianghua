@@ -1,5 +1,7 @@
+import asyncio
 from datetime import datetime
 from typing import Optional
+import logging
 
 import akshare as ak
 import pandas as pd
@@ -7,28 +9,63 @@ import pandas as pd
 from app.adapters.base import DataSourceAdapter
 from app.models.convertible import ConvertibleQuote
 
+logger = logging.getLogger(__name__)
+
 
 class AKShareAdapter(DataSourceAdapter):
     """AKShare 可转债数据适配器"""
 
-    def __init__(self):
+    def __init__(self, cache_ttl: int = 3, max_retries: int = 3, timeout: float = 10.0):
         self._cache: Optional[list[ConvertibleQuote]] = None
         self._cache_time: Optional[datetime] = None
+        self._cache_ttl = cache_ttl
+        self._max_retries = max_retries
+        self._timeout = timeout
 
     async def fetch_all_quotes(self) -> list[ConvertibleQuote]:
         """使用 AKShare 获取全市场可转债实时行情"""
-        df = ak.bond_zh_cov()
+        if self._cache and self._cache_time:
+            elapsed = (datetime.now() - self._cache_time).total_seconds()
+            if elapsed < self._cache_ttl:
+                return self._cache
+
+        for attempt in range(self._max_retries):
+            try:
+                df = await asyncio.wait_for(
+                    asyncio.to_thread(self._fetch_bond_data),
+                    timeout=self._timeout
+                )
+                break
+            except asyncio.TimeoutError:
+                logger.warning(f"[AKShare] Timeout on attempt {attempt + 1}/{self._max_retries}")
+                if attempt == self._max_retries - 1:
+                    logger.error("[AKShare] All retries exhausted")
+                    return self._cache or []
+            except Exception as e:
+                logger.error(f"[AKShare] Error on attempt {attempt + 1}: {e}")
+                if attempt == self._max_retries - 1:
+                    return self._cache or []
+        else:
+            return self._cache or []
+
         bonds = []
         for _, row in df.iterrows():
             try:
                 bond = self._row_to_quote(row)
                 if bond:
                     bonds.append(bond)
-            except (KeyError, ValueError, TypeError):
+            except (KeyError, ValueError, TypeError) as e:
+                logger.debug(f"[AKShare] Skip row: {e}")
                 continue
+
         self._cache = bonds
         self._cache_time = datetime.now()
+        logger.info(f"[AKShare] Fetched {len(bonds)} convertible bonds")
         return bonds
+
+    def _fetch_bond_data(self) -> pd.DataFrame:
+        """同步获取可转债数据"""
+        return ak.bond_zh_cov()
 
     async def fetch_quote(self, code: str) -> Optional[ConvertibleQuote]:
         if self._cache is None:

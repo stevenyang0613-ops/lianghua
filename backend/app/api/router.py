@@ -1,4 +1,3 @@
-# backend/app/api/router.py
 from fastapi import APIRouter
 
 from app.api.market import router as market_router

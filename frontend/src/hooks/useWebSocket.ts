@@ -3,38 +3,55 @@ import type { ConvertibleQuote } from '../types'
 
 type MessageHandler = (bonds: ConvertibleQuote[]) => void
 
-const WS_URL = 'ws://' + window.location.hostname + ':5173/ws/market'
+function getWebSocketUrl(): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  return `${protocol}//${host}/api/v1/ws/market`
+}
 
 export function useWebSocket(onMessage: MessageHandler) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>()
+  const onMessageRef = useRef(onMessage)
+
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-    const ws = new WebSocket(WS_URL)
+    const ws = new WebSocket(getWebSocketUrl())
 
-    ws.onopen = () => console.log('WebSocket connected')
+    ws.onopen = () => {
+      console.log('[WS] Connected')
+    }
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data)
         if (msg.type === 'tick' && msg.data) {
-          onMessage(msg.data)
+          onMessageRef.current(msg.data)
+        } else if (msg.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }))
         }
       } catch (e) {
-        console.error('WS parse error:', e)
+        console.error('[WS] Parse error:', e)
       }
     }
 
-    ws.onclose = () => {
-      console.log('WebSocket disconnected, reconnecting...')
+    ws.onclose = (event) => {
+      console.log(`[WS] Disconnected (code: ${event.code})`)
       reconnectTimer.current = setTimeout(connect, 3000)
     }
 
-    ws.onerror = () => ws.close()
+    ws.onerror = (err) => {
+      console.error('[WS] Error:', err)
+      ws.close()
+    }
+
     wsRef.current = ws
-  }, [onMessage])
+  }, [])
 
   useEffect(() => {
     connect()
@@ -43,4 +60,8 @@ export function useWebSocket(onMessage: MessageHandler) {
       wsRef.current?.close()
     }
   }, [connect])
+
+  const isConnected = wsRef.current?.readyState === WebSocket.OPEN
+
+  return { isConnected }
 }

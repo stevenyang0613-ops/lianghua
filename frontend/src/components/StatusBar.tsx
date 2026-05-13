@@ -1,9 +1,15 @@
 import { Tag, Space, Typography } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import { useAppStore } from '../stores/useAppStore'
+import { useMarketStore } from '../stores/useMarketStore'
 
 const { Text } = Typography
 
-export default function StatusBar({ backendConnected = false }: { backendConnected?: boolean }) {
+export default function StatusBar() {
+  const backendConnected = useAppStore((s) => s.backendConnected)
+  const updatedAt = useMarketStore((s) => s.updatedAt)
+  const bondCount = useMarketStore((s) => s.allBonds.length)
+
   return (
     <div
       style={{
@@ -25,6 +31,8 @@ export default function StatusBar({ backendConnected = false }: { backendConnect
         )}
       </Space>
       <Text type="secondary" style={{ fontSize: 12 }}>LiangHua v0.1.0</Text>
+      <Text type="secondary" style={{ fontSize: 12 }}>可转债: {bondCount} 只</Text>
+      {updatedAt && <Text type="secondary" style={{ fontSize: 12 }}>更新: {updatedAt}</Text>}
       <div style={{ flex: 1 }} />
       <Text type="secondary" style={{ fontSize: 12 }}>数据源: AKShare</Text>
     </div>
