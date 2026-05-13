@@ -26,39 +26,41 @@ class BacktestRequest(BaseModel):
     optimization: OptimizationConfig = OptimizationConfig()
 
 
-@router.post("/run")
-async def run_backtest(req: BacktestRequest, request: Request):
-    # Get market engine for data
-    market_engine = request.app.state.engine
+async def _build_data(request: Request, start_date: date, end_date: date) -> pd.DataFrame:
+    """Build backtest data: try DuckDB cache first, fall back to simulated data"""
+    storage = getattr(request.app.state, "storage", None)
+    if storage:
+        from app.engine.historical import HistoricalDataLoader
+        loader = HistoricalDataLoader(storage)
+        cached = loader.get_cached_history(start_date, end_date)
+        if not cached.empty and len(cached) > 100:
+            # Use cached data, add premium_ratio estimate from current snapshot
+            current_bonds = await request.app.state.engine.get_all_quotes()
+            premium_map = {b.code: b.premium_ratio for b in current_bonds}
+            cached["premium_ratio"] = cached["code"].map(lambda c: premium_map.get(c, 0.0))
+            import numpy as np
+            cached["premium_ratio"] = cached["premium_ratio"] + np.random.randn(len(cached)) * 0.5
+            return cached
 
-    # Get all bonds data from market engine
+    # Fallback: simulated data from current snapshot
+    market_engine = request.app.state.engine
     bonds = await market_engine.get_all_quotes()
     if not bonds:
         await market_engine.refresh()
         bonds = await market_engine.get_all_quotes()
 
-    # Build mock historical data from current snapshot + random noise
-    # (In production, load from DuckDB historical data)
     raw_data = []
     for bond in bonds:
         raw_data.append({
-            'code': bond.code,
-            'name': bond.name,
-            'date': date.today(),
-            'price': bond.price,
-            'premium_ratio': bond.premium_ratio,
-            'volume': bond.volume,
+            'code': bond.code, 'name': bond.name,
+            'date': date.today(), 'price': bond.price,
+            'premium_ratio': bond.premium_ratio, 'volume': bond.volume,
         })
 
     df = pd.DataFrame(raw_data)
-
-    # Expand to multiple dates with price variation
     dfs = []
-    start = pd.to_datetime(req.start_date)
-    end = pd.to_datetime(req.end_date)
-
     import numpy as np
-    for i, d in enumerate(pd.date_range(start, end, freq='D')):
+    for i, d in enumerate(pd.date_range(pd.Timestamp(start_date), pd.Timestamp(end_date), freq='D')):
         day = df.copy()
         day['date'] = d.date()
         day['price'] = day['price'] * (1 + np.random.randn(len(day)) * 0.005)
@@ -66,12 +68,18 @@ async def run_backtest(req: BacktestRequest, request: Request):
         day['price'] = day['price'].clip(lower=80)
         dfs.append(day)
 
-    full_data = pd.concat(dfs, ignore_index=True)
+    return pd.concat(dfs, ignore_index=True)
 
+
+@router.post("/run")
+async def run_backtest(req: BacktestRequest, request: Request):
     try:
+        start = date.fromisoformat(req.start_date)
+        end = date.fromisoformat(req.end_date)
+        full_data = await _build_data(request, start, end)
+
         strategy_cls = get_strategy(req.strategy)
 
-        # 判断是否启用参数优化
         if req.optimization.enabled and req.optimization.param_ranges:
             engine = BacktestEngine(config=req.config)
             opt_result = engine.run_optimization(strategy_cls, full_data, req.optimization)
@@ -92,46 +100,14 @@ async def run_backtest(req: BacktestRequest, request: Request):
 @router.post("/optimize")
 async def optimize_params(req: BacktestRequest, request: Request):
     """参数优化专用端点"""
-    market_engine = request.app.state.engine
-
-    bonds = await market_engine.get_all_quotes()
-    if not bonds:
-        await market_engine.refresh()
-        bonds = await market_engine.get_all_quotes()
-
-    raw_data = []
-    for bond in bonds:
-        raw_data.append({
-            'code': bond.code,
-            'name': bond.name,
-            'date': date.today(),
-            'price': bond.price,
-            'premium_ratio': bond.premium_ratio,
-            'volume': bond.volume,
-        })
-
-    df = pd.DataFrame(raw_data)
-
-    dfs = []
-    start = pd.to_datetime(req.start_date)
-    end = pd.to_datetime(req.end_date)
-
-    import numpy as np
-    for i, d in enumerate(pd.date_range(start, end, freq='D')):
-        day = df.copy()
-        day['date'] = d.date()
-        day['price'] = day['price'] * (1 + np.random.randn(len(day)) * 0.005)
-        day['premium_ratio'] = day['premium_ratio'] + np.random.randn(len(day)) * 0.5
-        day['price'] = day['price'].clip(lower=80)
-        dfs.append(day)
-
-    full_data = pd.concat(dfs, ignore_index=True)
-
     try:
+        start = date.fromisoformat(req.start_date)
+        end = date.fromisoformat(req.end_date)
+        full_data = await _build_data(request, start, end)
+
         strategy_cls = get_strategy(req.strategy)
         engine = BacktestEngine(config=req.config)
 
-        # 如果未设置优化范围，使用策略参数默认范围
         opt_config = req.optimization
         if not opt_config.param_ranges:
             from app.models.backtest import OptimizationParamRange
@@ -151,4 +127,3 @@ async def optimize_params(req: BacktestRequest, request: Request):
         return {"success": True, "result": result.model_dump(mode="json")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
