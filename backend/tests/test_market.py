@@ -19,3 +19,24 @@ async def test_health_endpoint(client: AsyncClient):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["app"] == "LiangHua"
+
+
+from app.models.convertible import ConvertibleQuote
+
+
+def test_convertible_quote_model():
+    q = ConvertibleQuote(code="113044", name="测试转债", price=128.5)
+    assert q.code == "113044"
+    assert q.name == "测试转债"
+    assert q.price == 128.5
+    assert q.dual_low == 0.0
+
+
+def test_premium_calculation():
+    price = 128.5
+    cv = 125.0
+    premium = round((price - cv) / cv * 100, 2)
+    assert premium == 2.8
+
+    dual_low = round(price + premium, 2)
+    assert dual_low == 131.3
