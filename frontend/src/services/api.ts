@@ -37,11 +37,48 @@ export async function healthCheck(): Promise<{ status: string; app: string; mark
 
 // ── 回测 API ──
 
+export interface BacktestConfig {
+  commission_pct: number
+  slippage_pct: number
+  min_commission: number
+  risk_free_rate: number
+}
+
+export interface OptimizationParamRange {
+  name: string
+  min_val: number
+  max_val: number
+  step: number
+}
+
+export interface OptimizationConfig {
+  enabled: boolean
+  param_ranges: OptimizationParamRange[]
+  optimize_metric: string
+  max_iterations: number
+  top_n: number
+}
+
 export interface BacktestRequest {
   strategy: string
   params: Record<string, number>
   start_date: string
   end_date: string
+  config?: BacktestConfig
+  optimization?: OptimizationConfig
+}
+
+export interface BacktestMetrics {
+  total_return_pct: number
+  annual_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  calmar_ratio: number
+  win_rate: number
+  profit_loss_ratio: number
+  total_trades: number
+  avg_hold_days: number
 }
 
 export interface BacktestResult {
@@ -49,18 +86,7 @@ export interface BacktestResult {
   strategy_params: Record<string, number>
   start_date: string
   end_date: string
-  metrics: {
-    total_return_pct: number
-    annual_return_pct: number
-    max_drawdown_pct: number
-    sharpe_ratio: number
-    sortino_ratio: number
-    calmar_ratio: number
-    win_rate: number
-    profit_loss_ratio: number
-    total_trades: number
-    avg_hold_days: number
-  }
+  metrics: BacktestMetrics
   equity_curve: { date: string; value: number }[]
   trades: {
     code: string
@@ -76,6 +102,28 @@ export interface BacktestResult {
   execution_time_ms: number
 }
 
+export interface OptimizationResultItem {
+  params: Record<string, number>
+  total_return_pct: number
+  annual_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  calmar_ratio: number
+  win_rate: number
+  total_trades: number
+}
+
+export interface OptimizationResult {
+  strategy_name: string
+  optimize_metric: string
+  total_combinations: number
+  best_params: Record<string, number>
+  best_metrics: BacktestMetrics | null
+  top_results: OptimizationResultItem[]
+  execution_time_ms: number
+}
+
 export interface StrategyInfo {
   id: string
   name: string
@@ -88,15 +136,24 @@ export async function fetchStrategies(): Promise<StrategyInfo[]> {
   return resp.strategies
 }
 
-export async function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
+export async function runBacktest(req: BacktestRequest): Promise<{ type: string; result: BacktestResult | OptimizationResult }> {
   const resp = await fetch(BASE + '/backtest/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   })
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-  const data = await resp.json()
-  return data.result
+  return resp.json()
+}
+
+export async function runOptimization(req: BacktestRequest): Promise<{ success: boolean; result: OptimizationResult }> {
+  const resp = await fetch(BASE + '/backtest/optimize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return resp.json()
 }
 
 // ── 交易 API ──

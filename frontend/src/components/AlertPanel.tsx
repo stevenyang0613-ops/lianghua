@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Modal, Form, InputNumber, Select, Button, Space, Table, Tag, Badge, message, Popconfirm, Empty, Typography } from 'antd'
+import { Modal, Form, InputNumber, Select, Button, Space, Table, Tag, Badge, message, Popconfirm, Empty, Typography, Switch, Alert } from 'antd'
 import { BellOutlined, PlusOutlined, DeleteOutlined, NotificationOutlined } from '@ant-design/icons'
 import { useAlertStore, type AlertCondition, type AlertType } from '../stores/useAlertStore'
+import { requestNotificationPermission, getNotificationPermission, sendAlertNotification } from '../utils/notification'
 
 const { Text } = Typography
 
@@ -34,10 +35,12 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
   const [form] = Form.useForm()
   const { alerts, triggers, setAlerts, addAlert, removeAlert, clearTriggers } = useAlertStore()
   const [loading, setLoading] = useState(false)
+  const [notificationEnabled, setNotificationEnabled] = useState(getNotificationPermission() === 'granted')
 
   useEffect(() => {
     if (visible) {
       fetchAlerts()
+      setNotificationEnabled(getNotificationPermission() === 'granted')
     }
   }, [visible])
 
@@ -46,6 +49,24 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
       form.setFieldsValue({ code: selectedCode, name: selectedName })
     }
   }, [selectedCode, selectedName])
+
+  useEffect(() => {
+    triggers.forEach((t) => {
+      if (notificationEnabled) {
+        sendAlertNotification(t.code, t.name, t.alert_type, t.current_value, t.threshold)
+      }
+    })
+  }, [triggers, notificationEnabled])
+
+  const handleEnableNotification = async () => {
+    const permission = await requestNotificationPermission()
+    setNotificationEnabled(permission === 'granted')
+    if (permission === 'granted') {
+      message.success('已开启浏览器通知')
+    } else {
+      message.warning('请在浏览器设置中允许通知')
+    }
+  }
 
   const fetchAlerts = async () => {
     try {
@@ -104,25 +125,13 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
   }
 
   const columns = [
-    {
-      title: '代码',
-      dataIndex: 'code',
-      key: 'code',
-      width: 80,
-    },
-    {
-      title: '名称',
-      dataIndex: 'name',
-      key: 'name',
-      width: 80,
-    },
+    { title: '代码', dataIndex: 'code', key: 'code', width: 80 },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 80 },
     {
       title: '条件',
       key: 'condition',
       render: (_: unknown, record: AlertCondition) => (
-        <span>
-          {alertTypeLabels[record.alert_type]} {record.threshold}{alertTypeUnits[record.alert_type]}
-        </span>
+        <span>{alertTypeLabels[record.alert_type]} {record.threshold}{alertTypeUnits[record.alert_type]}</span>
       ),
     },
     {
@@ -160,6 +169,20 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
       footer={null}
       width={700}
     >
+      {!notificationEnabled && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="开启浏览器通知可在告警触发时收到提醒"
+          action={
+            <Button size="small" type="primary" onClick={handleEnableNotification}>
+              开启通知
+            </Button>
+          }
+        />
+      )}
+
       {triggers.length > 0 && (
         <div style={{ marginBottom: 16, padding: 12, background: '#fff2e8', borderRadius: 4 }}>
           <Space direction="vertical" style={{ width: '100%' }}>

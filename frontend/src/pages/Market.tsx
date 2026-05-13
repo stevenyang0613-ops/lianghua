@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Typography, Space, message, Switch, Input, Row, Col, Pagination, Empty, Spin, Button, Badge } from 'antd'
-import { SearchOutlined, BellOutlined } from '@ant-design/icons'
+import { Typography, Space, message, Switch, Input, Row, Col, Pagination, Empty, Spin, Button, Badge, Dropdown, type MenuProps } from 'antd'
+import { SearchOutlined, BellOutlined, DownloadOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
 import VirtualTable from '../components/VirtualTable'
 import MarketTable from '../components/MarketTable'
 import FilterPanel from '../components/FilterPanel'
@@ -10,6 +10,7 @@ import { useAppStore } from '../stores/useAppStore'
 import { useAlertStore } from '../stores/useAlertStore'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { fetchAllQuotes } from '../services/api'
+import { exportToCSV, exportToExcel, formatDateForFilename } from '../utils/export'
 import type { ConvertibleQuote } from '../types'
 
 const { Title } = Typography
@@ -123,6 +124,35 @@ export default function Market() {
     setAlertVisible(true)
   }
 
+  const handleExport = (type: 'csv' | 'excel') => {
+    if (filteredBonds.length === 0) {
+      message.warning('无数据可导出')
+      return
+    }
+    const filename = `可转债行情_${formatDateForFilename()}`
+    if (type === 'csv') {
+      exportToCSV(filteredBonds, filename)
+    } else {
+      exportToExcel(filteredBonds, filename)
+    }
+    message.success(`已导出 ${filteredBonds.length} 条数据`)
+  }
+
+  const exportMenuItems: MenuProps['items'] = [
+    {
+      key: 'csv',
+      icon: <FileTextOutlined />,
+      label: '导出 CSV',
+      onClick: () => handleExport('csv'),
+    },
+    {
+      key: 'excel',
+      icon: <FileExcelOutlined />,
+      label: '导出 Excel',
+      onClick: () => handleExport('excel'),
+    },
+  ]
+
   if (loading) {
     return (
       <div style={{ height: 'calc(100vh - 200px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -141,6 +171,9 @@ export default function Market() {
           <Space>
             <span style={{ color: '#888' }}>共 {filteredBonds.length} 只可转债</span>
             <Switch checkedChildren="虚拟滚动" unCheckedChildren="分页" checked={useVirtual} onChange={setUseVirtual} />
+            <Dropdown menu={{ items: exportMenuItems }} trigger={['click']}>
+              <Button icon={<DownloadOutlined />}>导出</Button>
+            </Dropdown>
             <Badge count={triggers.length} size="small">
               <Button icon={<BellOutlined />} onClick={() => handleOpenAlert()}>
                 告警

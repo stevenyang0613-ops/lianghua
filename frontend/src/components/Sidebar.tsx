@@ -3,6 +3,7 @@ import { Menu } from 'antd'
 import {
   DashboardOutlined,
   StockOutlined,
+  StarOutlined,
   ExperimentOutlined,
   DollarOutlined,
   FundProjectionScreenOutlined,
@@ -11,8 +12,8 @@ import {
 } from '@ant-design/icons'
 
 const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: '行情总览' },
-  { key: '/market', icon: <StockOutlined />, label: '实时行情' },
+  { key: '/', icon: <StockOutlined />, label: '实时行情' },
+  { key: '/watchlist', icon: <StarOutlined />, label: '自选列表' },
   { key: '/backtest', icon: <ExperimentOutlined />, label: '回测中心' },
   { key: '/trade', icon: <DollarOutlined />, label: '交易终端' },
   { key: '/analysis', icon: <FundProjectionScreenOutlined />, label: '分析工具' },
