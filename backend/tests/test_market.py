@@ -5,8 +5,12 @@ import pytest
 from app.main import app
 
 
+from app.engine.market import MarketEngine
+
+
 @pytest.fixture
 async def client():
+    app.state.engine = MarketEngine()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

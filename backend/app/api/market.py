@@ -1,13 +1,15 @@
-from fastapi import APIRouter
-
-from app.engine.market import MarketEngine
+from fastapi import APIRouter, Request
 
 router = APIRouter()
-engine = MarketEngine()
+
+
+def _get_engine(request: Request):
+    return request.app.state.engine
 
 
 @router.get("/quotes")
-async def get_all_quotes():
+async def get_all_quotes(request: Request):
+    engine = _get_engine(request)
     bonds = await engine.get_all_quotes()
     return {
         "total": len(bonds),
@@ -17,7 +19,8 @@ async def get_all_quotes():
 
 
 @router.get("/quotes/{code}")
-async def get_quote(code: str):
+async def get_quote(code: str, request: Request):
+    engine = _get_engine(request)
     bond = await engine.get_quote(code)
     if bond is None:
         return {"error": "not found"}

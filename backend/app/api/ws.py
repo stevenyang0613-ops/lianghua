@@ -1,16 +1,14 @@
 import asyncio
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-from app.engine.market import MarketEngine
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 
 router = APIRouter()
-engine = MarketEngine()
 
 
 @router.websocket("/market")
 async def market_websocket(websocket: WebSocket):
     await websocket.accept()
+    engine = websocket.app.state.engine
 
     async def on_market_update_all(bonds):
         data = [b.model_dump(mode="json") for b in bonds]
@@ -36,10 +34,6 @@ async def market_websocket(websocket: WebSocket):
         while True:
             raw = await websocket.receive_text()
             msg = json.loads(raw)
-            if msg.get("type") == "subscribe":
-                codes = msg.get("codes", [])
-            elif msg.get("type") == "unsubscribe":
-                codes = msg.get("codes", [])
     except WebSocketDisconnect:
         pass
     finally:
