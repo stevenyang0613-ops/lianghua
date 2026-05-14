@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
     storage = DataStorage(settings.db_path)
     trade_engine = TradeEngine()
     signal_engine = SignalEngine()
+    signal_engine.set_storage(storage)
 
     async def on_market_update(bonds):
         await alert_engine.check_quotes(bonds)

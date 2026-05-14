@@ -59,6 +59,24 @@ class DataStorage:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_timestamp ON quotes_history(timestamp)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_snapshots(snapshot_date)")
 
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS signal_history (
+                id INTEGER PRIMARY KEY,
+                strategy VARCHAR,
+                code VARCHAR,
+                name VARCHAR,
+                action VARCHAR,
+                price DOUBLE,
+                reason VARCHAR,
+                confidence DOUBLE,
+                executed BOOLEAN DEFAULT FALSE,
+                ts TIMESTAMP
+            )
+        """)
+
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_ts ON signal_history(ts)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_code ON signal_history(code)")
+
     def save_quote(self, quote: ConvertibleQuote) -> None:
         self.conn.execute("""
             INSERT INTO quotes_history
@@ -139,6 +157,55 @@ class DataStorage:
         deleted = result.fetchone()[0] if result else 0
         logger.info(f"[Storage] Cleaned up {deleted} old records")
         return deleted
+
+    def save_signals_batch(self, signals: list[dict]) -> None:
+        for s in signals:
+            self.conn.execute("""
+                INSERT INTO signal_history
+                (strategy, code, name, action, price, reason, confidence, executed, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                s.get("strategy", ""), s.get("code", ""), s.get("name", ""),
+                s.get("action", ""), s.get("price", 0.0), s.get("reason", ""),
+                s.get("confidence", 0.0), s.get("executed", False), s.get("ts", datetime.now())
+            ))
+        logger.debug(f"[Storage] Saved {len(signals)} signals")
+
+    def get_signal_history(self, strategy: str = "", code: str = "",
+                            limit: int = 100, offset: int = 0) -> list[dict]:
+        conditions = []
+        params = []
+        if strategy:
+            conditions.append("strategy = ?")
+            params.append(strategy)
+        if code:
+            conditions.append("code = ?")
+            params.append(code)
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        result = self.conn.execute(f"""
+            SELECT * FROM signal_history {where}
+            ORDER BY ts DESC
+            LIMIT ? OFFSET ?
+        """, (*params, limit, offset)).fetchall()
+        columns = [desc[0] for desc in self.conn.execute("SELECT * FROM signal_history WHERE 1=0").description]
+        return [dict(zip(columns, row)) for row in result]
+
+    def get_signal_stats(self) -> dict:
+        """获取信号统计信息"""
+        total = self.conn.execute("SELECT COUNT(*) FROM signal_history").fetchone()[0]
+        executed = self.conn.execute("SELECT COUNT(*) FROM signal_history WHERE executed = TRUE").fetchone()[0]
+        by_strategy = self.conn.execute("""
+            SELECT strategy, COUNT(*) as cnt,
+                   SUM(CASE WHEN executed THEN 1 ELSE 0 END) as executed_cnt
+            FROM signal_history GROUP BY strategy
+        """).fetchall()
+        return {
+            "total": total,
+            "executed": executed,
+
+
+            "strategy_stats": [{"strategy": r[0], "count": r[1], "executed": r[2]} for r in by_strategy]
+        }
 
     def close(self):
         self.conn.close()

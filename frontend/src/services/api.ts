@@ -391,3 +391,41 @@ export async function executeSignal(code: string): Promise<{ executed: number; o
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
   return resp.json()
 }
+
+export async function batchExecuteSignals(): Promise<{ executed: number; orders: TradeOrder[]; message?: string }> {
+  const resp = await fetch(`${BASE}/signals/batch-execute`, { method: 'POST' })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return resp.json()
+}
+
+export interface SignalHistoryItem {
+  id: number
+  strategy: string
+  code: string
+  name: string
+  action: string
+  price: number
+  reason: string
+  confidence: number
+  executed: boolean
+  ts: string
+}
+
+export interface SignalStats {
+  total: number
+  executed: number
+  strategy_stats: { strategy: string; count: number; executed: number }[]
+}
+
+export async function fetchSignalHistory(strategy?: string, code?: string, limit?: number): Promise<{ signals: SignalHistoryItem[]; total: number }> {
+  const params = new URLSearchParams()
+  if (strategy) params.set('strategy', strategy)
+  if (code) params.set('code', code)
+  if (limit) params.set('limit', String(limit))
+  const qs = params.toString()
+  return fetchJSON(`${BASE}/signals/history${qs ? '?' + qs : ''}`)
+}
+
+export async function fetchSignalStats(): Promise<SignalStats> {
+  return fetchJSON(`${BASE}/signals/stats`)
+}

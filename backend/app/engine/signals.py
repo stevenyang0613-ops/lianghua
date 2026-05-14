@@ -6,6 +6,7 @@ import pandas as pd
 
 from app.models.convertible import ConvertibleQuote
 from app.strategies import get_strategy, list_strategies
+from app.engine.storage import DataStorage
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ class SignalEngine:
         self._signals: list[TradeSignal] = []
         self._active_strategies: list[str] = ["dual_low"]
         self._subscribers: set[Callable[[list[TradeSignal]], Awaitable[None]]] = set()
+        self._storage: Optional[DataStorage] = None
+
+    def set_storage(self, storage: DataStorage) -> None:
+        self._storage = storage
 
     @property
     def active_strategies(self) -> list[str]:
@@ -101,6 +106,9 @@ class SignalEngine:
 
         if signals:
             self._signals = signals
+            # Save to DuckDB history
+            if self._storage:
+                self._storage.save_signals_batch([s.to_dict() for s in signals])
             await self._notify(signals)
 
         return signals
