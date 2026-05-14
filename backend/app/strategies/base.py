@@ -18,7 +18,16 @@ class Strategy(ABC):
             self._params[p.name] = kwargs.get(p.name, p.default)
 
     def get_param(self, name: str):
-        return self._params.get(name)
+        val = self._params.get(name)
+        # Cast to correct type based on param definition
+        for p in self.params:
+            if p.name == name:
+                if p.type == "int":
+                    return int(val)
+                if p.type == "float":
+                    return float(val)
+                return val
+        return val
 
     @abstractmethod
     def on_init(self, data: pd.DataFrame) -> None:

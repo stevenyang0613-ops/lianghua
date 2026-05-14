@@ -6,6 +6,7 @@ from app.api.backtest import router as backtest_router
 from app.api.history import router as history_router
 from app.api.trade import router as trade_router
 from app.api.analysis import router as analysis_router
+from app.api.signals import router as signal_router
 
 router = APIRouter()
 router.include_router(market_router, prefix="/market", tags=["market"])
@@ -14,3 +15,4 @@ router.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
 router.include_router(history_router, prefix="/history", tags=["history"])
 router.include_router(trade_router, prefix="/trade", tags=["trade"])
 router.include_router(analysis_router, prefix="/analysis", tags=["analysis"])
+router.include_router(signal_router, prefix="", tags=["signals"])

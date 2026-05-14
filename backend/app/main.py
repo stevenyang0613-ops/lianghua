@@ -11,6 +11,7 @@ from app.engine.market import MarketEngine
 from app.engine.alert import AlertEngine
 from app.engine.storage import DataStorage
 from app.engine.trade import TradeEngine
+from app.engine.signals import SignalEngine
 
 
 def setup_logging():
@@ -33,17 +34,23 @@ async def lifespan(app: FastAPI):
     alert_engine = AlertEngine()
     storage = DataStorage(settings.db_path)
     trade_engine = TradeEngine()
+    signal_engine = SignalEngine()
 
     async def on_market_update(bonds):
         await alert_engine.check_quotes(bonds)
         storage.save_quotes_batch(bonds)
 
+    async def on_market_for_signals(bonds):
+        await signal_engine.process_quotes(bonds)
+
     market_engine.subscribe(on_market_update)
+    market_engine.subscribe(on_market_for_signals)
 
     app.state.engine = market_engine
     app.state.alert_engine = alert_engine
     app.state.storage = storage
     app.state.trade_engine = trade_engine
+    app.state.signal_engine = signal_engine
 
     logger.info(f"Starting {settings.app_name} on {settings.host}:{settings.port}")
     await market_engine.start()

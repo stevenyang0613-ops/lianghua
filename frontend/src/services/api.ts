@@ -341,3 +341,53 @@ export async function fetchRevisionProbability(): Promise<{ total: number; high_
 export async function fetchStockCorrelation(): Promise<{ total: number; items: StockCorrelationItem[] }> {
   return fetchJSON(`${BASE}/analysis/stock-correlation`)
 }
+
+// ── 信号 API ──
+
+export interface TradeSignal {
+  strategy: string
+  code: string
+  name: string
+  action: 'buy' | 'sell'
+  price: number
+  reason: string
+  confidence: number
+  ts: string
+  executed: boolean
+}
+
+export interface SignalResponse {
+  signals: TradeSignal[]
+  active_strategies: string[]
+  total: number
+}
+
+export interface StrategyInfoItem {
+  id: string
+  name: string
+  description: string
+}
+
+export async function fetchSignals(): Promise<SignalResponse> {
+  return fetchJSON(`${BASE}/signals`)
+}
+
+export async function fetchAvailableSignalsStrategies(): Promise<{ strategies: StrategyInfoItem[] }> {
+  return fetchJSON(`${BASE}/signals/available-strategies`)
+}
+
+export async function setActiveStrategies(strategies: string[]): Promise<{ active_strategies: string[] }> {
+  const resp = await fetch(`${BASE}/signals/strategies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strategies }),
+  })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return resp.json()
+}
+
+export async function executeSignal(code: string): Promise<{ executed: number; orders: TradeOrder[] }> {
+  const resp = await fetch(`${BASE}/signals/${code}/execute`, { method: 'POST' })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return resp.json()
+}

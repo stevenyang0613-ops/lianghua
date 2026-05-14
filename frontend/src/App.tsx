@@ -6,6 +6,7 @@ import Watchlist from './pages/Watchlist'
 import Backtest from './pages/Backtest'
 import Trade from './pages/Trade'
 import Analysis from './pages/Analysis'
+import Signals from './pages/Signals'
 import Strategies from './pages/Strategies'
 import Settings from './pages/Settings'
 import { initDefaultUser } from './stores/useUserStore'
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/backtest" element={<Backtest />} />
         <Route path="/trade" element={<Trade />} />
         <Route path="/analysis" element={<Analysis />} />
+        <Route path="/signals" element={<Signals />} />
         <Route path="/strategies" element={<Strategies />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
