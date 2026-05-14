@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Card, Table, Tag, Typography, Spin, Empty, message, Tabs, Row, Col, Statistic, Descriptions, Button, Space, Divider } from 'antd'
-import { DeploymentUnitOutlined, ExperimentOutlined, BarChartOutlined, ReloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { DeploymentUnitOutlined, ExperimentOutlined, BarChartOutlined, ReloadOutlined, InfoCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react'
-import { fetchStrategies } from '../services/api'
-import type { StrategyInfo } from '../services/api'
+import { fetchStrategies, fetchSignalHistory, fetchSignalStats } from '../services/api'
+import type { StrategyInfo, SignalHistoryItem, SignalStats } from '../services/api'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -11,6 +11,9 @@ export default function Strategies() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyInfo | null>(null)
+  const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>([])
+  const [signalHistoryLoading, setSignalHistoryLoading] = useState(false)
+  const [signalStats, setSignalStats] = useState<SignalStats | null>(null)
 
   useEffect(() => {
     fetchStrategies()
@@ -20,7 +23,18 @@ export default function Strategies() {
       })
       .catch(e => message.error('加载策略失败: ' + e.message))
       .finally(() => setLoading(false))
+    fetchSignalStats().then(setSignalStats).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (selectedStrategy) {
+      setSignalHistoryLoading(true)
+      fetchSignalHistory(selectedStrategy.id, undefined, 50)
+        .then(data => setSignalHistory(data.signals))
+        .catch(() => {})
+        .finally(() => setSignalHistoryLoading(false))
+    }
+  }, [selectedStrategy])
 
   const strategyColumns = [
     { title: 'ID', dataIndex: 'id', width: 100 },
@@ -32,6 +46,14 @@ export default function Strategies() {
       render: (_: any, record: StrategyInfo) => <Tag>{record.params.length} 个</Tag>,
     },
     {
+      title: '信号次数',
+      width: 100,
+      render: (_: any, record: StrategyInfo) => {
+        const stat = signalStats?.strategy_stats?.find(s => s.strategy === record.id)
+        return stat ? <Tag color="blue">{stat.count} 次</Tag> : <Tag>--</Tag>
+      },
+    },
+    {
       title: '操作',
       width: 100,
       render: (_: any, record: StrategyInfo) => (
@@ -39,6 +61,8 @@ export default function Strategies() {
       ),
     },
   ]
+
+  const actionColors: Record<string, string> = { buy: 'green', sell: 'red' }
 
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '60px auto' }} />
   if (strategies.length === 0) return <Empty description="暂无已注册策略" />
@@ -88,6 +112,25 @@ export default function Strategies() {
                   { title: '默认值', dataIndex: 'default', width: 80 },
                   { title: '最小值', dataIndex: 'min_val', width: 80, render: (v?: number) => v ?? '-' },
                   { title: '最大值', dataIndex: 'max_val', width: 80, render: (v?: number) => v ?? '-' },
+                ]}
+              />
+
+              <Divider orientation="left" plain><ThunderboltOutlined /> 历史信号</Divider>
+              <Table
+                dataSource={signalHistory}
+                rowKey="id"
+                size="small"
+                loading={signalHistoryLoading}
+                pagination={{ pageSize: 5, showTotal: (t) => `共 ${t} 条` }}
+                columns={[
+                  { title: '代码', dataIndex: 'code', width: 80, render: (v: string) => <Text code>{v}</Text> },
+                  { title: '名称', dataIndex: 'name', width: 120 },
+                  { title: '方向', dataIndex: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v]}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+                  { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v.toFixed(3) },
+                  { title: '置信度', dataIndex: 'confidence', width: 70, render: (v: number) => `${(v * 100).toFixed(0)}%` },
+                  { title: '已执行', dataIndex: 'executed', width: 60, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
+                  { title: '原因', dataIndex: 'reason', ellipsis: true },
+                  { title: '时间', dataIndex: 'ts', width: 160, render: (v: string) => new Date(v).toLocaleString('zh-CN') },
                 ]}
               />
             </Card>
