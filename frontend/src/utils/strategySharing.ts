@@ -197,7 +197,7 @@ export class StrategySharingService {
       // 从服务器获取
       strategy = await this.fetchFromServer(id)
       if (strategy) {
-        this.strategies.set(id, strategy)
+        this.strategies.set(id, strategy as StrategyDefinition)
       }
     }
 
@@ -206,7 +206,7 @@ export class StrategySharingService {
       strategy.stats.views++
     }
 
-    return strategy ?? undefined
+    return strategy ?? null
   }
 
   /**

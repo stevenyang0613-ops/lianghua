@@ -65,24 +65,8 @@ class AKShareAdapter(DataSourceAdapter):
         return bonds
 
     def _fetch_bond_data(self) -> pd.DataFrame:
-        """同步获取可转债数据，优先使用实时行情接口（含成交量）"""
-        try:
-            # 尝试获取实时数据（含成交量）
-            df_spot = ak.bond_zh_hs_cov_spot()
-            if df_spot is not None and not df_spot.empty:
-                df_spot = df_spot.rename(columns={
-                    'symbol': '债券代码',
-                    'name': '债券简称',
-                    'trade': '债现价',
-                    'volume': '成交额',
-                })
-                if '债券代码' in df_spot.columns and '债现价' in df_spot.columns:
-                    logger.info(f"[AKShare] Using spot data: {len(df_spot)} records with volume")
-                    return df_spot
-        except Exception as e:
-            logger.debug(f"[AKShare] Spot data unavailable: {e}")
-        # 回退到集思录数据（无成交量，但数据更完整）
-        logger.info("[AKShare] Falling back to cov data (no volume)")
+        """同步获取可转债数据"""
+        # bond_zh_cov() 提供完整的转股溢价率等字段（转股价值、转股价、正股价）
         return ak.bond_zh_cov()
 
     async def fetch_quote(self, code: str) -> Optional[ConvertibleQuote]:
@@ -101,12 +85,13 @@ class AKShareAdapter(DataSourceAdapter):
     def _row_to_quote(self, row: pd.Series) -> Optional[ConvertibleQuote]:
         """将 DataFrame 行转为 Quote 对象，适配不同版本的 AKShare 列名"""
         try:
-            code = str(row.get("债券代码", row.get("代码", row.get("bond_code", ""))))
+            # 适配 spot 接口 (symbol/name/trade) 和 cov 接口 (债券代码/债券简称/债现价)
+            code = str(row.get("债券代码", row.get("代码", row.get("symbol", row.get("bond_code", "")))))
             if not code:
                 return None
 
             # 直接使用 AKShare 提供的原始数据（AKShare 已计算好转股价值和溢价率）
-            price = self._safe_float(row.get("债现价", row.get("最新价", row.get("price", 0))))
+            price = self._safe_float(row.get("债现价", row.get("最新价", row.get("trade", row.get("price", 0)))))
             conversion_value = self._safe_float(row.get("转股价值", 0))
             premium_ratio = self._safe_float(row.get("转股溢价率", 0))
             conversion_price = self._safe_float(row.get("转股价", 0))
@@ -115,7 +100,7 @@ class AKShareAdapter(DataSourceAdapter):
 
             return ConvertibleQuote(
                 code=code,
-                name=str(row.get("债券简称", row.get("转债名称", row.get("bond_name", "")))),
+                name=str(row.get("债券简称", row.get("转债名称", row.get("name", row.get("bond_name", ""))))),
                 price=price,
                 change_pct=0.0,
                 stock_price=stock_price,

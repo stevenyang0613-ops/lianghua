@@ -96,7 +96,7 @@ export class WSReconnect {
   private async connectViaIPC(): Promise<void> {
     try {
       // 注册 IPC 事件监听
-      const unsubState = window.electronAPI!.onWsState((id, state, code, reason) => {
+      const unsubState = window.electronAPI!.onWsState((id: string, state: string, code?: number, reason?: string) => {
         if (id !== this.wsId) return
         if (state === 'connected') {
           this.clearConnectionTimeout()
@@ -107,7 +107,7 @@ export class WSReconnect {
         }
       })
 
-      const unsubMsg = window.electronAPI!.onWsMessage((id, data, isBinary) => {
+      const unsubMsg = window.electronAPI!.onWsMessage((id: string, data: string, isBinary: boolean) => {
         if (id !== this.wsId) return
         if (isBinary) {
           // Base64 解码为 ArrayBuffer

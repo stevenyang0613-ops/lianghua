@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
-import { multiAccountManager, type AccountBalance } from '../utils/multiAccountManager'
+import { multiAccountManager, type AccountBalance, type AccountConfig } from '../utils/multiAccountManager'
 
 const { Title, Text } = Typography
 const { TabPane } = Tabs
@@ -93,7 +93,7 @@ export default function FundAggregation({ onTransfer }: Props) {
     const fundStatuses: AccountFundStatus[] = allAccounts.map(account => {
       const balance = multiAccountManager.getBalance(account.id)
       const utilization = balance ? (balance.marketValue / balance.totalAsset) * 100 : 0
-      const efficiency = calculateEfficiency(balance)
+      const efficiency = calculateEfficiency(balance ?? null)
 
       return {
         account,

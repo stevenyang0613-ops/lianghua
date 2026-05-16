@@ -193,12 +193,12 @@ export async function syncOfflineQueue(baseUrl: string): Promise<{ success: numb
           const result = await window.electronAPI.httpRequest(item.method || 'POST', `${baseUrl}${item.url}`, body)
           ok = result.ok
         } else {
-          const response = await fetch(`${baseUrl}${item.url}`, {
+          const fetchResponse = await fetch(`${baseUrl}${item.url}`, {
             method: item.method,
             body: item.body,
             headers: item.headers,
           })
-          ok = response.ok
+          ok = fetchResponse.ok
         }
 
         if (ok) {
@@ -209,7 +209,7 @@ export async function syncOfflineQueue(baseUrl: string): Promise<{ success: numb
           result.success++
         } else {
           result.failed++
-          result.errors.push(`${item.url}: HTTP ${response.status}`)
+          result.errors.push(`${item.url}: HTTP error`)
         }
       } catch (err) {
         result.failed++

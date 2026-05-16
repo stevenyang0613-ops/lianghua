@@ -188,7 +188,7 @@ export function ThemeEditor({ open, onClose, value, onChange, onSave }: ThemeEdi
     <Modal
       title={
         <Space>
-          <PaletteOutlined />
+          <BgColorsOutlined />
           主题编辑器
         </Space>
       }

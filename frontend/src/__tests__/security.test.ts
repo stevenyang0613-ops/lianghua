@@ -32,8 +32,8 @@ describe('Security Utils', () => {
       const plaintext = 'Hello, World!'
       const key = 'test-key-123'
 
-      const encrypted1 = encrypt(plaintext, key)
-      const encrypted2 = encrypt(plaintext, key)
+      const encrypted1 = encrypt(plaintext)
+      const encrypted2 = encrypt(plaintext)
 
       // 由于 IV 随机，每次加密结果应该不同
       expect(encrypted1).not.toBe(encrypted2)
@@ -211,7 +211,7 @@ describe('Security Utils', () => {
 
       const sessionId = sessionManager.get()
       expect(sessionId).toBeDefined()
-      expect(sessionId.length).toBeGreaterThan(0)
+      expect(sessionId!.length).toBeGreaterThan(0)
     })
 
     it('should update session data', () => {

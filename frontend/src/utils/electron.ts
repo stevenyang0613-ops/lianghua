@@ -1,52 +1,27 @@
-/**
- * Electron 环境检测工具
- */
-
 import type { ElectronAPI, UpdateStatus } from '../types/electron'
 
-// 重新导出类型供其他模块使用
 export type { ElectronAPI, UpdateStatus }
 
-/**
- * 检查是否运行在 Electron 环境
- */
+const getAPI = (): ElectronAPI | undefined => window.electronAPI as ElectronAPI | undefined
+
 export function isElectron(): boolean {
   return typeof window !== 'undefined' && window.electronAPI?.isElectron === true
 }
 
-/**
- * 获取 Electron API
- */
-export function getElectronAPI(): ElectronAPI | undefined {
-  return window.electronAPI
-}
-
-/**
- * 检查是否为 macOS
- */
 export function isMacOS(): boolean {
-  return getElectronAPI()?.platform === 'darwin'
+  return getAPI()?.platform === 'darwin'
 }
 
-/**
- * 检查是否为 Windows
- */
 export function isWindows(): boolean {
-  return getElectronAPI()?.platform === 'win32'
+  return getAPI()?.platform === 'win32'
 }
 
-/**
- * 检查是否为 Linux
- */
 export function isLinux(): boolean {
-  return getElectronAPI()?.platform === 'linux'
+  return getAPI()?.platform === 'linux'
 }
 
-/**
- * 显示原生通知
- */
 export async function showNativeNotification(title: string, body: string): Promise<void> {
-  const api = getElectronAPI()
+  const api = getAPI()
   if (api?.showNotification) {
     await api.showNotification(title, body)
   } else if ('Notification' in window) {
@@ -61,36 +36,19 @@ export async function showNativeNotification(title: string, body: string): Promi
   }
 }
 
-/**
- * 请求通知权限
- */
 export async function requestNotificationPermission(): Promise<boolean> {
-  if (isElectron()) {
-    return true
-  }
-  if (!('Notification' in window)) {
-    return false
-  }
+  if (isElectron()) return true
+  if (!('Notification' in window)) return false
   const permission = await Notification.requestPermission()
   return permission === 'granted'
 }
 
-/**
- * 获取应用信息
- */
 export async function getAppInfo() {
-  const api = getElectronAPI()
-  if (api?.getAppInfo) {
-    return await api.getAppInfo()
-  }
-  return null
+  return getAPI()?.getAppInfo?.() ?? null
 }
 
-/**
- * 在默认浏览器中打开外部链接
- */
 export function openExternalURL(url: string): void {
-  const api = getElectronAPI()
+  const api = getAPI()
   if (api?.openExternal) {
     api.openExternal(url)
   } else {
@@ -98,34 +56,25 @@ export function openExternalURL(url: string): void {
   }
 }
 
-/**
- * 重启后端服务
- */
 export async function restartBackend(): Promise<void> {
-  const api = getElectronAPI()
+  const api = getAPI()
   if (api?.restartBackend) {
     await api.restartBackend()
   } else {
-    throw new Error('后端重启功能仅在桌面端可用')
+    throw new Error('仅在桌面端可用')
   }
 }
 
-/**
- * 检查应用更新
- */
 export async function checkForUpdates(): Promise<{ available: boolean; version?: string; error?: string }> {
-  const api = getElectronAPI()
+  const api = getAPI()
   if (api?.checkForUpdates) {
     return await api.checkForUpdates()
   }
-  return { available: false, error: '此功能仅在桌面端可用' }
+  return { available: false, error: '仅在桌面端可用' }
 }
 
-/**
- * 监听更新状态变化
- */
 export function onUpdateStatus(callback: (status: UpdateStatus) => void): () => void {
-  const api = getElectronAPI()
+  const api = getAPI()
   if (api?.onUpdateStatus) {
     return api.onUpdateStatus(callback)
   }

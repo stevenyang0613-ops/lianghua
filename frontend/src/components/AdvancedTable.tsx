@@ -79,7 +79,7 @@ export function AdvancedTable<T extends Record<string, unknown>>({
   const [editingValue, setEditingValue] = useState<unknown>(null)
   const [filters, setFilters] = useState<Record<string, FilterValue | null>>({})
   const [sorter, setSorter] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
-  const inputRef = useRef<Input>(null)
+  const inputRef = useRef<InstanceType<typeof Input>>(null)
 
   // 处理筛选后的数据
   const filteredData = useMemo(() => {
@@ -88,15 +88,15 @@ export function AdvancedTable<T extends Record<string, unknown>>({
     // 应用筛选
     for (const [key, value] of Object.entries(filters)) {
       if (value && value.length > 0) {
-        result = result.filter(item => value.includes(item[key]))
+        result = result.filter(item => value.includes(item[key] as FilterValue[number]))
       }
     }
 
     // 应用排序
     if (sorter.field && sorter.order) {
       result.sort((a, b) => {
-        const aVal = a[sorter.field!]
-        const bVal = b[sorter.field!]
+        const aVal = a[sorter.field!] as string | number
+        const bVal = b[sorter.field!] as string | number
         const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0
         return sorter.order === 'ascend' ? comparison : -comparison
       })

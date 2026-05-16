@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Card, Table, Tag, Empty, message, Space, Button, Progress, Select, Input, Row, Col, Badge, Slider, Statistic, Popconfirm, Modal, Descriptions, DatePicker } from 'antd'
+import { Card, Table, Tag, Empty, message, Space, Button, Progress, Select, Input, Row, Col, Badge, Slider, Statistic, Popconfirm, Modal, Descriptions, DatePicker, Checkbox } from 'antd'
 import { ReloadOutlined, WifiOutlined, DisconnectOutlined, SettingOutlined, CloudOutlined, PlayCircleOutlined, ThunderboltOutlined, LineChartOutlined, DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {

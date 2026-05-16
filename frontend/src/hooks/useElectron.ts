@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { message } from 'antd'
 import { useNavigate } from 'react-router-dom'
-import type { ElectronAPI } from '../types/electron.d'
+import type { ElectronAPI } from '../types/electron'
 
 export function useElectron() {
   const navigate = useNavigate()

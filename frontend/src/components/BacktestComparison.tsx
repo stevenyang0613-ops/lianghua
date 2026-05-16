@@ -613,7 +613,7 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
           </Card>
 
           {/* 详细对比表 */}
-          <Card title={<span><CompareOutlined />详细指标对比</span>}>
+          <Card title={<span><SwapOutlined />详细指标对比</span>}>
             <Table
               columns={comparisonColumns}
               dataSource={comparisonMetrics}
