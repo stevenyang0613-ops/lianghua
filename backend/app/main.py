@@ -23,6 +23,17 @@ from app.engine.scheduler import Scheduler
 from app.engine.signals import SignalEngine
 from app.engine.trade import TradeEngine
 
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.middleware import SlowAPIMiddleware
+    limiter = Limiter(key_func=get_remote_address)
+    HAS_RATE_LIMIT = True
+except ImportError:
+    limiter = None
+    HAS_RATE_LIMIT = False
+
+
 def setup_logging():
     level = logging.DEBUG if settings.debug else logging.INFO
 
@@ -133,6 +144,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+if HAS_RATE_LIMIT and limiter:
+    app.state.limiter = limiter
+    app.add_exception_handler(429, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
