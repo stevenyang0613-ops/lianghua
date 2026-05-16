@@ -186,7 +186,7 @@ export default React.memo(function BacktestHistoryTab() {
             <Popconfirm title={`确认清理 ${cleanupDays} 天前的回测记录？`} onConfirm={handleCleanup} okText="清理" cancelText="取消">
               <Button size="small" icon={<ClearOutlined />}>批量清理</Button>
             </Popconfirm>
-            <Button size="small" icon={<ReloadOutlined />} onClick={loadHistory} loading={loading}>刷新</Button>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => loadHistory()} loading={loading}>刷新</Button>
           </Space>
         }
       >
@@ -524,6 +524,7 @@ export default React.memo(function BacktestHistoryTab() {
                 const baseReturns = baseDetails.map(d => d.avg_return_pct)
                 const baseMean = baseReturns.length > 0 ? baseReturns.reduce((a, b) => a + b, 0) / baseReturns.length : 0
                 const baseStd = baseReturns.length > 1 ? Math.sqrt(baseReturns.reduce((s, r) => s + (r - baseMean) ** 2, 0) / (baseReturns.length - 1)) : 0
+                const basePLR = baseAvgLoss > 0 ? baseAvgWin / baseAvgLoss : baseWins.length > 0 ? 99 : 0
                 const baseSharpe = baseStd > 0 ? (baseMean - 0.01 / 12) / baseStd : 0
                 const diffs = compareData.items.slice(1).map((item, i) => {
                   const s = item.summary

@@ -464,7 +464,7 @@ export default function OpsDashboard() {
                 {new Date(health.lastUpdate).toLocaleString()}
               </Descriptions.Item>
               <Descriptions.Item label="运行时间">
-                {Math.floor((Date.now() - performance.memory) / 60000)} 分钟
+                {Math.floor((Date.now() - health.lastUpdate) / 60000)} 分钟
               </Descriptions.Item>
             </Descriptions>
           </Card>

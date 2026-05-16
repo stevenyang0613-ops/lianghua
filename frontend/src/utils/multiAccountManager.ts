@@ -355,14 +355,14 @@ export class MultiAccountManager {
     }
 
     // 检查允许交易的标的
-    if (config!.allowedSymbols && config.allowedSymbols.length > 0) {
+    if (config!.allowedSymbols && config!.allowedSymbols.length > 0) {
       if (!config!.allowedSymbols.includes(trade.symbol)) {
         return { allowed: false, reason: '该标的不在允许交易列表中' }
       }
     }
 
     // 检查禁止交易的标的
-    if (config!.blockedSymbols && config.blockedSymbols.length > 0) {
+    if (config!.blockedSymbols && config!.blockedSymbols.length > 0) {
       if (config!.blockedSymbols.includes(trade.symbol)) {
         return { allowed: false, reason: '该标的在禁止交易列表中' }
       }

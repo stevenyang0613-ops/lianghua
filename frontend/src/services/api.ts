@@ -502,7 +502,7 @@ export interface ExecutedPosition {
 }
 
 export async function fetchExecutedPositions(limit = 20, offset = 0): Promise<{ positions: ExecutedPosition[]; total: number }> {
-  return getJSON<{ positions: ExecutedPosition[]; total: number }>(`${BASE}/signals/executed-positions?limit=${limit}&offset=${offset}`)
+  return (fetchJSON as any)(`${BASE}/signals/executed-positions?limit=${limit}&offset=${offset}`)
 }
 
 export interface SignalHistoryItem {

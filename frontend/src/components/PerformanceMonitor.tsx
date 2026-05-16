@@ -54,11 +54,6 @@ interface CrashReport {
   uptime: number
 }
 
-declare global {
-  interface Window {
-    electronAPI?: ElectronAPI
-  }
-}
 
 interface PerformanceMetrics {
   fps: number

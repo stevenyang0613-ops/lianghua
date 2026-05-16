@@ -79,7 +79,7 @@ export function AdvancedTable<T extends Record<string, unknown>>({
   const [editingValue, setEditingValue] = useState<unknown>(null)
   const [filters, setFilters] = useState<Record<string, FilterValue | null>>({})
   const [sorter, setSorter] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
-  const inputRef = useRef<InstanceType<typeof Input>>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // 处理筛选后的数据
   const filteredData = useMemo(() => {
@@ -279,11 +279,11 @@ export function AdvancedTable<T extends Record<string, unknown>>({
 
     if (Array.isArray(newSorter)) {
       const first = newSorter[0]
-      setSorter({ field: first.field as string, order: first.order })
+      setSorter({ field: first.field as string, order: first.order as 'ascend' | 'descend' | undefined })
     } else {
       setSorter({
         field: (newSorter as SorterResult<T>).field as string,
-        order: (newSorter as SorterResult<T>).order,
+        order: (newSorter as SorterResult<T>).order as 'ascend' | 'descend' | undefined,
       })
     }
   }

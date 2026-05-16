@@ -90,7 +90,7 @@ export default function FundAggregation({ onTransfer }: Props) {
     const allAccounts = multiAccountManager.getAllAccounts()
 
     // 获取每个账户的资金状态
-    const fundStatuses: AccountFundStatus[] = allAccounts.map(account => {
+    const fundStatuses = allAccounts.map(account => {
       const balance = multiAccountManager.getBalance(account.id)
       const utilization = balance ? (balance.marketValue / balance.totalAsset) * 100 : 0
       const efficiency = calculateEfficiency(balance ?? null)
@@ -104,10 +104,10 @@ export default function FundAggregation({ onTransfer }: Props) {
       }
     })
 
-    setAccounts(fundStatuses)
+    setAccounts(fundStatuses as any)
 
     // 生成归集建议
-    generateAggregationPlans(fundStatuses)
+    generateAggregationPlans(fundStatuses as any)
 
     setLoading(false)
   }, [])

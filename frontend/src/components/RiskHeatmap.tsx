@@ -90,7 +90,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
           percentage: 0,
           riskScore: Math.random() * 100,
           limit: 500000,
-          status: 'safe' as const,
+          status: 'safe' as 'safe' | 'warning' | 'danger',
         }
       })
 
@@ -149,7 +149,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
         item.contribution = (item.contribution / total) * 100
       })
 
-      return data.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
+      return data.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution)) as any
     }
 
     setTimeout(() => {
@@ -161,7 +161,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
   }, [selectedDimension, riskThreshold])
 
   // 热力图配置
-  const heatmapOption = useMemo((): EChartsOption => {
+  const heatmapOption = useMemo((): any => {
     if (!correlationMatrix) return {}
 
     const { symbols, matrix } = correlationMatrix
@@ -241,7 +241,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
   }, [correlationMatrix])
 
   // 风险敞口条形图配置
-  const exposureBarOption = useMemo((): EChartsOption => {
+  const exposureBarOption = useMemo((): any => {
     return {
       title: {
         text: `${selectedDimension}维度风险敞口`,

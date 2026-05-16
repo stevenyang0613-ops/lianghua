@@ -30,7 +30,7 @@ import { useAnalyticsStore } from '../stores/useAnalyticsStore'
 const { Title, Text, Paragraph } = Typography
 
 export default function DataImportExportPage() {
-  const { watchlist, addToWatchlist, clearWatchlist } = useWatchlistStore()
+  const { watchlist, addWatch, clearWatchlist } = useWatchlistStore()
   const { exportData: exportAnalytics, clearData: clearAnalytics } = useAnalyticsStore()
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -72,13 +72,13 @@ export default function DataImportExportPage() {
     try {
       switch (format) {
         case 'json':
-          await exportToJson({ watchlist }, 'watchlist')
+          await exportToJson({ watchlist: watchlist as any }, 'watchlist')
           break
         case 'csv':
-          await exportToCsv(watchlist, 'watchlist')
+          await exportToCsv(watchlist as any, 'watchlist')
           break
         case 'excel':
-          await exportToExcel(watchlist, 'watchlist')
+          await exportToExcel(watchlist as any, 'watchlist')
           break
       }
       message.success(`已导出 ${watchlist.length} 条自选股数据`)
@@ -170,7 +170,7 @@ export default function DataImportExportPage() {
         const codes = importPreview.data as string[]
         // 导入自选股代码
         for (const code of codes) {
-          addToWatchlist({ code, name: '' } as any)
+          addWatch({ code, name: '' } as any)
         }
         message.success(`已导入 ${codes.length} 个自选股代码`)
       }

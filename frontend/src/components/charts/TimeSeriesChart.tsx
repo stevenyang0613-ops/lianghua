@@ -198,7 +198,7 @@ const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
         axisLabel: { color: textColor, rotate: 45 },
         splitLine: { show: false },
       },
-      yAxis: chartYAxis,
+      yAxis: chartYAxis as any[],
       series: chartSeries,
     }
 
