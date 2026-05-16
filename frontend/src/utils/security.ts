@@ -12,7 +12,7 @@ const getEncryptionKey = (): string => {
     key = CryptoJS.lib.WordArray.random(32).toString()
     localStorage.setItem('app_key', key)
   }
-  return key
+  return key ?? ''
 }
 
 /**

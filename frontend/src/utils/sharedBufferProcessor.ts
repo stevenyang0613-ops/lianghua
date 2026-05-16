@@ -321,8 +321,8 @@ export class ParallelProcessor {
    * 提交任务
    */
   submitTask(
-    type: WorkerTask['type'],
     data: SharedArrayBuffer,
+    type: 'transform' | 'process' | 'aggregate',
     config: Record<string, unknown>
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {

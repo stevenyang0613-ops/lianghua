@@ -3,8 +3,6 @@
  * 支持策略发布、订阅、评分、讨论
  */
 
-import { z } from 'zod'
-
 // 策略类型
 export type StrategyType = 'trend' | 'meanReversion' | 'arbitrage' | 'marketMaking' | 'custom'
 export type StrategyStatus = 'draft' | 'published' | 'archived' | 'deprecated'
@@ -208,7 +206,7 @@ export class StrategySharingService {
       strategy.stats.views++
     }
 
-    return strategy || null
+    return strategy ?? undefined
   }
 
   /**

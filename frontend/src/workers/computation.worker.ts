@@ -263,8 +263,12 @@ export class WasmCalculator {
     // 位反转排序
     for (let i = 0, j = 0; i < n; i++) {
       if (j > i) {
-        [realOut[i], realOut[j]] = [realOut[j], realOut[i]]
-        [imagOut[i], imagOut[j]] = [imagOut[j], imagOut[i]]
+        const tempRealI = realOut[i]
+        const tempImagI = imagOut[i]
+        realOut[i] = realOut[j]
+        imagOut[i] = imagOut[j]
+        realOut[j] = tempRealI
+        imagOut[j] = tempImagI
       }
       let k = n >> 1
       while (k && j >= k) {

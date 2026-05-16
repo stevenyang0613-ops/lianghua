@@ -37,7 +37,7 @@ function createWsReconnect(basePath: string, wsId: string): WSReconnect {
   }, wsId)
 
   const origConnect = ws.connect.bind(ws)
-  ws.connect = function(overrideUrl?: string) {
+  ws.connect = function(_overrideUrl?: string) {
     const freshUrl = buildUrl(`${WS_BASE}${basePath}`)
     return origConnect(freshUrl)
   }
