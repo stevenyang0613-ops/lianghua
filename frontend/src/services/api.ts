@@ -469,7 +469,7 @@ export interface StrategyInfoItem {
   id: string
   name: string
   description: string
-  params?: Record<string, unknown>
+  params?: Array<{ name: string; default: number; max_val?: number; min_val?: number; description?: string }>
 }
 
 export async function fetchSignals(): Promise<SignalResponse> {

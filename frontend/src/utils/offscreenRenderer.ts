@@ -381,7 +381,7 @@ export class OffscreenRenderer {
       tempCtx.drawImage(bitmap, 0, 0)
       return tempCanvas.toDataURL(`image/${format}`, quality)
     }
-    return this.canvas.toDataURL(`image/${format}`, quality)
+    return (this.canvas as HTMLCanvasElement).toDataURL(`image/${format}`, quality)
   }
 
   /**

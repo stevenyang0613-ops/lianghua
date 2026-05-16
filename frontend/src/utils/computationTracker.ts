@@ -300,7 +300,7 @@ export class TrackedWasmCalculator {
     await wasmCalculator.init()
   }
 
-  calculateSMA(data: number[], period: number): number[] {
+  async calculateSMA(data: number[], period: number): Promise<number[]> {
     return this.tracker.trackWasmOperation(
       'SMA',
       data.length,
@@ -308,7 +308,7 @@ export class TrackedWasmCalculator {
     )
   }
 
-  calculateEMA(data: number[], period: number): number[] {
+  async calculateEMA(data: number[], period: number): Promise<number[]> {
     return this.tracker.trackWasmOperation(
       'EMA',
       data.length,
@@ -316,7 +316,7 @@ export class TrackedWasmCalculator {
     )
   }
 
-  calculateRSI(data: number[], period: number): number[] {
+  async calculateRSI(data: number[], period: number): Promise<number[]> {
     return this.tracker.trackWasmOperation(
       'RSI',
       data.length,
