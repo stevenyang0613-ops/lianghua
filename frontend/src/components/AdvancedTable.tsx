@@ -6,7 +6,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { Table, Input, Select, Button, Space, Dropdown, Tag, Popconfirm } from 'antd'
 import {
-  FilterOutlined,
   EditOutlined,
   DeleteOutlined,
   PlusOutlined,
@@ -17,9 +16,15 @@ import type {
   TableProps,
   ColumnsType,
   TablePaginationConfig,
-  FilterValue,
-  SorterResult,
 } from 'antd/es/table'
+
+type FilterValue = (string | number | boolean)[]
+type SorterResult<T> = {
+  column?: import('antd/es/table').ColumnType<T>
+  columnKey?: string
+  field?: string
+  order?: 'ascend' | 'descend' | null
+}
 
 export interface AdvancedTableColumn<T> {
   key: string

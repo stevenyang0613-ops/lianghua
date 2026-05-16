@@ -65,7 +65,24 @@ class AKShareAdapter(DataSourceAdapter):
         return bonds
 
     def _fetch_bond_data(self) -> pd.DataFrame:
-        """同步获取可转债数据"""
+        """同步获取可转债数据，优先使用实时行情接口（含成交量）"""
+        try:
+            # 尝试获取实时数据（含成交量）
+            df_spot = ak.bond_zh_hs_cov_spot()
+            if df_spot is not None and not df_spot.empty:
+                df_spot = df_spot.rename(columns={
+                    'symbol': '债券代码',
+                    'name': '债券简称',
+                    'trade': '债现价',
+                    'volume': '成交额',
+                })
+                if '债券代码' in df_spot.columns and '债现价' in df_spot.columns:
+                    logger.info(f"[AKShare] Using spot data: {len(df_spot)} records with volume")
+                    return df_spot
+        except Exception as e:
+            logger.debug(f"[AKShare] Spot data unavailable: {e}")
+        # 回退到集思录数据（无成交量，但数据更完整）
+        logger.info("[AKShare] Falling back to cov data (no volume)")
         return ak.bond_zh_cov()
 
     async def fetch_quote(self, code: str) -> Optional[ConvertibleQuote]:
@@ -87,12 +104,14 @@ class AKShareAdapter(DataSourceAdapter):
             code = str(row.get("债券代码", row.get("代码", row.get("bond_code", ""))))
             if not code:
                 return None
+
+            # 直接使用 AKShare 提供的原始数据（AKShare 已计算好转股价值和溢价率）
             price = self._safe_float(row.get("债现价", row.get("最新价", row.get("price", 0))))
-            conversion_price = self._safe_float(row.get("转股价", row.get("conversion_price", 0)))
-            stock_price = self._safe_float(row.get("正股价", row.get("stock_price", 0)))
-            conversion_value = round(100 / conversion_price * stock_price, 2) if conversion_price > 0 else 0.0
-            premium = round((price - conversion_value) / conversion_value * 100, 2) if conversion_value > 0 else 0.0
-            dual_low = round(price + premium, 2)
+            conversion_value = self._safe_float(row.get("转股价值", 0))
+            premium_ratio = self._safe_float(row.get("转股溢价率", 0))
+            conversion_price = self._safe_float(row.get("转股价", 0))
+            stock_price = self._safe_float(row.get("正股价", 0))
+            dual_low = round(price + premium_ratio, 2) if price > 0 else 0.0
 
             return ConvertibleQuote(
                 code=code,
@@ -103,7 +122,7 @@ class AKShareAdapter(DataSourceAdapter):
                 stock_change_pct=0.0,
                 conversion_price=conversion_price,
                 conversion_value=conversion_value,
-                premium_ratio=premium,
+                premium_ratio=premium_ratio,
                 dual_low=dual_low,
                 volume=self._safe_float(row.get("成交额", row.get("volume", 0))),
             )

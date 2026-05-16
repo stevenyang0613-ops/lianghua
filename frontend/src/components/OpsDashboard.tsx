@@ -6,13 +6,12 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Card, Row, Col, Statistic, Progress, Tag, Space, Button, Typography, Table, Tabs,
-  Badge, Alert, Timeline, Tooltip, Empty, Spin, Descriptions, List, Avatar
+  Badge, Empty, Descriptions, List
 } from 'antd'
 import {
   DashboardOutlined, AlertOutlined, CheckCircleOutlined, WarningOutlined,
   CloseCircleOutlined, ReloadOutlined, DownloadOutlined, SettingOutlined,
-  ApiOutlined, DatabaseOutlined, ThunderboltOutlined, ClockCircleOutlined,
-  FileTextOutlined, BellOutlined, LineChartOutlined, PieChartOutlined
+  FileTextOutlined, LineChartOutlined, PieChartOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { memoryMonitor } from '../utils/memoryManager'

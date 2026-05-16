@@ -5,7 +5,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { Modal, Form, Input, ColorPicker, Select, Slider, Button, Space, Card, Row, Col, Divider, message, Tabs } from 'antd'
-import { PaletteOutlined, DownloadOutlined, UploadOutlined, UndoOutlined, SaveOutlined } from '@ant-design/icons'
+import { BgColorsOutlined, DownloadOutlined, UploadOutlined, UndoOutlined, SaveOutlined } from '@ant-design/icons'
 import type { Color } from 'antd/es/color-picker'
 
 export interface ThemeConfig {

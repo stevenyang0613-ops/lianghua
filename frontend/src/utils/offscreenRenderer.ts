@@ -31,7 +31,7 @@ export interface CandleData {
 export class OffscreenRenderer {
   private canvas: OffscreenCanvas | HTMLCanvasElement | null = null
   private ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null
-  private config: ChartConfig
+  protected config: ChartConfig
   private worker: Worker | null = null
 
   constructor(config: ChartConfig) {
@@ -117,7 +117,7 @@ export class OffscreenRenderer {
     if (this.canvas instanceof OffscreenCanvas) {
       return this.canvas.transferToImageBitmap()
     }
-    return this.canvas
+    return this.canvas!
   }
 
   /**
@@ -304,7 +304,7 @@ export class OffscreenRenderer {
     if (this.canvas instanceof OffscreenCanvas) {
       return this.canvas.transferToImageBitmap()
     }
-    return this.canvas
+    return this.canvas!
   }
 
   /**
@@ -364,7 +364,7 @@ export class OffscreenRenderer {
     if (this.canvas instanceof OffscreenCanvas) {
       return this.canvas.transferToImageBitmap()
     }
-    return this.canvas
+    return this.canvas!
   }
 
   /**

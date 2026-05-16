@@ -6,18 +6,17 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
   Card, Row, Col, Select, Slider, Switch, Space, Button, Typography,
-  Tooltip, Empty, Spin, Tabs, Table, Tag, Statistic, Progress
+  Empty, Tabs, Tag, Statistic, Progress, Spin
 } from 'antd'
 import {
   HeatMapOutlined, WarningOutlined, CheckCircleOutlined,
-  ReloadOutlined, DownloadOutlined, SettingOutlined,
-  AlertOutlined, InfoCircleOutlined
+  ReloadOutlined, DownloadOutlined,
+  AlertOutlined
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
-import { multiAccountManager } from '../utils/multiAccountManager'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TabPane } = Tabs
 
 // 风险维度
@@ -53,7 +52,7 @@ interface Props {
   onRiskAlert?: (alert: { dimension: string; message: string }) => void
 }
 
-export default function RiskHeatmap({ accountIds, onRiskAlert }: Props) {
+export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Props) {
   const [loading, setLoading] = useState(false)
   const [selectedDimension, setSelectedDimension] = useState<RiskDimension>('market')
   const [riskThreshold, setRiskThreshold] = useState(70)

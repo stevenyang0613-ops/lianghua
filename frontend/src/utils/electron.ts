@@ -2,8 +2,10 @@
  * Electron 环境检测工具
  */
 
+import type { ElectronAPI, UpdateStatus } from '../types/electron'
+
 // 重新导出类型供其他模块使用
-export type { ElectronAPI } from '../types/electron.d'
+export type { ElectronAPI, UpdateStatus }
 
 /**
  * 检查是否运行在 Electron 环境
@@ -15,7 +17,7 @@ export function isElectron(): boolean {
 /**
  * 获取 Electron API
  */
-export function getElectronAPI() {
+export function getElectronAPI(): ElectronAPI | undefined {
   return window.electronAPI
 }
 
@@ -23,28 +25,28 @@ export function getElectronAPI() {
  * 检查是否为 macOS
  */
 export function isMacOS(): boolean {
-  return window.electronAPI?.platform === 'darwin'
+  return getElectronAPI()?.platform === 'darwin'
 }
 
 /**
  * 检查是否为 Windows
  */
 export function isWindows(): boolean {
-  return window.electronAPI?.platform === 'win32'
+  return getElectronAPI()?.platform === 'win32'
 }
 
 /**
  * 检查是否为 Linux
  */
 export function isLinux(): boolean {
-  return window.electronAPI?.platform === 'linux'
+  return getElectronAPI()?.platform === 'linux'
 }
 
 /**
  * 显示原生通知
  */
 export async function showNativeNotification(title: string, body: string): Promise<void> {
-  const api = window.electronAPI
+  const api = getElectronAPI()
   if (api?.showNotification) {
     await api.showNotification(title, body)
   } else if ('Notification' in window) {
@@ -77,7 +79,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
  * 获取应用信息
  */
 export async function getAppInfo() {
-  const api = window.electronAPI
+  const api = getElectronAPI()
   if (api?.getAppInfo) {
     return await api.getAppInfo()
   }
@@ -88,7 +90,7 @@ export async function getAppInfo() {
  * 在默认浏览器中打开外部链接
  */
 export function openExternalURL(url: string): void {
-  const api = window.electronAPI
+  const api = getElectronAPI()
   if (api?.openExternal) {
     api.openExternal(url)
   } else {
@@ -100,7 +102,7 @@ export function openExternalURL(url: string): void {
  * 重启后端服务
  */
 export async function restartBackend(): Promise<void> {
-  const api = window.electronAPI
+  const api = getElectronAPI()
   if (api?.restartBackend) {
     await api.restartBackend()
   } else {
@@ -112,7 +114,7 @@ export async function restartBackend(): Promise<void> {
  * 检查应用更新
  */
 export async function checkForUpdates(): Promise<{ available: boolean; version?: string; error?: string }> {
-  const api = window.electronAPI
+  const api = getElectronAPI()
   if (api?.checkForUpdates) {
     return await api.checkForUpdates()
   }
@@ -122,8 +124,8 @@ export async function checkForUpdates(): Promise<{ available: boolean; version?:
 /**
  * 监听更新状态变化
  */
-export function onUpdateStatus(callback: (status: import('../types/electron').UpdateStatus) => void): () => void {
-  const api = window.electronAPI
+export function onUpdateStatus(callback: (status: UpdateStatus) => void): () => void {
+  const api = getElectronAPI()
   if (api?.onUpdateStatus) {
     return api.onUpdateStatus(callback)
   }

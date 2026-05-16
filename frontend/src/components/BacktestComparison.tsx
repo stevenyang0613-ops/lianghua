@@ -3,19 +3,18 @@
  * 支持多策略回测结果可视化对比
  */
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   Card, Row, Col, Select, Button, Space, Table, Statistic, Tag, Tabs,
-  Typography, Empty, Spin, Tooltip, Progress, Switch, message
+  Typography, Empty, Progress, Switch, message
 } from 'antd'
 import {
   LineChartOutlined, BarChartOutlined, PieChartOutlined,
-  DownloadOutlined, ReloadOutlined, CompareOutlined,
-  TrophyOutlined, WarningOutlined, RiseOutlined, FallOutlined
+  DownloadOutlined, ReloadOutlined, SwapOutlined,
+  FallOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
-import { wasmCalculator } from '../workers/computation.worker'
 
 const { Title, Text } = Typography
 const { TabPane } = Tabs

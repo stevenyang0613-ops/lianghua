@@ -4,11 +4,10 @@
 
 import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Badge, Space } from 'antd'
+import { Badge } from 'antd'
 import {
   HomeOutlined, HeartOutlined, LineChartOutlined,
-  SyncOutlined, UserOutlined, SettingOutlined,
-  BellOutlined, SearchOutlined
+  SyncOutlined, SettingOutlined
 } from '@ant-design/icons'
 import { useResponsive } from '../hooks/useResponsive'
 import { useHapticFeedback } from '../hooks/useResponsive'

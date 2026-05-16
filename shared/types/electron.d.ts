@@ -181,10 +181,4 @@ export interface ElectronAPI {
   onBroadcast(callback: (channel: string, data: unknown) => void): () => void
 }
 
-declare global {
-  interface Window {
-    electronAPI?: ElectronAPI
-  }
-}
 
-export {}

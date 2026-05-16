@@ -6,19 +6,16 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
   Card, Row, Col, Table, Button, Space, Typography, Tag, Progress,
-  Statistic, Empty, Spin, Tabs, Select, InputNumber, Modal, Form,
-  Input, message, Descriptions, Timeline, Alert, Tooltip
+  Statistic, Empty, Tabs, Select, Modal, Form,
+  message, Descriptions, Alert
 } from 'antd'
 import {
   BankOutlined, SwapOutlined, AccountBookOutlined,
-  SyncOutlined, DownloadOutlined, SettingOutlined,
-  ArrowUpOutlined, ArrowDownOutlined, MinusOutlined,
-  DollarOutlined, PercentageOutlined, WarningOutlined,
-  CheckCircleOutlined, HistoryOutlined
+  HistoryOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
-import { multiAccountManager, type AccountConfig, type AccountBalance } from '../utils/multiAccountManager'
+import { multiAccountManager, type AccountBalance } from '../utils/multiAccountManager'
 
 const { Title, Text } = Typography
 const { TabPane } = Tabs

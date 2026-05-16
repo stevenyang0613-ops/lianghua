@@ -10,9 +10,9 @@ import {
 } from 'antd'
 import {
   SunOutlined, MoonOutlined, DesktopOutlined,
-  LayoutOutlined, FontSizeOutlined, BgColorsOutlined,
+  FontSizeOutlined, BgColorsOutlined,
   DownloadOutlined, UploadOutlined, ReloadOutlined,
-  CheckOutlined, CopyOutlined
+  CheckOutlined
 } from '@ant-design/icons'
 import {
   useThemeConfigStore,
