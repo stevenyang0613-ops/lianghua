@@ -177,11 +177,19 @@ def _health_response() -> dict:
         "version": settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
+}
+
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "version": settings.app_version,
+        "market_running": engine_running,
+        "db_ok": db_ok,
     }
 
 
-@app.get("/health")
-async def health():
+@app.get("/api/v1/health")
+async def health_v1():
     return _health_response()
 
 

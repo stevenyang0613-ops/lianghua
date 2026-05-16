@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -15,31 +15,109 @@ class Quote(BaseModel):
     timestamp: datetime
 
 @router.get("/quotes", response_model=List[Quote])
-async def get_quotes(symbols: str = Query(...)):
-    symbol_list = symbols.split(",")
-    return [Quote(
-        symbol=s, name=f"转债{s}", price=100.0,
-        change=1.5, changePercent=1.5, volume=1000000,
-        timestamp=datetime.now(timezone.utc)
-    ) for s in symbol_list]
+async def get_quotes(request: Request, symbols: str = Query(...)):
+    engine = getattr(request.app.state, "engine", None)
+    storage = getattr(request.app.state, "storage", None)
+
+    symbol_list = symbols.split(",") if symbols else []
+    if not symbol_list:
+        return []
+
+    if engine:
+        quotes = await engine.get_all_quotes()
+        result = []
+        for q in quotes:
+            if q.code in symbol_list:
+                result.append(Quote(
+                    symbol=q.code,
+                    name=q.name,
+                    price=q.price,
+                    change=q.change_pct,
+                    changePercent=q.change_pct,
+                    volume=int(q.volume) if q.volume else 0,
+                    timestamp=datetime.now(timezone.utc)
+                ))
+        if result:
+            return result
+
+    if storage:
+        rows = storage.get_latest_quotes()
+        result = []
+        for r in rows:
+            if r.get("code") in symbol_list:
+                result.append(Quote(
+                    symbol=r.get("code", ""),
+                    name=r.get("name", ""),
+                    price=float(r.get("price", 0)),
+                    change=float(r.get("change_pct", 0)),
+                    changePercent=float(r.get("change_pct", 0)),
+                    volume=int(r.get("volume", 0)) if r.get("volume") else 0,
+                    timestamp=datetime.now(timezone.utc)
+                ))
+        if result:
+            return result
+
+    return []
 
 @router.get("/kline")
-async def get_kline(symbol: str, period: str = "1d", limit: int = 100):
-    from datetime import timedelta
-    import random
-    klines = []
-    base = 100.0
-    for i in range(limit):
-        t = datetime.now(timezone.utc) - timedelta(days=limit - i - 1)
-        o = base + random.uniform(-5, 5)
-        c = o + random.uniform(-2, 2)
-        h = max(o, c) + random.uniform(0, 2)
-        l = min(o, c) - random.uniform(0, 2)
-        klines.append({"time": t.isoformat(), "open": round(o, 2), "high": round(h, 2),
-                       "low": round(l, 2), "close": round(c, 2), "volume": random.randint(100000, 1000000)})
-        base = c
-    return klines
+async def get_kline(request: Request, symbol: str, period: str = "1d", limit: int = 100):
+    engine = getattr(request.app.state, "engine", None)
+
+    if engine and symbol:
+        quote = await engine.get_quote(symbol)
+        if quote and quote.price > 0:
+            return [{
+                "time": datetime.now(timezone.utc).isoformat(),
+                "open": quote.price,
+                "high": quote.price * 1.02,
+                "low": quote.price * 0.98,
+                "close": quote.price,
+                "volume": int(quote.volume) if quote.volume else 0
+            }]
+
+    storage = getattr(request.app.state, "storage", None)
+    if storage and symbol:
+        if period == "1d":
+            klines = storage.get_daily_history(symbol, limit)
+        else:
+            klines = storage.get_quote_history(symbol, limit)
+        if klines:
+            return [{
+                "time": k.get("snapshot_date") or k.get("timestamp", ""),
+                "open": float(k.get("price", 0)),
+                "high": float(k.get("price", 0)) * 1.01,
+                "low": float(k.get("price", 0)) * 0.99,
+                "close": float(k.get("price", 0)),
+                "volume": int(k.get("volume", 0)) if k.get("volume") else 0
+            } for k in klines]
+
+    return []
 
 @router.get("/search")
-async def search(keyword: str, limit: int = 20):
-    return [{"code": f"128{i:03d}", "name": f"转债{i}"} for i in range(min(limit, 10))]
+async def search(request: Request, keyword: str, limit: int = 20):
+    engine = getattr(request.app.state, "engine", None)
+    storage = getattr(request.app.state, "storage", None)
+
+    results = []
+
+    if engine:
+        quotes = await engine.get_all_quotes()
+        keyword_lower = keyword.lower()
+        for q in quotes:
+            if keyword_lower in q.code.lower() or keyword_lower in q.name.lower():
+                results.append({"code": q.code, "name": q.name})
+                if len(results) >= limit:
+                    break
+
+    if not results and storage:
+        rows = storage.get_latest_quotes()
+        keyword_lower = keyword.lower()
+        for r in rows:
+            code = r.get("code", "")
+            name = r.get("name", "")
+            if keyword_lower in code.lower() or keyword_lower in name.lower():
+                results.append({"code": code, "name": name})
+                if len(results) >= limit:
+                    break
+
+    return results[:limit]
