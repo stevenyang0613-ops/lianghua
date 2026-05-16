@@ -15,7 +15,7 @@ function getSystemTheme(): 'light' | 'dark' {
 
 export const useThemeStore = create<ThemeState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       mode: 'system',
       setMode: (mode) => set({ mode }),
     }),

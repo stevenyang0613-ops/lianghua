@@ -1,21 +1,227 @@
 import asyncio
+import gzip
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import logging
+import os
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+active_market_connections = 0
+active_signal_connections = 0
+
+# 行情增量推送：缓存上次发送的数据
+_last_tick_snapshot: dict[str, dict] = {}
+
+# 消息统计
+_STATS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "ws_stats.json")
+
+_ws_stats = {
+    "market_messages_sent": 0,
+    "market_bytes_sent": 0,
+    "signal_messages_sent": 0,
+    "signal_bytes_sent": 0,
+    "market_delta_messages": 0,
+    "market_full_messages": 0,
+    "disconnect_reasons": {
+        "client_close": 0,
+        "send_error": 0,
+        "receive_error": 0,
+        "heartbeat_timeout": 0,
+        "auth_failed": 0,
+        "engine_unavailable": 0,
+        "connection_limit": 0,
+        "unknown": 0,
+    },
+}
+
+
+def _load_stats():
+    """启动时从文件恢复统计"""
+    global _ws_stats
+    try:
+        if os.path.exists(_STATS_FILE):
+            with open(_STATS_FILE, "r") as f:
+                saved = json.load(f)
+                # 深度合并 disconnect_reasons，保留新增的默认键
+                if "disconnect_reasons" in saved:
+                    _ws_stats["disconnect_reasons"].update(saved.pop("disconnect_reasons"))
+                _ws_stats.update(saved)
+                logger.info(f"[WS] Restored stats from {_STATS_FILE}")
+    except Exception as e:
+        logger.warning(f"[WS] Failed to load stats: {e}")
+
+
+def _save_stats():
+    """定时保存统计到文件"""
+    try:
+        os.makedirs(os.path.dirname(_STATS_FILE), exist_ok=True)
+        with open(_STATS_FILE, "w") as f:
+            json.dump(_ws_stats, f)
+    except Exception as e:
+        logger.warning(f"[WS] Failed to save stats: {e}")
+
+
+_load_stats()
+
+
+async def _stats_persistence_loop():
+    """每60秒保存一次统计到文件"""
+    while True:
+        await asyncio.sleep(60)
+        _save_stats()
+
+# 在模块加载时启动持久化任务（由 lifespan 中的 event loop 调度）
+_stats_task: asyncio.Task | None = None
+
+
+def start_stats_persistence():
+    """在事件循环中启动统计持久化任务"""
+    global _stats_task
+    if _stats_task is None or _stats_task.done():
+        _stats_task = asyncio.ensure_future(_stats_persistence_loop())
+
+
+@router.get("/stats")
+async def get_ws_stats(request: Request):
+    """获取 WebSocket 连接和消息统计"""
+    return {
+        "connections": {
+            "market": active_market_connections,
+            "signals": active_signal_connections,
+            "total": active_market_connections + active_signal_connections,
+        },
+        "messages": _ws_stats,
+    }
+
+
+async def verify_ws_auth(websocket: WebSocket) -> bool:
+    """Verify WebSocket authentication token and connection limits."""
+    token = websocket.query_params.get("token", "")
+    if not token or token != settings.ws_auth_token:
+        _ws_stats["disconnect_reasons"]["auth_failed"] += 1
+        await websocket.close(code=4001, reason="Unauthorized")
+        return False
+
+    total = active_market_connections + active_signal_connections
+    if total >= 50:
+        _ws_stats["disconnect_reasons"]["connection_limit"] += 1
+        await websocket.close(code=1013, reason="Too many connections")
+        return False
+
+    return True
+
+
+def _build_tick_delta(bonds) -> list[dict]:
+    """构建增量行情数据，只发送变化的字段"""
+    global _last_tick_snapshot
+    delta_list = []
+    new_snapshot = {}
+
+    for b in bonds:
+        current = b.model_dump(mode="json")
+        code = current["code"]
+        new_snapshot[code] = current
+
+        prev = _last_tick_snapshot.get(code)
+        if prev is None:
+            # 新增品种，发送完整数据
+            delta_list.append(current)
+            continue
+
+        # 计算变化字段
+        changed = {"code": code}
+        has_change = False
+        for key, val in current.items():
+            if key == "code":
+                continue
+            if prev.get(key) != val:
+                changed[key] = val
+                has_change = True
+
+        if has_change:
+            delta_list.append(changed)
+
+    _last_tick_snapshot = new_snapshot
+    return delta_list
+
+
+_COMPRESS_THRESHOLD = 1024  # 超过1KB时压缩
+
+
+async def _send_compressed(ws: WebSocket, msg: dict, stats_key: str = "market") -> int:
+    """发送消息，大消息使用 gzip 压缩。返回发送字节数。"""
+    raw = json.dumps(msg).encode("utf-8")
+    if len(raw) > _COMPRESS_THRESHOLD:
+        compressed = gzip.compress(raw)
+        await ws.send_bytes(compressed)
+        _ws_stats[f"{stats_key}_compressed_messages"] = _ws_stats.get(f"{stats_key}_compressed_messages", 0) + 1
+        return len(compressed)
+    else:
+        await ws.send_json(msg)
+        return len(raw)
 
 
 @router.websocket("/market")
 async def market_websocket(websocket: WebSocket):
+    global active_market_connections
+
+    engine = getattr(websocket.app.state, "engine", None)
+    if not engine:
+        _ws_stats["disconnect_reasons"]["engine_unavailable"] += 1
+        await websocket.close(code=1011, reason="Market engine not available")
+        return
+
+    if not await verify_ws_auth(websocket):
+        return
+
     await websocket.accept()
-    engine = websocket.app.state.engine
+    active_market_connections += 1
+    if active_market_connections > 10:
+        logger.warning(f"Market WebSocket connections exceed 10: {active_market_connections}")
+
+    # 首次推送：发送当前全量数据
+    is_first_push = True
 
     async def on_market_update(bonds):
-        data = [b.model_dump(mode="json") for b in bonds]
+        nonlocal is_first_push
         try:
-            await websocket.send_json({"type": "tick", "data": data, "ts": engine.last_update.isoformat() if engine.last_update else None})
+            if is_first_push:
+                # 首次推送全量数据
+                data = [b.model_dump(mode="json") for b in bonds]
+                msg = {
+                    "type": "tick",
+                    "data": data,
+                    "ts": engine.last_update.isoformat() if engine.last_update else None,
+                }
+                sent_bytes = await _send_compressed(websocket, msg, "market")
+                _ws_stats["market_messages_sent"] += 1
+                _ws_stats["market_bytes_sent"] += sent_bytes
+                _ws_stats["market_full_messages"] += 1
+                is_first_push = False
+                return
+
+            delta = _build_tick_delta(bonds)
+            if delta:
+                msg = {
+                    "type": "tick",
+                    "data": delta,
+                    "ts": engine.last_update.isoformat() if engine.last_update else None,
+                }
+                sent_bytes = await _send_compressed(websocket, msg, "market")
+                _ws_stats["market_messages_sent"] += 1
+                _ws_stats["market_bytes_sent"] += sent_bytes
+                # 判断是否为增量消息
+                if any(len(d) < len(bonds[0].model_dump(mode="json")) for d in delta if isinstance(d, dict)):
+                    _ws_stats["market_delta_messages"] += 1
+                else:
+                    _ws_stats["market_full_messages"] += 1
         except Exception:
-            pass
+            _ws_stats["disconnect_reasons"]["send_error"] += 1
 
     engine.subscribe(on_market_update)
 
@@ -24,9 +230,10 @@ async def market_websocket(websocket: WebSocket):
     async def heartbeat():
         while True:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(settings.ws_ping_interval)
                 await websocket.send_json({"type": "ping"})
             except Exception:
+                _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
                 break
 
     heartbeat_task = asyncio.create_task(heartbeat())
@@ -41,42 +248,58 @@ async def market_websocket(websocket: WebSocket):
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
-        pass
+        _ws_stats["disconnect_reasons"]["client_close"] += 1
     except Exception as e:
-        print(f"[WS] Connection error: {e}")
+        _ws_stats["disconnect_reasons"]["receive_error"] += 1
+        logger.error(f"[WS] Market connection error: {e}")
     finally:
         if heartbeat_task:
             heartbeat_task.cancel()
         engine.unsubscribe(on_market_update)
+        active_market_connections -= 1
 
 
 @router.websocket("/signals")
 async def signals_websocket(websocket: WebSocket):
-    await websocket.accept()
+    global active_signal_connections
+
     signal_engine = getattr(websocket.app.state, "signal_engine", None)
     if not signal_engine:
-        await websocket.send_json({"type": "error", "message": "Signal engine not available"})
-        await websocket.close()
+        _ws_stats["disconnect_reasons"]["engine_unavailable"] += 1
+        await websocket.close(code=1011, reason="Signal engine not available")
         return
+
+    if not await verify_ws_auth(websocket):
+        return
+
+    await websocket.accept()
+    active_signal_connections += 1
+    if active_signal_connections > 10:
+        logger.warning(f"Signal WebSocket connections exceed 10: {active_signal_connections}")
 
     async def on_signal_update(signals):
         try:
-            await websocket.send_json({
+            ts = signals[0].ts.isoformat() if signals else None
+            msg = {
                 "type": "signals",
                 "signals": [s.to_dict() for s in signals],
-                "ts": signals[0].ts.isoformat() if signals else None,
-            })
+                "ts": ts,
+            }
+            sent_bytes = await _send_compressed(websocket, msg, "signal")
+            _ws_stats["signal_messages_sent"] += 1
+            _ws_stats["signal_bytes_sent"] += sent_bytes
         except Exception:
-            pass
+            _ws_stats["disconnect_reasons"]["send_error"] += 1
 
     signal_engine.subscribe(on_signal_update)
 
     async def heartbeat():
         while True:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(settings.ws_ping_interval)
                 await websocket.send_json({"type": "ping"})
             except Exception:
+                _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
                 break
 
     heartbeat_task = asyncio.create_task(heartbeat())
@@ -91,11 +314,12 @@ async def signals_websocket(websocket: WebSocket):
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
-        pass
+        _ws_stats["disconnect_reasons"]["client_close"] += 1
     except Exception as e:
-        print(f"[WS] Signal connection error: {e}")
+        _ws_stats["disconnect_reasons"]["receive_error"] += 1
+        logger.error(f"[WS] Signal connection error: {e}")
     finally:
         if heartbeat_task:
             heartbeat_task.cancel()
         signal_engine.unsubscribe(on_signal_update)
-
+        active_signal_connections -= 1

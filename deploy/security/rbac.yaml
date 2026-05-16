@@ -1,0 +1,168 @@
+# RBAC最小权限配置
+# 遵循最小权限原则，仅授予必要的权限
+
+# 后端服务服务账户
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lianghua-backend
+  namespace: lianghua
+automountServiceAccountToken: false
+---
+# 后端服务角色 - 最小权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lianghua-backend-role
+  namespace: lianghua
+rules:
+  # 仅允许读取ConfigMap
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+    resourceNames: ["lianghua-config", "security-config"]
+  
+  # 仅允许读取Secret（通过Vault注入，此处仅作备用）
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames: ["lianghua-db-credentials", "lianghua-redis-credentials"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lianghua-backend-rolebinding
+  namespace: lianghua
+subjects:
+  - kind: ServiceAccount
+    name: lianghua-backend
+    namespace: lianghua
+roleRef:
+  kind: Role
+  name: lianghua-backend-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# 监控服务账户
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lianghua-monitor
+  namespace: lianghua
+---
+# 监控角色 - 仅读取权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lianghua-monitor-role
+  namespace: lianghua
+rules:
+  # 读取Pod状态
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # 读取Deployment状态
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/status", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  
+  # 读取Service状态
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # 读取事件
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lianghua-monitor-rolebinding
+  namespace: lianghua
+subjects:
+  - kind: ServiceAccount
+    name: lianghua-monitor
+    namespace: lianghua
+roleRef:
+  kind: Role
+  name: lianghua-monitor-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# 备份服务账户
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lianghua-backup
+  namespace: lianghua
+---
+# 备份角色 - 有限权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lianghua-backup-role
+  namespace: lianghua
+rules:
+  # 读取Secret用于备份（加密后）
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  
+  # 读取ConfigMap用于备份
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  
+  # 在Pod中执行命令（用于数据库备份）
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lianghua-backup-rolebinding
+  namespace: lianghua
+subjects:
+  - kind: ServiceAccount
+    name: lianghua-backup
+    namespace: lianghua
+roleRef:
+  kind: Role
+  name: lianghua-backup-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# 开发者角色 - 只读访问
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer-role
+  namespace: lianghua
+rules:
+  # 只读权限
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  
+  # 禁止访问Secret
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: []
+---
+# 审计角色 - 审计日志访问
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: audit-reader
+rules:
+  - apiGroups: ["audit.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]

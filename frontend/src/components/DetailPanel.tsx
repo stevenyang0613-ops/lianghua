@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Card, Descriptions, Tag, Typography, Space, Statistic, Row, Col, Button, Drawer, Segmented, Tabs } from 'antd'
+import { useState, useMemo } from 'react'
+import { Card, Descriptions, Tag, Typography, Space, Statistic, Row, Col, Button, Drawer, Tabs } from 'antd'
 import { CloseOutlined, ArrowUpOutlined, ArrowDownOutlined, StarOutlined, StarFilled, BellOutlined } from '@ant-design/icons'
 import { useAppStore } from '../stores/useAppStore'
 import { useMarketStore } from '../stores/useMarketStore'
 import { useWatchlistStore } from '../stores/useWatchlistStore'
+import { useResponsive } from '../hooks/useResponsive'
 import ChartPanel from './ChartPanel'
 import AlertPanel from './AlertPanel'
 
@@ -12,20 +13,17 @@ const { Title, Text } = Typography
 export default function DetailPanel() {
   const selectedBond = useAppStore((s) => s.selectedBond)
   const setSelectedBond = useAppStore((s) => s.setSelectedBond)
-  const bonds = useMarketStore((s) => s.bonds)
-  const bond = selectedBond ? bonds.get(selectedBond) : null
-  const [isMobile, setIsMobile] = useState(false)
+  const allBonds = useMarketStore((s) => s.allBonds)
+  const bondsMap = useMemo(() => new Map(allBonds.map(b => [b.code, b])), [allBonds])
+  const bond = selectedBond ? bondsMap.get(selectedBond) ?? null : null
+  const { isMobile } = useResponsive()
   const [alertVisible, setAlertVisible] = useState(false)
 
-  const { watchlist, addWatch, removeWatch, isInWatchlist } = useWatchlistStore()
+  const addWatch = useWatchlistStore((s) => s.addWatch)
+  const removeWatch = useWatchlistStore((s) => s.removeWatch)
+  const isInWatchlist = useWatchlistStore((s) => s.isInWatchlist)
   const isWatched = selectedBond ? isInWatchlist(selectedBond) : false
 
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768)
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
 
   if (!bond) {
     if (isMobile) return null
@@ -53,7 +51,7 @@ export default function DetailPanel() {
     }
   }
 
-  const tabItems = [
+  const tabItems = useMemo(() => [
     {
       key: 'info',
       label: '详情',
@@ -107,7 +105,7 @@ export default function DetailPanel() {
         </div>
       ),
     },
-  ]
+  ], [bond, premiumColor, dualLowColor])
 
   const content = (
     <>

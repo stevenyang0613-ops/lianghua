@@ -1,0 +1,104 @@
+{
+  "name": "lianghua-electron",
+  "version": "1.0.0",
+  "description": "LiangHua - 可转债券量化分析终端",
+  "author": "LiangHua <dev@lianghua.app>",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "build": {
+    "appId": "com.lianghua.app",
+    "productName": "可转债策略",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/electron-updater/**",
+      "node_modules/ws/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "frontend"
+      },
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!__pycache__/**",
+          "!.git/**",
+          "!data/**.db",
+          "!build/**",
+          "!wheels/**",
+          "!.dockerignore",
+          "!.env.example",
+          "!.github/**",
+          "!.pytest_cache/**",
+          "!Dockerfile",
+          "!docker-compose.yml",
+          "!alembic.ini",
+          "!lianghua-backend.spec",
+          "!lianghua_backend.egg-info/**",
+          "!notebooks/**",
+          "!performance/**",
+          "!prometheus.yml",
+          "!pyproject.toml",
+          "!requirements.txt",
+          "!run_app.py",
+          "!sdk/**",
+          "!deploy/**",
+          "!grafana/**",
+          "!tests/**",
+          "!alembic/**"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}.${ext}",
+      "icon": "resources/icons/icon.icns"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "lianghua",
+        "repo": "electron"
+      }
+    ],
+    "dmg": {
+      "title": "${productName} ${version}"
+    }
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.9",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "ws": "^8.18.0"
+  }
+}

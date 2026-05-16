@@ -43,7 +43,10 @@ export const useAlertStore = create<AlertState>((set) => ({
     alerts: state.alerts.filter((a) => `${a.code}_${a.alert_type}` !== alertId),
   })),
 
-  addTrigger: (trigger) => set((state) => ({ triggers: [...state.triggers, trigger] })),
+  addTrigger: (trigger) => set((state) => {
+    const triggers = [...state.triggers, trigger]
+    return { triggers: triggers.length > 100 ? triggers.slice(-100) : triggers }
+  }),
 
   clearTriggers: () => set({ triggers: [] }),
 }))

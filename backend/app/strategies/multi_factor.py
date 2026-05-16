@@ -13,7 +13,7 @@ class MultiFactorStrategy(Strategy):
     description = "综合双低值、溢价率、价格动量、成交量等多维度因子加权评分，选取总分最高的可转债"
 
     params = [
-        StrategyParam(name="hold_count", label="持有数量", type="int", default=10, min_val=1, max_val=50),
+        StrategyParam(name="hold_count", label="持有数量", type="int", default=10, min_val=1, max_val=100),
         StrategyParam(name="rebalance_days", label="调仓间隔(天)", type="int", default=20, min_val=5, max_val=60),
         StrategyParam(name="weight_dual_low", label="双低因子权重", type="float", default=0.4, min_val=0, max_val=1),
         StrategyParam(name="weight_premium", label="溢价率权重", type="float", default=0.2, min_val=0, max_val=1),
@@ -46,22 +46,31 @@ class MultiFactorStrategy(Strategy):
         )
 
         self._dates = sorted(self._data['date'].unique())
+        # 预构建日期索引，避免 on_data 中 O(n) 过滤
+        self._date_data_map = {d: group for d, group in self._data.groupby('date')}
 
     def on_data(self, data: pd.DataFrame, idx: int) -> Optional[list[dict]]:
         current_date = self._dates[idx]
         if idx % self.get_param('rebalance_days') != 0:
             return None
 
-        day_data = data[data['date'] == current_date].copy()
-        factor_data = self._data[self._data['date'] == current_date].copy()
+        # data 已是当日行情子集，无需再按日期过滤
+        day_data = data.copy()
+        if 'dual_low' not in day_data.columns:
+            day_data['dual_low'] = day_data['price'] + day_data['premium_ratio']
+        factor_data = self._date_data_map.get(current_date, pd.DataFrame()).copy()
 
         if day_data.empty or factor_data.empty:
             return None
 
-        # Merge factor data
+        # Merge factor data (momentum from precomputed, dual_low from day_data)
         day_data = day_data.merge(
-            factor_data[['code', 'dual_low', 'momentum']], on='code', how='left'
+            factor_data[['code', 'momentum']], on='code', how='left'
         )
+
+        # Early return if merge produced no valid momentum (all codes unmatched)
+        if day_data['momentum'].isna().all():
+            return None
 
         # Filter
         max_prem = self.get_param('max_premium')
@@ -100,14 +109,25 @@ class MultiFactorStrategy(Strategy):
 
         # Pick highest composite score
         selected = day_data.nlargest(self.get_param('hold_count'), 'score')
+        new_codes = set(selected['code'].tolist())
 
         signals = []
-        for _, row in selected.iterrows():
-            signals.append({
-                'code': row['code'],
-                'action': 'buy',
-                'price': float(row['price']),
-                'reason': f'评分{row["score"]:.3f}'
-            })
 
+        # 卖出不再持有的标的
+        to_sell = self._prev_selected - new_codes
+        if to_sell:
+            sell_rows = day_data[day_data['code'].isin(to_sell)]
+            signals.extend([
+                {'code': code, 'action': 'sell', 'price': float(price), 'reason': '调仓卖出'}
+                for code, price in zip(sell_rows['code'], sell_rows['price'])
+            ])
+
+        buy_list = selected[['code', 'price', 'score']].copy()
+        buy_list['reason'] = buy_list['score'].apply(lambda x: f'评分{x:.3f}')
+        signals.extend([
+            {'code': code, 'action': 'buy', 'price': float(price), 'reason': reason}
+            for code, price, reason in zip(buy_list['code'], buy_list['price'], buy_list['reason'])
+        ])
+
+        self._prev_selected = new_codes
         return signals

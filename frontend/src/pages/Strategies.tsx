@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Tag, Typography, Spin, Empty, message, Tabs, Row, Col, Statistic, Descriptions, Button, Space, Divider } from 'antd'
-import { DeploymentUnitOutlined, ExperimentOutlined, BarChartOutlined, ReloadOutlined, InfoCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import ReactEChartsCore from 'echarts-for-react'
+import { Card, Table, Tag, Typography, Spin, Empty, message, Row, Col, Descriptions, Button, Divider } from 'antd'
+import { DeploymentUnitOutlined, InfoCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { fetchStrategies, fetchSignalHistory, fetchSignalStats } from '../services/api'
 import type { StrategyInfo, SignalHistoryItem, SignalStats } from '../services/api'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 
 export default function Strategies() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])

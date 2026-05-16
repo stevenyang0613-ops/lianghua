@@ -1,0 +1,163 @@
+# Pod Security Standards - Restricted Profile
+# 为lianghua命名空间强制执行安全标准
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lianghua
+  labels:
+    # 强制执行restricted级别的Pod安全标准
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+---
+# 安全上下文约束 - 后端服务
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lianghua-backend-secure
+  namespace: lianghua
+spec:
+  template:
+    metadata:
+      annotations:
+        # 容器运行时安全配置
+        container.apparmor.security.beta.kubernetes.io/backend: runtime/default
+        seccomp.security.alpha.kubernetes.io/pod: runtime/default
+    spec:
+      # 安全上下文
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # 服务账户
+      serviceAccountName: lianghua-backend
+      automountServiceAccountToken: false
+      containers:
+        - name: backend
+          image: lianghua/backend:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /app/.cache
+            - name: vault-secrets
+              mountPath: /vault/secrets
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        - name: vault-secrets
+          emptyDir:
+            medium: Memory
+---
+# 安全策略配置 - ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-config
+  namespace: lianghua
+data:
+  # 安全配置参数
+  security.yaml: |
+    # 会话安全
+    session:
+      timeout_minutes: 30
+      max_concurrent_sessions: 3
+      secure_cookie: true
+      same_site: strict
+    
+    # 密码策略
+    password:
+      min_length: 12
+      require_uppercase: true
+      require_lowercase: true
+      require_numbers: true
+      require_special: true
+      max_age_days: 90
+      history_count: 10
+    
+    # API安全
+    api:
+      rate_limit_per_minute: 100
+      max_request_size_mb: 10
+      require_https: true
+      cors_origins:
+        - https://lianghua.example.com
+    
+    # 审计日志
+    audit:
+      enabled: true
+      log_sensitive_access: true
+      retention_days: 365
+---
+# OPA Gatekeeper约束模板（示例）
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+        
+        violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("Resource missing required labels: %v", [missing])
+        }
+---
+# 强制标签约束
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: require-labels
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Deployment", "Service"]
+  parameters:
+    labels:
+      - app
+      - version
+      - team
+      - environment

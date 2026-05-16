@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lianghua.fullname" . }}-celery-worker
+  labels:
+    {{- include "lianghua.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+spec:
+  replicas: {{ .Values.celery.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "lianghua.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  template:
+    metadata:
+      labels:
+        {{- include "lianghua.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "lianghua.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: celery-worker
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.celery.worker.image.repository }}:{{ .Values.celery.worker.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.celery.worker.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - "-A"
+            - "app.tasks.celery_config"
+            - "worker"
+            - "--loglevel=info"
+            - "--concurrency={{ .Values.celery.worker.concurrency }}"
+            - "-Q"
+            - "{{ .Values.celery.worker.queues }}"
+          env:
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lianghua.fullname" . }}-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lianghua.fullname" . }}-secrets
+                  key: celery-result-backend
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lianghua.fullname" . }}-secrets
+                  key: database-url
+          resources:
+            {{- toYaml .Values.celery.worker.resources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lianghua.fullname" . }}-celery-beat
+  labels:
+    {{- include "lianghua.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+spec:
+  replicas: {{ .Values.celery.beat.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "lianghua.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  template:
+    metadata:
+      labels:
+        {{- include "lianghua.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "lianghua.serviceAccountName" . }}
+      containers:
+        - name: celery-beat
+          image: "{{ .Values.celery.worker.image.repository }}:{{ .Values.celery.worker.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.celery.worker.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - "-A"
+            - "app.tasks.celery_config"
+            - "beat"
+            - "--loglevel=info"
+          env:
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lianghua.fullname" . }}-secrets
+                  key: celery-broker-url
+          resources:
+            {{- toYaml .Values.celery.beat.resources | nindent 12 }}

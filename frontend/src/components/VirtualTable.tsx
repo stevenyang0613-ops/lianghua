@@ -1,119 +1,200 @@
-import { useRef, useMemo, useCallback } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
-import { Table, Tag, Typography, Spin } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
-import type { ConvertibleQuote } from '../types'
+/**
+ * 高性能虚拟滚动表格
+ * 支持 10万+ 行数据
+ */
 
-const { Text } = Typography
+import { useEffect, useRef, useState, useCallback, memo, type ReactNode } from 'react'
+import { Spin } from 'antd'
 
-interface VirtualTableProps {
-  bonds: ConvertibleQuote[]
-  loading: boolean
-  onRowClick: (code: string) => void
-  height?: number
+interface VirtualColumn<T> {
+  key?: string | number
+  title?: ReactNode
+  dataIndex?: string
+  width?: number | string
+  render?: (value: unknown, record: T, index: number) => ReactNode
 }
 
-export default function VirtualTable({ bonds, loading, onRowClick, height = 600 }: VirtualTableProps) {
-  const parentRef = useRef<HTMLDivElement>(null)
+interface VirtualTableProps<T> {
+  data: readonly T[]
+  columns?: VirtualColumn<T>[]
+  rowHeight?: number
+  visibleRows?: number
+  overscan?: number
+  onScroll?: (scrollTop: number) => void
+  loading?: boolean
+  rowKey?: string | ((record: T) => string | number)
+}
 
-  const rowVirtualizer = useVirtualizer({
-    count: bonds.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 40,
-    overscan: 10,
-  })
+function VirtualTableInner<T>({
+  data,
+  rowHeight = 48,
+  overscan = 5,
+  columns,
+  loading,
+  onScroll,
+  rowKey,
+}: VirtualTableProps<T>) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [containerHeight, setContainerHeight] = useState(600)
 
-  const virtualItems = rowVirtualizer.getVirtualItems()
+  // 计算可见范围
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
+  const endIndex = Math.min(
+    data.length,
+    Math.floor((scrollTop + containerHeight) / rowHeight) + overscan
+  )
 
-  const getChangeColor = (value: number) => value > 0 ? '#cf1322' : value < 0 ? '#389e0d' : undefined
-  const getPremiumColor = (value: number) => value < 0 ? '#52c41a' : value > 50 ? '#faad14' : undefined
-  const getDualLowColor = (value: number) => value < 130 ? '#52c41a' : value > 180 ? '#f5222d' : '#faad14'
+  // 可见数据
+  const visibleData = data.slice(startIndex, endIndex)
 
-  if (loading) {
+  // 总高度
+  const totalHeight = data.length * rowHeight
+  const offsetY = startIndex * rowHeight
+
+  // 滚动处理
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget
+    const newScrollTop = target.scrollTop
+    setScrollTop(newScrollTop)
+    onScroll?.(newScrollTop)
+  }, [onScroll])
+
+  // 监听容器高度变化
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerHeight(entry.contentRect.height)
+      }
+    })
+
+    observer.observe(containerRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  // 渲染行
+  const renderRow = (record: T, index: number) => {
+    const actualIndex = startIndex + index
     return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Spin size="large" />
+      <div
+        key={typeof rowKey === 'function' ? rowKey(record) : String((record as Record<string, unknown>)[rowKey as string]) || actualIndex}
+        style={{
+          height: rowHeight,
+          display: 'flex',
+          alignItems: 'center',
+          borderBottom: '1px solid #f0f0f0',
+          boxSizing: 'border-box',
+        }}
+      >
+        {columns?.map((col, colIndex) => {
+          const value = col.dataIndex ? (record as Record<string, unknown>)[col.dataIndex] : undefined
+          return (
+            <div
+              key={col.key || col.dataIndex || colIndex}
+              style={{
+                width: col.width || 100,
+                minWidth: col.width || 100,
+                padding: '8px 12px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {col.render ? col.render(value, record, actualIndex) : (value as ReactNode)}
+            </div>
+          )
+        })}
       </div>
     )
   }
 
   return (
     <div
-      ref={parentRef}
-      style={{ height, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 4 }}
+      ref={containerRef}
+      style={{
+        height: '100%',
+        overflow: 'auto',
+        position: 'relative',
+      }}
+      onScroll={handleScroll}
     >
-      <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+      {/* 表头 */}
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          background: '#fafafa',
+          display: 'flex',
+          borderBottom: '2px solid #f0f0f0',
+        }}
+      >
+        {columns?.map((col, index) => (
+          <div
+            key={col.key || col.dataIndex || index}
+            style={{
+              width: col.width || 100,
+              minWidth: col.width || 100,
+              padding: '12px',
+              fontWeight: 600,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {col.title}
+          </div>
+        ))}
+      </div>
+
+      {/* 虚拟内容区 */}
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        {loading ? (
+          <div
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            <Spin />
+          </div>
+        ) : (
+          <div
+            style={{
+              position: 'absolute',
+              top: offsetY,
+              left: 0,
+              right: 0,
+            }}
+          >
+            {visibleData.map((record, index) => renderRow(record, index))}
+          </div>
+        )}
+      </div>
+
+      {/* 空状态 */}
+      {!loading && data.length === 0 && (
         <div
           style={{
-            position: 'sticky',
-            top: 0,
-            background: '#fafafa',
-            zIndex: 1,
             display: 'flex',
-            borderBottom: '2px solid #f0f0f0',
-            fontWeight: 600,
-            fontSize: 13,
+            justifyContent: 'center',
+            alignItems: 'center',
+            height: 200,
+            color: '#999',
           }}
         >
-          <div style={{ width: 80, padding: '8px 12px' }}>代码</div>
-          <div style={{ width: 100, padding: '8px 12px' }}>名称</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>最新价</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>涨跌幅</div>
-          <div style={{ width: 80, padding: '8px 12px', textAlign: 'right' }}>正股价</div>
-          <div style={{ width: 80, padding: '8px 12px', textAlign: 'right' }}>转股价</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>转股价值</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>溢价率</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>双低值</div>
-          <div style={{ width: 100, padding: '8px 12px', textAlign: 'right' }}>成交额(亿)</div>
-          <div style={{ width: 90, padding: '8px 12px', textAlign: 'right' }}>剩余年限</div>
+          暂无数据
         </div>
-
-        {virtualItems.map((virtualRow) => {
-          const bond = bonds[virtualRow.index]
-          return (
-            <div
-              key={bond.code}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: virtualRow.size,
-                transform: `translateY(${virtualRow.start}px)`,
-                display: 'flex',
-                borderBottom: '1px solid #f0f0f0',
-                cursor: 'pointer',
-                background: virtualRow.index % 2 === 0 ? '#fff' : '#fafafa',
-              }}
-              onClick={() => onRowClick(bond.code)}
-              onMouseEnter={(e) => e.currentTarget.style.background = '#e6f7ff'}
-              onMouseLeave={(e) => e.currentTarget.style.background = virtualRow.index % 2 === 0 ? '#fff' : '#fafafa'}
-            >
-              <div style={{ width: 80, padding: '10px 12px', fontFamily: 'monospace' }}>{bond.code}</div>
-              <div style={{ width: 100, padding: '10px 12px' }}>{bond.name}</div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right', color: getChangeColor(bond.change_pct), fontWeight: 600, fontFamily: 'monospace' }}>
-                {bond.price.toFixed(2)}
-              </div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right' }}>
-                <Tag color={getChangeColor(bond.change_pct)} style={{ fontFamily: 'monospace' }}>
-                  {bond.change_pct > 0 ? '+' : ''}{bond.change_pct.toFixed(2)}%
-                </Tag>
-              </div>
-              <div style={{ width: 80, padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace' }}>{bond.stock_price.toFixed(2)}</div>
-              <div style={{ width: 80, padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace' }}>{bond.conversion_price.toFixed(2)}</div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace' }}>{bond.conversion_value.toFixed(2)}</div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right', color: getPremiumColor(bond.premium_ratio), fontWeight: 600 }}>
-                {bond.premium_ratio.toFixed(2)}%
-              </div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right', color: getDualLowColor(bond.dual_low), fontWeight: 600 }}>
-                {bond.dual_low.toFixed(2)}
-              </div>
-              <div style={{ width: 100, padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace' }}>{bond.volume.toFixed(2)}</div>
-              <div style={{ width: 90, padding: '10px 12px', textAlign: 'right' }}>{bond.remaining_years.toFixed(1)}</div>
-            </div>
-          )
-        })}
-      </div>
+      )}
     </div>
   )
 }
+
+// 使用 memo 优化
+export const VirtualTable = memo(VirtualTableInner) as typeof VirtualTableInner
+
+export default VirtualTable

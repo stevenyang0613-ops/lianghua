@@ -2,7 +2,7 @@
 from httpx import AsyncClient, ASGITransport
 import pytest
 
-from app.main import app
+from app.main import app, settings
 
 
 from app.engine.market import MarketEngine
@@ -22,7 +22,7 @@ async def test_health_endpoint(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["app"] == "LiangHua"
+    assert data["app"] == settings.app_name
 
 
 from app.models.convertible import ConvertibleQuote
@@ -48,11 +48,10 @@ def test_premium_calculation():
 
 @pytest.mark.asyncio
 async def test_quotes_endpoint(client):
-    resp = await client.get("/api/v1/market/quotes")
+    resp = await client.get("/api/v1/market/quotes?symbols=113044")
     assert resp.status_code == 200
     data = resp.json()
-    assert "total" in data
-    assert "bonds" in data
+    assert isinstance(data, list)
 
 
 from datetime import date

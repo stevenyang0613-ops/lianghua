@@ -1,0 +1,255 @@
+# SLO/SLI监控看板配置
+# 定义服务级别目标和指标
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slo-definitions
+  namespace: lianghua
+data:
+  slo-config.yaml: |
+    # SLO定义
+    slos:
+      # === 可用性SLO ===
+      - name: api_availability
+        description: "API可用性目标"
+        target: 99.9
+        window: 30d
+        sli:
+          type: availability
+          query: |
+            sum(rate(http_requests_total{status!~"5.."}[5m])) 
+            / sum(rate(http_requests_total[5m]))
+        alerting:
+          burn_rate_thresholds:
+            - threshold: 2
+              window: 1h
+              severity: warning
+            - threshold: 10
+              window: 5m
+              severity: critical
+      
+      # === 延迟SLO ===
+      - name: api_latency
+        description: "API延迟目标（P95 < 500ms）"
+        target: 95
+        window: 30d
+        sli:
+          type: latency
+          threshold_ms: 500
+          quantile: 0.95
+          query: |
+            histogram_quantile(0.95, 
+              sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+            ) * 1000
+        alerting:
+          burn_rate_thresholds:
+            - threshold: 2
+              window: 1h
+              severity: warning
+            - threshold: 5
+              window: 5m
+              severity: critical
+      
+      # === 错误率SLO ===
+      - name: error_rate
+        description: "错误率目标（< 0.1%）"
+        target: 99.9
+        window: 30d
+        sli:
+          type: error_rate
+          query: |
+            100 - (
+              sum(rate(http_requests_total{status=~"5.."}[5m])) 
+              / sum(rate(http_requests_total[5m])) * 100
+            )
+        alerting:
+          burn_rate_thresholds:
+            - threshold: 2
+              window: 1h
+              severity: warning
+            - threshold: 10
+              window: 5m
+              severity: critical
+      
+      # === 行情延迟SLO ===
+      - name: quote_latency
+        description: "行情延迟目标（P99 < 100ms）"
+        target: 99
+        window: 7d
+        sli:
+          type: latency
+          threshold_ms: 100
+          quantile: 0.99
+          query: |
+            histogram_quantile(0.99, 
+              rate(lianghua_quote_latency_seconds_bucket[5m])
+            ) * 1000
+      
+      # === 交易执行SLO ===
+      - name: trade_execution
+        description: "交易执行成功率"
+        target: 99.5
+        window: 7d
+        sli:
+          type: success_rate
+          query: |
+            sum(rate(lianghua_trade_count_total{status="success"}[5m]))
+            / sum(rate(lianghua_trade_count_total[5m])) * 100
+      
+      # === 信号准确性SLO ===
+      - name: signal_accuracy
+        description: "信号命中率目标"
+        target: 55
+        window: 30d
+        sli:
+          type: custom
+          query: lianghua_signal_hit_rate{period="monthly"} * 100
+      
+      # === 策略收益SLO ===
+      - name: strategy_return
+        description: "策略月收益率目标"
+        target: 1
+        window: 30d
+        unit: percent
+        sli:
+          type: custom
+          query: lianghua_strategy_return{period="monthly", strategy_name="default"} * 100
+      
+      # === 数据新鲜度SLO ===
+      - name: data_freshness
+        description: "数据新鲜度目标（< 5秒）"
+        target: 99
+        window: 1d
+        sli:
+          type: freshness
+          threshold_seconds: 5
+          query: |
+            time() - max(data_last_update_timestamp)
+---
+  # SLO错误预算
+  error-budget.yaml: |
+    # 错误预算计算
+    error_budgets:
+      - slo: api_availability
+        monthly_budget_minutes: 43.8  # (1 - 0.999) * 30 * 24 * 60
+        burn_rate_alerts:
+          - name: burn_rate_fast
+            threshold: 14.4
+            window: 1h
+            remaining_budget_warning: 10%
+          - name: burn_rate_medium
+            threshold: 6
+            window: 6h
+            remaining_budget_warning: 30%
+          - name: burn_rate_slow
+            threshold: 1
+            window: 3d
+            remaining_budget_warning: 50%
+      
+      - slo: api_latency
+        monthly_budget_percent: 5
+        calculation: |
+          (目标时间内请求 / 总请求) * 100
+      
+      - slo: error_rate
+        monthly_budget_percent: 0.1
+        calculation: |
+          允许的错误请求数 / 总请求数
+---
+  # SLI计算规则
+  sli-recording-rules.yaml: |
+    groups:
+      - name: sli_recording_rules
+        interval: 30s
+        rules:
+          # 可用性SLI
+          - record: sli:lianghua:availability:ratio
+            expr: |
+              sum(rate(http_requests_total{status!~"5.."}[5m])) 
+              / sum(rate(http_requests_total[5m]))
+          
+          # 延迟SLI（< 500ms的比例）
+          - record: sli:lianghua:latency:ratio
+            expr: |
+              sum(rate(http_request_duration_seconds_bucket{le="0.5"}[5m])) 
+              / sum(rate(http_request_duration_seconds_count[5m]))
+          
+          # 错误率SLI
+          - record: sli:lianghua:error_rate:ratio
+            expr: |
+              sum(rate(http_requests_total{status=~"5.."}[5m])) 
+              / sum(rate(http_requests_total[5m]))
+          
+          # 行情延迟SLI
+          - record: sli:lianghua:quote_latency:ratio
+            expr: |
+              sum(rate(lianghua_quote_latency_seconds_bucket{le="0.1"}[5m])) 
+              / sum(rate(lianghua_quote_latency_seconds_count[5m]))
+          
+          # 交易成功率SLI
+          - record: sli:lianghua:trade_success:ratio
+            expr: |
+              sum(rate(lianghua_trade_count_total{status="success"}[5m])) 
+              / sum(rate(lianghua_trade_count_total[5m]))
+          
+          # 错误预算消耗率
+          - record: slo:lianghua:error_budget:burn_rate
+            expr: |
+              (1 - sli:lianghua:availability:ratio) 
+              / (1 - 0.999)
+          
+          # 剩余错误预算（百分比）
+          - record: slo:lianghua:error_budget:remaining
+            expr: |
+              100 * (
+                1 - (
+                  sum(increase(http_requests_total{status=~"5.."}[30d]))
+                  / (0.001 * sum(increase(http_requests_total[30d])))
+                )
+              )
+---
+  # SLO告警规则
+  slo-alerts.yaml: |
+    groups:
+      - name: slo_alerts
+        rules:
+          # 错误预算消耗过快
+          - alert: ErrorBudgetBurningFast
+            expr: slo:lianghua:error_budget:burn_rate > 14.4
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "错误预算消耗过快"
+              description: "错误预算消耗率为{{ $value }}，将在1小时内耗尽月度预算"
+          
+          # 错误预算即将耗尽
+          - alert: ErrorBudgetAlmostExhausted
+            expr: slo:lianghua:error_budget:remaining < 10
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "错误预算即将耗尽"
+              description: "剩余错误预算仅{{ $value }}%"
+          
+          # SLO违规
+          - alert: SLOViolation
+            expr: sli:lianghua:availability:ratio < 0.999
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "可用性SLO违规"
+              description: "当前可用性{{ $value | humanizePercentage }}，低于目标99.9%"
+          
+          # 延迟SLO违规
+          - alert: LatencySLOViolation
+            expr: sli:lianghua:latency:ratio < 0.95
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "延迟SLO违规"
+              description: "{{ $value | humanizePercentage }}的请求在500ms内完成，低于目标95%"

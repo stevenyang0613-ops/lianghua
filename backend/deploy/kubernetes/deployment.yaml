@@ -1,0 +1,390 @@
+# 松岗量化可转债策略 V3.0 - Kubernetes部署配置
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sg-strategy
+  labels:
+    app: sg-strategy
+    environment: production
+
+---
+# ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sg-strategy-config
+  namespace: sg-strategy
+data:
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  KAFKA_BROKERS: "kafka-service:9092"
+
+---
+# Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sg-strategy-secrets
+  namespace: sg-strategy
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://user:password@postgres-service:5432/sg_strategy"
+  REDIS_PASSWORD: "redis_password"
+  API_KEY: "your_api_key"
+  JWT_SECRET: "your_jwt_secret"
+
+---
+# Scoring Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scoring-service
+  namespace: sg-strategy
+  labels:
+    app: scoring-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: scoring-service
+  template:
+    metadata:
+      labels:
+        app: scoring-service
+    spec:
+      containers:
+      - name: scoring-service
+        image: sg-strategy/scoring:3.0.0
+        ports:
+        - containerPort: 8000
+        - containerPort: 50051
+        envFrom:
+        - configMapRef:
+            name: sg-strategy-config
+        - secretRef:
+            name: sg-strategy-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: sg-strategy-pvc
+
+---
+# Signal Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-service
+  namespace: sg-strategy
+  labels:
+    app: signal-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: signal-service
+  template:
+    metadata:
+      labels:
+        app: signal-service
+    spec:
+      containers:
+      - name: signal-service
+        image: sg-strategy/signal:3.0.0
+        ports:
+        - containerPort: 8001
+        envFrom:
+        - configMapRef:
+            name: sg-strategy-config
+        - secretRef:
+            name: sg-strategy-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+# Execution Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-service
+  namespace: sg-strategy
+  labels:
+    app: execution-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: execution-service
+  template:
+    metadata:
+      labels:
+        app: execution-service
+    spec:
+      containers:
+      - name: execution-service
+        image: sg-strategy/execution:3.0.0
+        ports:
+        - containerPort: 8002
+        envFrom:
+        - configMapRef:
+            name: sg-strategy-config
+        - secretRef:
+            name: sg-strategy-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+# Risk Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-service
+  namespace: sg-strategy
+  labels:
+    app: risk-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: risk-service
+  template:
+    metadata:
+      labels:
+        app: risk-service
+    spec:
+      containers:
+      - name: risk-service
+        image: sg-strategy/risk:3.0.0
+        ports:
+        - containerPort: 8003
+        envFrom:
+        - configMapRef:
+            name: sg-strategy-config
+        - secretRef:
+            name: sg-strategy-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+# API Gateway Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: sg-strategy
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: sg-strategy/gateway:3.0.0
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: sg-strategy-config
+        - secretRef:
+            name: sg-strategy-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: scoring-service
+  namespace: sg-strategy
+spec:
+  selector:
+    app: scoring-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: signal-service
+  namespace: sg-strategy
+spec:
+  selector:
+    app: signal-service
+  ports:
+  - port: 8001
+    targetPort: 8001
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: execution-service
+  namespace: sg-strategy
+spec:
+  selector:
+    app: execution-service
+  ports:
+  - port: 8002
+    targetPort: 8002
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: risk-service
+  namespace: sg-strategy
+spec:
+  selector:
+    app: risk-service
+  ports:
+  - port: 8003
+    targetPort: 8003
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: sg-strategy
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - port: 80
+    targetPort: 8000
+  type: LoadBalancer
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scoring-service-hpa
+  namespace: sg-strategy
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scoring-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sg-strategy-pvc
+  namespace: sg-strategy
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: standard
+
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sg-strategy-ingress
+  namespace: sg-strategy
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - api.sg-strategy.com
+    secretName: sg-strategy-tls
+  rules:
+  - host: api.sg-strategy.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
-import { Modal, Form, InputNumber, Select, Button, Space, Table, Tag, Badge, message, Popconfirm, Empty, Typography, Switch, Alert } from 'antd'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { Modal, Form, InputNumber, Select, Button, Space, Table, Tag, Badge, message, Popconfirm, Empty, Typography, Alert } from 'antd'
 import { BellOutlined, PlusOutlined, DeleteOutlined, NotificationOutlined } from '@ant-design/icons'
 import { useAlertStore, type AlertCondition, type AlertType } from '../stores/useAlertStore'
-import { requestNotificationPermission, getNotificationPermission, sendAlertNotification } from '../utils/notification'
+import { getApiBase } from '../utils/config'
+import { requestNotificationPermission, getNotificationPermission, sendAlertNotification } from '../utils/notifications'
 
 const { Text } = Typography
 
@@ -33,7 +34,12 @@ const alertTypeUnits: Record<AlertType, string> = {
 
 export default function AlertPanel({ visible, onClose, selectedCode, selectedName }: AlertPanelProps) {
   const [form] = Form.useForm()
-  const { alerts, triggers, setAlerts, addAlert, removeAlert, clearTriggers } = useAlertStore()
+  const alerts = useAlertStore((s) => s.alerts)
+  const triggers = useAlertStore((s) => s.triggers)
+  const setAlerts = useAlertStore((s) => s.setAlerts)
+  const addAlert = useAlertStore((s) => s.addAlert)
+  const removeAlert = useAlertStore((s) => s.removeAlert)
+  const clearTriggers = useAlertStore((s) => s.clearTriggers)
   const [loading, setLoading] = useState(false)
   const [notificationEnabled, setNotificationEnabled] = useState(getNotificationPermission() === 'granted')
 
@@ -70,9 +76,15 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
 
   const fetchAlerts = async () => {
     try {
-      const resp = await fetch('/api/v1/alerts')
-      const data = await resp.json()
-      setAlerts(data.alerts || [])
+      const baseUrl = getApiBase()
+      if (window.electronAPI?.httpRequest) {
+        const result = await window.electronAPI.httpRequest('GET', `${baseUrl}/api/v1/alerts`)
+        if (result.ok) setAlerts(result.data?.alerts || [])
+      } else {
+        const resp = await fetch(`${baseUrl}/api/v1/alerts`)
+        const data = await resp.json()
+        setAlerts(data.alerts || [])
+      }
     } catch (e) {
       console.error('Failed to fetch alerts:', e)
     }
@@ -92,13 +104,21 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
         created_at: new Date().toISOString(),
       }
 
-      const resp = await fetch('/api/v1/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(alert),
-      })
+      const baseUrl = getApiBase()
+      let ok = false
+      if (window.electronAPI?.httpRequest) {
+        const result = await window.electronAPI.httpRequest('POST', `${baseUrl}/api/v1/alerts`, alert)
+        ok = result.ok
+      } else {
+        const resp = await fetch(`${baseUrl}/api/v1/alerts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(alert),
+        })
+        ok = resp.ok
+      }
 
-      if (resp.ok) {
+      if (ok) {
         addAlert(alert)
         form.resetFields()
         message.success('告警已添加')
@@ -112,19 +132,27 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
     }
   }
 
-  const handleDeleteAlert = async (alertId: string) => {
+  const handleDeleteAlert = useCallback(async (alertId: string) => {
     try {
-      const resp = await fetch(`/api/v1/alerts/${alertId}`, { method: 'DELETE' })
-      if (resp.ok) {
+      const baseUrl = getApiBase()
+      let ok = false
+      if (window.electronAPI?.httpRequest) {
+        const result = await window.electronAPI.httpRequest('DELETE', `${baseUrl}/api/v1/alerts/${alertId}`)
+        ok = result.ok
+      } else {
+        const resp = await fetch(`${baseUrl}/api/v1/alerts/${alertId}`, { method: 'DELETE' })
+        ok = resp.ok
+      }
+      if (ok) {
         removeAlert(alertId)
         message.success('已删除')
       }
     } catch (e) {
       message.error('删除失败')
     }
-  }
+  }, [removeAlert])
 
-  const columns = [
+  const columns = useMemo(() => [
     { title: '代码', dataIndex: 'code', key: 'code', width: 80 },
     { title: '名称', dataIndex: 'name', key: 'name', width: 80 },
     {
@@ -153,7 +181,7 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
         </Popconfirm>
       ),
     },
-  ]
+  ], [handleDeleteAlert])
 
   return (
     <Modal

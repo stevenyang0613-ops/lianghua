@@ -1,4 +1,5 @@
 import asyncio
+import math
 from datetime import datetime
 from typing import Optional
 import logging
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 class AKShareAdapter(DataSourceAdapter):
     """AKShare 可转债数据适配器"""
 
-    def __init__(self, cache_ttl: int = 3, max_retries: int = 3, timeout: float = 10.0):
+    def __init__(self, cache_ttl: int = 60, max_retries: int = 3, timeout: float = 60.0):
         self._cache: Optional[list[ConvertibleQuote]] = None
         self._cache_time: Optional[datetime] = None
         self._cache_ttl = cache_ttl
@@ -75,33 +76,36 @@ class AKShareAdapter(DataSourceAdapter):
                 return bond
         return None
 
+    @staticmethod
+    def _safe_float(value) -> float:
+        v = float(value) if value is not None and value != '' else 0.0
+        return 0.0 if math.isnan(v) or math.isinf(v) else v
+
     def _row_to_quote(self, row: pd.Series) -> Optional[ConvertibleQuote]:
         """将 DataFrame 行转为 Quote 对象，适配不同版本的 AKShare 列名"""
         try:
-            code = str(row.get("代码", row.get("bond_code", "")))
+            code = str(row.get("债券代码", row.get("代码", row.get("bond_code", ""))))
             if not code:
                 return None
-            price = float(row.get("最新价", row.get("price", 0)))
-            change_pct = float(row.get("涨跌幅", row.get("change_pct", 0)))
-
-            conversion_price = float(row.get("转股价", row.get("conversion_price", 0)))
-            stock_price = float(row.get("正股价", row.get("stock_price", 0)))
+            price = self._safe_float(row.get("债现价", row.get("最新价", row.get("price", 0))))
+            conversion_price = self._safe_float(row.get("转股价", row.get("conversion_price", 0)))
+            stock_price = self._safe_float(row.get("正股价", row.get("stock_price", 0)))
             conversion_value = round(100 / conversion_price * stock_price, 2) if conversion_price > 0 else 0.0
             premium = round((price - conversion_value) / conversion_value * 100, 2) if conversion_value > 0 else 0.0
             dual_low = round(price + premium, 2)
 
             return ConvertibleQuote(
                 code=code,
-                name=str(row.get("转债名称", row.get("bond_name", ""))),
+                name=str(row.get("债券简称", row.get("转债名称", row.get("bond_name", "")))),
                 price=price,
-                change_pct=change_pct,
+                change_pct=0.0,
                 stock_price=stock_price,
-                stock_change_pct=float(row.get("正股涨跌幅", row.get("stock_change_pct", 0))),
+                stock_change_pct=0.0,
                 conversion_price=conversion_price,
                 conversion_value=conversion_value,
                 premium_ratio=premium,
                 dual_low=dual_low,
-                volume=float(row.get("成交额", row.get("volume", 0))),
+                volume=self._safe_float(row.get("成交额", row.get("volume", 0))),
             )
         except (ValueError, TypeError, ZeroDivisionError):
             return None

@@ -1,0 +1,295 @@
+# 松岗量化可转债策略 V3.0 - Prometheus告警规则
+# 文件: prometheus_rules.yml
+
+groups:
+  # ============ 系统告警 ============
+  - name: system_alerts
+    interval: 30s
+    rules:
+      # 服务可用性
+      - alert: ServiceDown
+        expr: up{job="sg-strategy"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "服务不可用: {{ $labels.instance }}"
+          description: "服务 {{ $labels.job }} 在实例 {{ $labels.instance }} 上已停止响应超过1分钟"
+          runbook_url: "https://wiki.sg-strategy.com/runbook/service-down"
+
+      # 高CPU使用率
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(process_cpu_seconds_total{job="sg-strategy"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "CPU使用率过高: {{ $labels.instance }}"
+          description: "实例 {{ $labels.instance }} CPU使用率超过80%，当前值: {{ $value }}%"
+
+      # 高内存使用
+      - alert: HighMemoryUsage
+        expr: |
+          (process_resident_memory_bytes{job="sg-strategy"} / (1024 * 1024 * 1024)) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "内存使用过高: {{ $labels.instance }}"
+          description: "实例 {{ $labels.instance }} 内存使用超过1.5GB，当前值: {{ $value | printf \"%.2f\" }}GB"
+
+      # 磁盘空间不足
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/data"} / node_filesystem_size_bytes{mountpoint="/data"}) < 0.2
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "磁盘空间不足: {{ $labels.instance }}"
+          description: "实例 {{ $labels.instance }} /data 分区剩余空间不足20%"
+
+  # ============ 应用告警 ============
+  - name: application_alerts
+    interval: 30s
+    rules:
+      # 请求错误率
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(sg_strategy_scoring_errors_total[5m])) / sum(rate(sg_strategy_scoring_requests_total[5m])) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "API错误率过高"
+          description: "打分服务错误率超过5%，当前值: {{ $value | printf \"%.2f\" }}%"
+          runbook_url: "https://wiki.sg-strategy.com/runbook/high-error-rate"
+
+      # 请求延迟
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "API延迟过高"
+          description: "P95延迟超过1秒，当前值: {{ $value | printf \"%.2f\" }}秒"
+
+      # 请求速率异常
+      - alert: RequestRateAnomaly
+        expr: |
+          abs((rate(sg_strategy_scoring_requests_total[5m]) - deriv(rate(sg_strategy_scoring_requests_total[1h])[30m:5m])) / rate(sg_strategy_scoring_requests_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "请求速率异常"
+          description: "请求速率变化超过50%，可能存在异常流量"
+
+  # ============ 业务告警 ============
+  - name: business_alerts
+    interval: 1m
+    rules:
+      # 白名单更新失败
+      - alert: WhitelistUpdateFailed
+        expr: |
+          increase(sg_strategy_whitelist_update_errors_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: strategy
+        annotations:
+          summary: "白名单更新失败"
+          description: "过去1小时内有 {{ $value }} 次白名单更新失败"
+          runbook_url: "https://wiki.sg-strategy.com/runbook/whitelist-update"
+
+      # 信号生成异常
+      - alert: SignalGenerationAnomaly
+        expr: |
+          rate(sg_strategy_trading_signal_total[1h]) == 0 and hour() >= 9 and hour() <= 15
+        for: 30m
+        labels:
+          severity: critical
+          team: strategy
+        annotations:
+          summary: "信号生成停止"
+          description: "交易时间内无信号生成超过30分钟"
+
+      # 持仓超限
+      - alert: PositionLimitExceeded
+        expr: |
+          sg_strategy_position_weight > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: risk
+        annotations:
+          summary: "单一持仓超限: {{ $labels.code }}"
+          description: "标的 {{ $labels.code }} 持仓权重超过10%，当前值: {{ $value | printf \"%.2f\" }}%"
+
+      # 回撤预警
+      - alert: DrawdownWarning
+        expr: |
+          sg_strategy_portfolio_drawdown > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: risk
+        annotations:
+          summary: "组合回撤预警"
+          description: "组合回撤超过5%，当前值: {{ $value | printf \"%.2f\" }}%"
+
+      # 回撤严重
+      - alert: DrawdownCritical
+        expr: |
+          sg_strategy_portfolio_drawdown > 0.10
+        for: 1m
+        labels:
+          severity: critical
+          team: risk
+        annotations:
+          summary: "组合回撤严重"
+          description: "组合回撤超过10%，当前值: {{ $value | printf \"%.2f\" }}%，建议启动熔断机制"
+          runbook_url: "https://wiki.sg-strategy.com/runbook/drawdown-critical"
+
+  # ============ 数据告警 ============
+  - name: data_alerts
+    interval: 5m
+    rules:
+      # 数据源异常
+      - alert: DataSourceDown
+        expr: |
+          sg_strategy_data_source_status == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: data
+        annotations:
+          summary: "数据源不可用: {{ $labels.source }}"
+          description: "数据源 {{ $labels.source }} 连接失败超过5分钟"
+          runbook_url: "https://wiki.sg-strategy.com/runbook/data-source-down"
+
+      # 数据同步延迟
+      - alert: DataSyncDelayed
+        expr: |
+          time() - sg_strategy_data_last_sync_timestamp > 3600
+        for: 10m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "数据同步延迟"
+          description: "数据同步延迟超过1小时，最后同步时间: {{ $value | humanizeTimestamp }}"
+
+      # 数据质量下降
+      - alert: DataQualityDegraded
+        expr: |
+          sg_strategy_data_quality_score < 0.8
+        for: 30m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "数据质量下降: {{ $labels.table }}"
+          description: "表 {{ $labels.table }} 数据质量分数低于80%，当前值: {{ $value | printf \"%.2f\" }}%"
+
+  # ============ 基础设施告警 ============
+  - name: infrastructure_alerts
+    interval: 1m
+    rules:
+      # Pod重启频繁
+      - alert: PodRestartingFrequently
+        expr: |
+          increase(kube_pod_container_status_restarts_total{namespace="sg-strategy"}[1h]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod重启频繁: {{ $labels.pod }}"
+          description: "Pod {{ $labels.pod }} 在过去1小时内重启超过5次"
+
+      # Pod状态异常
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_phase{namespace="sg-strategy", phase!="Running"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Pod状态异常: {{ $labels.pod }}"
+          description: "Pod {{ $labels.pod }} 状态为 {{ $labels.phase }}"
+
+      # HPA触发
+      - alert: HPAScaling
+        expr: |
+          kube_hpa_status_current_replicas{namespace="sg-strategy"} != kube_hpa_status_desired_replicas{namespace="sg-strategy"}
+        for: 5m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "HPA自动扩缩容: {{ $labels.hpa }}"
+          description: "HPA {{ $labels.hpa }} 正在进行扩缩容，当前: {{ $labels.current_replicas }}，目标: {{ $labels.desired_replicas }}"
+
+  # ============ 安全告警 ============
+  - name: security_alerts
+    interval: 1m
+    rules:
+      # 登录失败过多
+      - alert: TooManyFailedLogins
+        expr: |
+          increase(sg_strategy_auth_failures_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "登录失败过多"
+          description: "过去5分钟内有 {{ $value }} 次登录失败，可能存在暴力破解攻击"
+
+      # API限流触发
+      - alert: RateLimitTriggered
+        expr: |
+          increase(sg_strategy_rate_limit_blocked_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "API限流触发频繁"
+          description: "过去5分钟内有 {{ $value }} 次请求被限流"
+
+      # SQL注入检测
+      - alert: SQLInjectionAttempt
+        expr: |
+          increase(sg_strategy_security_sql_injection_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "检测到SQL注入攻击"
+          description: "过去1小时内检测到 {{ $value }} 次SQL注入尝试"
+
+      # 异常IP访问
+      - alert: SuspiciousIPAccess
+        expr: |
+          increase(sg_strategy_blocked_ip_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "可疑IP访问"
+          description: "过去5分钟内有 {{ $value }} 个IP被加入黑名单"

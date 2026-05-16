@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { fetchSignals, fetchAvailableSignalsStrategies, setActiveStrategies, executeSignal, batchExecuteSignals, fetchSignalHistory, fetchSignalStats, type TradeSignal, type StrategyInfoItem, type SignalHistoryItem, type SignalStats } from '../services/api'
-
-const WS_URL = `ws://${window.location.hostname}:8000/api/v1/ws/signals`
+import { signalsWs } from '../utils/wsInstances'
+import { notification } from 'antd'
 
 interface SignalState {
   signals: TradeSignal[]
@@ -21,7 +21,11 @@ interface SignalState {
   execute: (code: string) => Promise<void>
   batchExecute: () => Promise<number>
   connectWs: () => () => void
+  disconnectWs: () => void
 }
+
+let wsSubCleanups: (() => void)[] = []
+let reconnectNotifyCount = 0
 
 export const useSignalStore = create<SignalState>((set, get) => ({
   signals: [],
@@ -32,7 +36,7 @@ export const useSignalStore = create<SignalState>((set, get) => ({
   total: 0,
   loading: false,
   error: null,
-  wsConnected: false,
+  wsConnected: signalsWs.isConnected(),
 
   loadSignals: async () => {
     set({ loading: true, error: null })
@@ -102,30 +106,49 @@ export const useSignalStore = create<SignalState>((set, get) => ({
   },
 
   connectWs: () => {
-    let ws: WebSocket | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    // Clean up any existing subscriptions
+    get().disconnectWs()
 
-    const connect = () => {
-      ws = new WebSocket(WS_URL)
-      ws.onopen = () => set({ wsConnected: true })
-      ws.onclose = () => {
-        set({ wsConnected: false })
-        reconnectTimer = setTimeout(connect, 5000)
+    const unsubMsg = signalsWs.subscribe('signals', (data) => {
+      const signals = (data as TradeSignal[]).filter((s: TradeSignal) => !s.executed)
+      set({ signals, total: (data as TradeSignal[]).length })
+    })
+
+    const unsubState = signalsWs.onStateChange((state) => {
+      set({ wsConnected: state === 'connected' })
+      if (state === 'connected') {
+        if (reconnectNotifyCount >= 3) {
+          notification.success({ message: 'WebSocket 已重连', description: `经过 ${reconnectNotifyCount} 次重试后恢复连接`, duration: 5 })
+        }
+        reconnectNotifyCount = 0
+        get().loadSignals()
+      } else if (state === 'reconnecting') {
+        reconnectNotifyCount = signalsWs.getAttemptCount()
+        if (reconnectNotifyCount >= 3 && reconnectNotifyCount % 3 === 0) {
+          notification.warning({ message: 'WebSocket 连接异常', description: `已重试 ${reconnectNotifyCount} 次，请检查后端服务是否正常运行`, duration: 8 })
+        }
       }
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'signals' && msg.signals) {
-            set({ signals: msg.signals.filter((s: TradeSignal) => !s.executed), total: msg.signals.length })
-          }
-        } catch { /* ignore */ }
+    })
+
+    const unsubLatency = signalsWs.onLatencyWarning((latency, consecutiveHigh) => {
+      if (consecutiveHigh >= 3 && consecutiveHigh % 3 === 0) {
+        notification.warning({ message: 'WS 延迟过高', description: `连续 ${consecutiveHigh} 次延迟 >500ms，当前 ${latency}ms，请检查网络状况`, duration: 8 })
       }
+    })
+
+    wsSubCleanups = [unsubMsg, unsubState, unsubLatency]
+
+    if (!signalsWs.isConnected() && signalsWs.getState() === 'disconnected') {
+      signalsWs.connect()
     }
 
-    connect()
-    return () => {
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      if (ws) ws.close()
-    }
+    return () => get().disconnectWs()
+  },
+
+  disconnectWs: () => {
+    wsSubCleanups.forEach(fn => fn())
+    wsSubCleanups = []
+    signalsWs.disconnect()
+    set({ wsConnected: false })
   },
 }))

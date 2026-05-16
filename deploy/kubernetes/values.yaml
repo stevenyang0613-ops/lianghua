@@ -1,0 +1,265 @@
+# 默认配置值
+# 声明变量以便覆盖
+
+# 全局配置
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# 后端服务配置
+backend:
+  replicaCount: 2
+
+  image:
+    repository: lianghua/backend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  env:
+    - name: APP_ENV
+      value: "production"
+    - name: LOG_LEVEL
+      value: "INFO"
+
+  livenessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+
+  readinessProbe:
+    httpGet:
+      path: /api/v1/health
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+
+# 前端服务配置
+frontend:
+  replicaCount: 2
+
+  image:
+    repository: lianghua/frontend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Celery Worker配置
+celery:
+  worker:
+    replicaCount: 3
+
+    image:
+      repository: lianghua/backend
+      pullPolicy: IfNotPresent
+      tag: "latest"
+
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+    concurrency: 4
+    queues: "celery,strategy,data,alert"
+
+  beat:
+    enabled: true
+    replicaCount: 1
+
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+# Flower监控
+flower:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: mher/flower
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  service:
+    type: ClusterIP
+    port: 5555
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# PostgreSQL配置
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "lianghua"
+    username: "lianghua"
+    password: "lianghua"
+    database: "lianghua"
+
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+  readReplicas:
+    replicaCount: 1
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# Redis配置
+redis:
+  enabled: true
+  auth:
+    enabled: false
+
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      size: 8Gi
+
+  sentinel:
+    enabled: true
+    quorum: 2
+
+# Prometheus配置
+prometheus:
+  enabled: true
+  server:
+    persistentVolume:
+      enabled: true
+      size: 50Gi
+
+  alertmanager:
+    enabled: true
+    persistentVolume:
+      enabled: true
+      size: 10Gi
+
+# Grafana配置
+grafana:
+  enabled: true
+  adminPassword: "admin123"
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  plugins:
+    - grafana-piechart-panel
+    - grafana-clock-panel
+
+# Loki配置
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 50Gi
+
+promtail:
+  enabled: true
+
+# Nginx Ingress配置
+ingress:
+  enabled: true
+  className: nginx
+
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+  hosts:
+    - host: lianghua.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+        - path: /api
+          pathType: Prefix
+          service: backend
+        - path: /ws
+          pathType: Prefix
+          service: backend
+        - path: /metrics
+          pathType: Prefix
+          service: backend
+
+  tls:
+    - secretName: lianghua-tls
+      hosts:
+        - lianghua.example.com
+
+# ServiceAccount配置
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod安全上下文
+podSecurityContext:
+  fsGroup: 1000
+
+# 容器安全上下文
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# 节点选择器
+nodeSelector: {}
+
+# 容忍度
+tolerations: []
+
+# 亲和性
+affinity: {}

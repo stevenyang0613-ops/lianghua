@@ -1,0 +1,276 @@
+# 自定义业务指标配置
+# 监控转债策略核心指标
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: business-metrics-config
+  namespace: lianghua
+data:
+  metrics.py: |
+    """
+    业务指标定义
+    """
+    from prometheus_client import Counter, Gauge, Histogram, Info
+    import time
+    
+    # ========== 策略性能指标 ==========
+    
+    # 策略收益率
+    STRATEGY_RETURN = Gauge(
+        'lianghua_strategy_return',
+        '策略累计收益率',
+        ['strategy_name', 'period']
+    )
+    
+    # 策略胜率
+    STRATEGY_WIN_RATE = Gauge(
+        'lianghua_strategy_win_rate',
+        '策略胜率',
+        ['strategy_name']
+    )
+    
+    # 最大回撤
+    MAX_DRAWDOWN = Gauge(
+        'lianghua_max_drawdown',
+        '最大回撤',
+        ['strategy_name']
+    )
+    
+    # 夏普比率
+    SHARPE_RATIO = Gauge(
+        'lianghua_sharpe_ratio',
+        '夏普比率',
+        ['strategy_name', 'period']
+    )
+    
+    # ========== 交易指标 ==========
+    
+    # 交易次数
+    TRADE_COUNT = Counter(
+        'lianghua_trade_count_total',
+        '交易总次数',
+        ['trade_type', 'status']
+    )
+    
+    # 交易金额
+    TRADE_AMOUNT = Counter(
+        'lianghua_trade_amount_total',
+        '交易总金额（元）',
+        ['trade_type']
+    )
+    
+    # 交易延迟
+    TRADE_LATENCY = Histogram(
+        'lianghua_trade_latency_seconds',
+        '交易延迟（秒）',
+        ['trade_type'],
+        buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    )
+    
+    # 持仓数量
+    POSITION_COUNT = Gauge(
+        'lianghua_position_count',
+        '当前持仓数量',
+        ['bond_type']
+    )
+    
+    # 持仓市值
+    POSITION_VALUE = Gauge(
+        'lianghua_position_value',
+        '持仓总市值（元）',
+        []
+    )
+    
+    # ========== 转债指标 ==========
+    
+    # 转债溢价率
+    CONVERT_PREMIUM = Gauge(
+        'lianghua_convert_premium',
+        '转债溢价率',
+        ['bond_code', 'bond_name']
+    )
+    
+    # 转股价值
+    CONVERT_VALUE = Gauge(
+        'lianghua_convert_value',
+        '转股价值',
+        ['bond_code', 'bond_name']
+    )
+    
+    # 转债价格
+    BOND_PRICE = Gauge(
+        'lianghua_bond_price',
+        '转债价格',
+        ['bond_code', 'bond_name']
+    )
+    
+    # 双低指标
+    DOUBLE_LOW = Gauge(
+        'lianghua_double_low',
+        '双低指标（价格+溢价率）',
+        ['bond_code', 'bond_name']
+    )
+    
+    # ========== 信号指标 ==========
+    
+    # 信号生成次数
+    SIGNAL_COUNT = Counter(
+        'lianghua_signal_count_total',
+        '信号生成次数',
+        ['signal_type', 'action']
+    )
+    
+    # 信号响应延迟
+    SIGNAL_LATENCY = Histogram(
+        'lianghua_signal_latency_seconds',
+        '信号响应延迟（秒）',
+        ['signal_type'],
+        buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+    )
+    
+    # 信号命中率
+    SIGNAL_HIT_RATE = Gauge(
+        'lianghua_signal_hit_rate',
+        '信号命中率',
+        ['signal_type', 'period']
+    )
+    
+    # ========== 风险指标 ==========
+    
+    # VaR（风险价值）
+    VALUE_AT_RISK = Gauge(
+        'lianghua_var',
+        '风险价值VaR',
+        ['confidence_level', 'period']
+    )
+    
+    # 波动率
+    VOLATILITY = Gauge(
+        'lianghua_volatility',
+        '组合波动率',
+        ['period']
+    )
+    
+    # Beta值
+    BETA = Gauge(
+        'lianghua_beta',
+        '组合Beta值',
+        []
+    )
+    
+    # ========== 行情指标 ==========
+    
+    # 行情延迟
+    QUOTE_LATENCY = Histogram(
+        'lianghua_quote_latency_seconds',
+        '行情延迟（秒）',
+        ['source'],
+        buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5]
+    )
+    
+    # 行情更新频率
+    QUOTE_UPDATE_RATE = Gauge(
+        'lianghua_quote_update_rate',
+        '行情更新频率（次/秒）',
+        ['source']
+    )
+    
+    # ========== 回测指标 ==========
+    
+    # 回测运行时间
+    BACKTEST_DURATION = Histogram(
+        'lianghua_backtest_duration_seconds',
+        '回测运行时间',
+        ['strategy_name'],
+        buckets=[10, 30, 60, 120, 300, 600]
+    )
+    
+    # 回测覆盖率
+    BACKTEST_COVERAGE = Gauge(
+        'lianghua_backtest_coverage',
+        '回测代码覆盖率',
+        ['strategy_name']
+    )
+    
+    # ========== 归因分析指标 ==========
+    
+    # 归因收益
+    ATTRIBUTION_RETURN = Gauge(
+        'lianghua_attribution_return',
+        '归因收益',
+        ['attribution_type', 'factor']
+    )
+    
+    # 行业暴露
+    INDUSTRY_EXPOSURE = Gauge(
+        'lianghua_industry_exposure',
+        '行业暴露度',
+        ['industry']
+    )
+---
+  # PrometheusRule定义
+  prometheus-rules.yaml: |
+    groups:
+      - name: lianghua_business.rules
+        interval: 30s
+        rules:
+          # 策略收益率告警
+          - alert: StrategyLowReturn
+            expr: lianghua_strategy_return{period="daily"} < -0.02
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "策略收益率低于-2%"
+              description: "{{ $labels.strategy_name }}策略日收益率{{ $value }}"
+          
+          # 最大回撤告警
+          - alert: HighDrawdown
+            expr: lianghua_max_drawdown > 0.1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "最大回撤超过10%"
+              description: "{{ $labels.strategy_name }}最大回撤{{ $value }}"
+          
+          # 交易延迟告警
+          - alert: HighTradeLatency
+            expr: histogram_quantile(0.95, rate(lianghua_trade_latency_seconds_bucket[5m])) > 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "交易延迟过高"
+              description: "P95交易延迟{{ $value }}秒"
+          
+          # 信号命中率告警
+          - alert: LowSignalHitRate
+            expr: lianghua_signal_hit_rate{period="weekly"} < 0.4
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: "信号命中率过低"
+              description: "{{ $labels.signal_type }}信号周命中率{{ $value }}"
+          
+          # VaR告警
+          - alert: HighVaR
+            expr: lianghua_var{confidence_level="95", period="daily"} > 0.05
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "VaR超过5%"
+              description: "95%置信度日VaR{{ $value }}"
+          
+          # 行情延迟告警
+          - alert: HighQuoteLatency
+            expr: histogram_quantile(0.99, rate(lianghua_quote_latency_seconds_bucket[1m])) > 0.1
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "行情延迟过高"
+              description: "{{ $labels.source }}行情P99延迟{{ $value }}秒"

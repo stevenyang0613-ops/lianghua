@@ -1,0 +1,117 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    tenant_id: lianghua
+
+scrape_configs:
+  # Docker容器日志
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.service"]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+
+  # 后端应用日志
+  - job_name: backend
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: backend
+          __path__: /var/log/lianghua/backend/*.log
+    pipeline_stages:
+      - match:
+          selector: '{job="backend"}'
+          stages:
+            - regex:
+                expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(?P<level>\w+)\] (?P<logger>[\w.]+): (?P<message>.*)$'
+            - labels:
+                level:
+                logger:
+            - timestamp:
+                source: timestamp
+                format: "2006-01-02 15:04:05"
+
+  # Celery Worker日志
+  - job_name: celery
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: celery
+          __path__: /var/log/lianghua/celery/*.log
+    pipeline_stages:
+      - match:
+          selector: '{job="celery"}'
+          stages:
+            - regex:
+                expression: '^\[(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \[(?P<level>\w+)\] (?P<message>.*)$'
+            - labels:
+                level:
+            - timestamp:
+                source: timestamp
+                format: "2006-01-02 15:04:05"
+
+  # Nginx访问日志
+  - job_name: nginx
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: nginx
+          __path__: /var/log/nginx/access.log
+    pipeline_stages:
+      - match:
+          selector: '{job="nginx"}'
+          stages:
+            - regex:
+                expression: '^(?P<remote_addr>[\d.]+) - (?P<remote_user>\S+) \[(?P<time_local>[^\]]+)\] "(?P<request>[^"]+)" (?P<status>\d+) (?P<body_bytes_sent>\d+) "(?P<http_referer>[^"]*)" "(?P<http_user_agent>[^"]*)"'
+            - labels:
+                status:
+                remote_addr:
+            - metrics:
+                nginx_requests_total:
+                  type: Counter
+                  description: "Total nginx requests"
+                  source: status
+                  config:
+                    action: inc
+                nginx_response_size_bytes:
+                  type: Counter
+                  description: "Total response size"
+                  source: body_bytes_sent
+                  config:
+                    action: add
+
+  # 系统日志
+  - job_name: syslog
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: syslog
+          __path__: /var/log/syslog
+
+# 日志限流
+limit_config:
+  readline_rate_enabled: true
+  readline_rate: 10000
+  readline_burst: 20000

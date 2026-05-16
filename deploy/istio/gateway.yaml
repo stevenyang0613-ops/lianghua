@@ -1,0 +1,159 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: lianghua-gateway
+  namespace: lianghua
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - lianghua.example.com
+      tls:
+        httpsRedirect: true
+
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: lianghua-tls
+      hosts:
+        - lianghua.example.com
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: lianghua-vs
+  namespace: lianghua
+spec:
+  hosts:
+    - lianghua.example.com
+  gateways:
+    - lianghua-gateway
+
+  http:
+    # 前端路由
+    - match:
+        - uri:
+            prefix: /
+        - uri:
+            prefix: /static
+      route:
+        - destination:
+            host: lianghua-frontend
+            port:
+              number: 80
+          weight: 100
+
+    # API路由
+    - match:
+        - uri:
+            prefix: /api
+      route:
+        - destination:
+            host: lianghua-backend
+            port:
+              number: 8000
+          weight: 100
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure,refused-stream
+
+    # WebSocket路由
+    - match:
+        - uri:
+            prefix: /ws
+      route:
+        - destination:
+            host: lianghua-backend
+            port:
+              number: 8000
+      websocketUpgrade: true
+
+    # Metrics路由
+    - match:
+        - uri:
+            prefix: /metrics
+      route:
+        - destination:
+            host: lianghua-backend
+            port:
+              number: 8000
+
+    # Flower监控路由
+    - match:
+        - uri:
+            prefix: /flower
+      rewrite:
+        uri: /
+      route:
+        - destination:
+            host: lianghua-flower
+            port:
+              number: 5555
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: lianghua-backend-dr
+  namespace: lianghua
+spec:
+  host: lianghua-backend
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 5s
+      http:
+        h2UpgradePolicy: UPGRADE
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 1000
+        consecutiveGatewayErrors: 5
+        interval: 30s
+
+    loadBalancer:
+      consistentHash:
+        httpCookie:
+          name: lianghua-session
+          ttl: 3600s
+
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 25
+
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: lianghua-frontend-dr
+  namespace: lianghua
+spec:
+  host: lianghua-frontend
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http1MaxPendingRequests: 200
+
+  subsets:
+    - name: v1
+      labels:
+        version: v1

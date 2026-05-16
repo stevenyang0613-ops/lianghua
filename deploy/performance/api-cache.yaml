@@ -1,0 +1,265 @@
+# API响应缓存策略
+# 多层缓存架构：CDN -> Redis -> 应用内存
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cache-config
+  namespace: lianghua
+data:
+  cache_policy.yaml: |
+    # 缓存策略配置
+    cache_layers:
+      # L1: 应用内存缓存
+      - name: memory_cache
+        type: memory
+        max_size_mb: 256
+        default_ttl_seconds: 60
+        eviction_policy: LRU
+        enabled: true
+      
+      # L2: Redis分布式缓存
+      - name: redis_cache
+        type: redis
+        connection: redis-cluster:6379
+        default_ttl_seconds: 300
+        enabled: true
+      
+      # L3: CDN缓存
+      - name: cdn_cache
+        type: cdn
+        provider: cloudflare
+        default_ttl_seconds: 3600
+        enabled: true
+    
+    # API缓存规则
+    api_cache_rules:
+      # 行情数据 - 短期缓存
+      - path: /api/v1/quotes/*
+        method: GET
+        cache_key: "quote:{bond_code}:{date}"
+        ttl_seconds: 5
+        cache_layers: [memory, redis]
+        vary_headers: [Accept-Encoding]
+        conditions:
+          - field: market_status
+            value: open
+            action: skip_cache
+      
+      # 转债列表 - 中期缓存
+      - path: /api/v1/bonds
+        method: GET
+        cache_key: "bonds:list:{page}:{filters_hash}"
+        ttl_seconds: 60
+        cache_layers: [redis]
+        stale_while_revalidate: 120
+      
+      # 策略信号 - 短期缓存
+      - path: /api/v1/signals/*
+        method: GET
+        cache_key: "signal:{signal_id}:{version}"
+        ttl_seconds: 30
+        cache_layers: [memory, redis]
+        invalidate_on:
+          - event: signal_updated
+            pattern: "signal:{signal_id}:*"
+      
+      # 历史数据 - 长期缓存
+      - path: /api/v1/history/*
+        method: GET
+        cache_key: "history:{bond_code}:{start_date}:{end_date}"
+        ttl_seconds: 86400  # 1天
+        cache_layers: [redis, cdn]
+        stale_if_error: 604800  # 1周
+      
+      # 静态配置 - 超长缓存
+      - path: /api/v1/config/*
+        method: GET
+        cache_key: "config:{config_name}"
+        ttl_seconds: 604800  # 1周
+        cache_layers: [redis, cdn]
+        etag: true
+      
+      # 用户持仓 - 不缓存
+      - path: /api/v1/positions/*
+        method: GET
+        cache: false
+      
+      # 交易接口 - 不缓存
+      - path: /api/v1/trades/*
+        cache: false
+    
+    # 缓存预热配置
+    warmup:
+      enabled: true
+      schedule: "0 8 * * *"  # 每天早上8点
+      items:
+        - type: api
+          endpoint: /api/v1/quotes/top100
+          priority: high
+        - type: api
+          endpoint: /api/v1/bonds
+          priority: normal
+        - type: calculation
+          function: preload_double_low
+          priority: high
+    
+    # 缓存失效策略
+    invalidation:
+      # 事件驱动失效
+      event_driven:
+        - event: quote_updated
+          pattern: "quote:{bond_code}:*"
+        - event: bond_list_updated
+          pattern: "bonds:list:*"
+        - event: trade_executed
+          pattern: "position:{user_id}:*"
+      
+      # 时间驱动失效
+      time_driven:
+        - pattern: "quote:*"
+          at: "09:25:00"  # 开盘前清理
+        - pattern: "quote:*"
+          at: "15:05:00"  # 收盘后清理
+      
+      # 依赖失效
+      dependency:
+        - parent: "bond:{bond_code}"
+          children:
+            - "quote:{bond_code}:*"
+            - "signal:{bond_code}:*"
+---
+  # 缓存中间件配置
+  cache_middleware.py: |
+    """API缓存中间件"""
+    from functools import wraps
+    from hashlib import md5
+    import json
+    import redis
+    from typing import Optional, Callable, Any
+    import hashlib
+    
+    class CacheManager:
+        """多层缓存管理器"""
+        
+        def __init__(self, redis_client: redis.Redis):
+            self.redis = redis_client
+            self.memory_cache = {}
+            self.memory_cache_max_size = 256 * 1024 * 1024  # 256MB
+            self.current_size = 0
+        
+        def get(self, key: str) -> Optional[Any]:
+            # L1: 内存缓存
+            if key in self.memory_cache:
+                return self.memory_cache[key]['value']
+            
+            # L2: Redis缓存
+            value = self.redis.get(key)
+            if value:
+                # 回写内存缓存
+                self._set_memory(key, value)
+                return json.loads(value)
+            
+            return None
+        
+        def set(self, key: str, value: Any, ttl: int = 300):
+            # 写入Redis
+            serialized = json.dumps(value)
+            self.redis.setex(key, ttl, serialized)
+            
+            # 写入内存
+            self._set_memory(key, value)
+        
+        def delete(self, pattern: str):
+            """删除匹配的缓存"""
+            # 删除内存缓存
+            keys_to_delete = [k for k in self.memory_cache if pattern.replace('*', '') in k]
+            for k in keys_to_delete:
+                del self.memory_cache[k]
+            
+            # 删除Redis缓存
+            keys = self.redis.keys(pattern)
+            if keys:
+                self.redis.delete(*keys)
+        
+        def _set_memory(self, key: str, value: Any):
+            """设置内存缓存（LRU淘汰）"""
+            # 简化实现，生产环境应使用更完善的LRU
+            if self.current_size > self.memory_cache_max_size:
+                # 清理一半的缓存
+                keys = list(self.memory_cache.keys())
+                for k in keys[:len(keys)//2]:
+                    del self.memory_cache[k]
+            
+            self.memory_cache[key] = {'value': value, 'size': len(str(value))}
+            self.current_size += len(str(value))
+    
+    def cache_response(
+        key_template: str,
+        ttl: int = 300,
+        cache_stale: bool = True,
+        stale_ttl: int = 600
+    ):
+        """缓存装饰器"""
+        def decorator(func: Callable):
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                # 生成缓存key
+                key = key_template.format(*args, **kwargs)
+                
+                # 尝试从缓存获取
+                cache_manager = get_cache_manager()
+                cached = cache_manager.get(key)
+                
+                if cached is not None:
+                    # 检查是否过期但可使用过期数据
+                    if cache_stale and cached.get('stale'):
+                        # 异步刷新缓存
+                        asyncio.create_task(
+                            _refresh_cache(func, key, ttl, *args, **kwargs)
+                        )
+                    return cached['data']
+                
+                # 执行函数
+                result = await func(*args, **kwargs)
+                
+                # 写入缓存
+                cache_manager.set(key, {'data': result}, ttl)
+                
+                return result
+            
+            return wrapper
+        return decorator
+    
+    # 使用示例
+    @cache_response(key_template="quote:{bond_code}:{date}", ttl=5)
+    async def get_quote(bond_code: str, date: str):
+        """获取行情数据（带缓存）"""
+        return await fetch_quote_from_db(bond_code, date)
+    
+    @cache_response(key_template="bonds:list:{page}:{filters_hash}", ttl=60)
+    async def get_bonds_list(page: int, filters: dict):
+        """获取转债列表（带缓存）"""
+        filters_hash = hashlib.md5(json.dumps(filters).encode()).hexdigest()[:8]
+        return await fetch_bonds_from_db(page, filters)
+---
+  # Istio缓存配置
+  istio-cache.yaml: |
+    apiVersion: networking.istio.io/v1beta1
+    kind: EnvoyFilter
+    metadata:
+      name: redis-cache-filter
+      namespace: lianghua
+    spec:
+      configPatches:
+        - applyTo: HTTP_FILTER
+          match:
+            context: SIDECAR_INBOUND
+          patch:
+            operation: INSERT_BEFORE
+            value:
+              name: envoy.filters.http.redis
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.redis.v3.Redis
+                cluster_name: redis-cluster
+                timeout: 5s

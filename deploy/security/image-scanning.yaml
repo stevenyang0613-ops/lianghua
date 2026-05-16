@@ -1,0 +1,229 @@
+# 镜像安全扫描配置
+# 使用Trivy进行容器镜像漏洞扫描
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-config
+  namespace: lianghua
+data:
+  trivy.yaml: |
+    # Trivy扫描配置
+    severity: CRITICAL,HIGH
+    ignore-unfixed: true
+    skip-files:
+      - /usr/share/doc/*
+      - /usr/share/man/*
+    skip-dirs:
+      - /usr/share/doc
+      - /usr/share/man
+    vulnerability:
+      type: os,library
+      ignore-unfixed: true
+    format: json
+    output: /tmp/trivy-report.json
+---
+# 镜像准入控制器配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-admission-config
+  namespace: lianghua
+data:
+  policy.yaml: |
+    # 镜像准入策略
+    rules:
+      # 只允许来自可信镜像仓库的镜像
+      - name: trusted-registries
+        action: allow
+        pattern: "^[a-z0-9-]+\\.docker\\.io/.*"
+      
+      # 禁止latest标签
+      - name: no-latest-tag
+        action: deny
+        pattern: ":latest$"
+      
+      # 要求镜像摘要
+      - name: require-digest
+        action: warn
+        pattern: "^(?!.*@sha256:).*$"
+    
+    # 漏洞扫描规则
+    vulnerability:
+      # CRITICAL漏洞阻止部署
+      critical:
+        action: deny
+        max_count: 0
+      
+      # HIGH漏洞需要批准
+      high:
+        action: warn
+        max_count: 5
+      
+      # MEDIUM漏洞仅记录
+      medium:
+        action: allow
+        max_count: 20
+---
+# Kyverno镜像验证策略
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: image-verification
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+    # 验证镜像签名
+    - name: verify-image-signature
+      match:
+        resources:
+          kinds:
+            - Pod
+      verifyImages:
+        - imageReferences:
+            - "docker.io/lianghua/*"
+          attestors:
+            - entries:
+                - keys:
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+                      -----END PUBLIC KEY-----
+    
+    # 禁止latest标签
+    - name: block-latest-tag
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "禁止使用latest标签，请指定具体版本"
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+    
+    # 要求资源限制
+    - name: require-resource-limits
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "必须设置CPU和内存限制"
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"
+    
+    # 禁止特权容器
+    - name: deny-privileged-containers
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "禁止运行特权容器"
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  privileged: false
+---
+# 定期镜像扫描CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: image-vulnerability-scan
+  namespace: lianghua
+spec:
+  schedule: "0 2 * * *"  # 每天凌晨2点
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: lianghua-monitor
+          restartPolicy: OnFailure
+          containers:
+            - name: trivy-scanner
+              image: aquasec/trivy:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # 扫描后端镜像
+                  trivy image --severity CRITICAL,HIGH \
+                    --format json --output /tmp/backend-scan.json \
+                    docker.io/lianghua/backend:$(cat /etc/app/version)
+                  
+                  # 检查漏洞数量
+                  critical=$(cat /tmp/backend-scan.json | jq '.Results[].Vulnerabilities | select(. != null) | map(select(.Severity=="CRITICAL")) | length' | awk '{s+=$1} END {print s}')
+                  high=$(cat /tmp/backend-scan.json | jq '.Results[].Vulnerabilities | select(. != null) | map(select(.Severity=="HIGH")) | length' | awk '{s+=$1} END {print s}')
+                  
+                  echo "CRITICAL漏洞: $critical"
+                  echo "HIGH漏洞: $high"
+                  
+                  # 发送通知
+                  if [ "$critical" -gt 0 ] || [ "$high" -gt 5 ]; then
+                    curl -X POST -H 'Content-type: application/json' \
+                      --data "{\"text\":\"安全警报: 发现CRITICAL漏洞${critical}个, HIGH漏洞${high}个\"}" \
+                      $SLACK_WEBHOOK_URL
+                  fi
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: notification-secrets
+                      key: slack-webhook
+              volumeMounts:
+                - name: scan-results
+                  mountPath: /tmp
+          volumes:
+            - name: scan-results
+              emptyDir: {}
+---
+# 安全基线检查
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-baseline
+  namespace: lianghua
+data:
+  cis-benchmark.yaml: |
+    # CIS Kubernetes安全基线检查项
+    checks:
+      # 1. 控制平面安全
+      - id: 1.1.1
+        name: "API Server匿名访问"
+        status: PASS
+        remediation: "确保--anonymous-auth=false"
+      
+      - id: 1.1.2
+        name: "API Server基本认证"
+        status: PASS
+        remediation: "禁用基本认证，使用Token认证"
+      
+      # 2. Etcd安全
+      - id: 2.1.1
+        name: "Etcd数据加密"
+        status: PASS
+        remediation: "确保etcd启用加密"
+      
+      # 3. 工作节点安全
+      - id: 3.1.1
+        name: "Kubelet证书轮换"
+        status: PASS
+        remediation: "启用kubelet证书自动轮换"
+      
+      # 4. 工作负载安全
+      - id: 4.1.1
+        name: "容器镜像安全"
+        status: WARN
+        remediation: "使用最小化基础镜像，定期扫描漏洞"

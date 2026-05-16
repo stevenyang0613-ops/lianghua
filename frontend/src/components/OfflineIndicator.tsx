@@ -1,0 +1,94 @@
+/**
+ * 离线模式指示器组件
+ * 在页面顶部显示缓存数据过期时间和状态
+ */
+
+import { useEffect, useState } from 'react'
+import { Badge, Space, Typography, Tooltip } from 'antd'
+import { WifiOutlined, DisconnectOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { getCacheStatus } from '../services/api'
+
+const { Text } = Typography
+
+interface OfflineIndicatorProps {
+  style?: React.CSSProperties
+}
+
+export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
+  const [isOffline, setIsOffline] = useState(() => localStorage.getItem('offline_mode') === 'true')
+  const [cacheStatus, setCacheStatus] = useState<{ key: string; status: ReturnType<typeof getCacheStatus> }[]>([])
+
+  useEffect(() => {
+    const checkStatus = () => {
+      setIsOffline(localStorage.getItem('offline_mode') === 'true')
+
+      // 检查主要缓存的过期状态
+      const mainCaches = ['market_quotes', 'analysis_dual-low-ranking', 'analysis_forced-redemption']
+      const statuses = mainCaches.map(key => ({
+        key,
+        status: getCacheStatus(key)
+      }))
+      setCacheStatus(statuses)
+    }
+
+    checkStatus()
+    const interval = setInterval(checkStatus, 30000) // 每30秒检查一次
+    return () => clearInterval(interval)
+  }, [])
+
+  if (!isOffline) {
+    return (
+      <div style={{ ...style, padding: '8px 16px', background: '#f6ffed', borderBottom: '1px solid #b7eb8f' }}>
+        <Space>
+          <WifiOutlined style={{ color: '#52c41a' }} />
+          <Text type="success">在线模式</Text>
+        </Space>
+      </div>
+    )
+  }
+
+  // 找到最早过期的缓存
+  const oldestCache = cacheStatus
+    .filter(c => c.status)
+    .sort((a, b) => {
+      if (a.status!.isExpired && !b.status!.isExpired) return -1
+      if (!a.status!.isExpired && b.status!.isExpired) return 1
+      return 0
+    })[0]
+
+  const hasExpiredCache = cacheStatus.some(c => c.status?.isExpired)
+
+  return (
+    <div style={{ ...style, padding: '8px 16px', background: hasExpiredCache ? '#fff2f0' : '#fffbe6', borderBottom: `1px solid ${hasExpiredCache ? '#ffccc7' : '#ffe58f'}` }}>
+      <Space split={<Text type="secondary">|</Text>}>
+        <Space>
+          {hasExpiredCache ? (
+            <Badge status="error" />
+          ) : (
+            <Badge status="warning" />
+          )}
+          <DisconnectOutlined style={{ color: hasExpiredCache ? '#ff4d4f' : '#faad14' }} />
+          <Text type={hasExpiredCache ? 'danger' : 'warning'}>离线模式</Text>
+        </Space>
+
+        {oldestCache?.status && (
+          <Tooltip title={`缓存: ${oldestCache.key}`}>
+            <Space size={4}>
+              <ClockCircleOutlined />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {oldestCache.status.isExpired
+                  ? oldestCache.status.expiredAgo
+                  : `剩余 ${oldestCache.status.remainingTime}`
+                }
+              </Text>
+            </Space>
+          </Tooltip>
+        )}
+
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          上次同步: {localStorage.getItem('cache_time') || '未知'}
+        </Text>
+      </Space>
+    </div>
+  )
+}

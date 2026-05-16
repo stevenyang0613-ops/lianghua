@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -7,11 +7,12 @@ class StrategyParam(BaseModel):
     """策略参数定义"""
     name: str
     label: str
-    type: str = "float"  # float, int, string, select
-    default: float = 0.0
+    type: str = "float"  # float, int, str, select
+    default: Union[float, int, str] = 0.0
     min_val: Optional[float] = None
     max_val: Optional[float] = None
-    options: Optional[list[str]] = None  # for select type
+    options: Optional[list[str]] = None  # for select
+    description: Optional[str] = None
 
 
 class BacktestConfig(BaseModel):
@@ -37,6 +38,7 @@ class OptimizationConfig(BaseModel):
     optimize_metric: str = Field(default="sharpe_ratio", description="优化目标(sharpe_ratio / total_return_pct / calmar_ratio)")
     max_iterations: int = Field(default=100, ge=1, le=10000, description="最大迭代次数")
     top_n: int = Field(default=10, ge=1, le=100, description="返回最优参数组合数")
+    parallel_workers: int = Field(default=1, ge=1, le=16, description="并行工作进程数(1=顺序执行, >1使用ProcessPoolExecutor)")
 
 
 class OptimizationResultItem(BaseModel):

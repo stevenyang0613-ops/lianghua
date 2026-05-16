@@ -55,3 +55,344 @@ body {
   .ant-table-wrapper .ant-table-thead > tr > th { padding: 8px 4px; }
   .ant-table-wrapper .ant-table-tbody > tr > td { padding: 8px 4px; }
 }
+
+/* Electron-specific styles */
+.electron-window {
+  /* Prevent text selection on UI chrome */
+  user-select: none;
+}
+
+.electron-window .selectable {
+  user-select: text;
+}
+
+/* Custom title bar height adjustment for Windows/Linux */
+.electron-window[data-platform="win32"],
+.electron-window[data-platform="linux"] {
+  /* Title bar is 32px, so adjust layout accordingly */
+}
+
+/* macOS uses native title bar, no adjustment needed */
+.electron-window[data-platform="darwin"] {
+  /* Native title bar, content starts from top */
+}
+
+/* Ensure proper z-index layering */
+.electron-window .ant-layout {
+  z-index: 1;
+}
+
+.electron-window .ant-drawer {
+  z-index: 1000;
+}
+
+.electron-window .ant-modal-wrap {
+  z-index: 1001;
+}
+
+.electron-window .ant-dropdown {
+  z-index: 1002;
+}
+
+.electron-window .ant-tooltip {
+  z-index: 1003;
+}
+
+.electron-window .ant-message {
+  z-index: 1004;
+}
+
+.electron-window .ant-notification {
+  z-index: 1005;
+}
+
+/* Smooth transitions for window focus state */
+.electron-window * {
+  transition: opacity 0.2s ease;
+}
+
+.electron-window.window-inactive * {
+  opacity: 0.95;
+}
+
+/* Ensure content area is selectable */
+.electron-window .ant-table-cell,
+.electron-window .ant-typography,
+.electron-window input,
+.electron-window textarea {
+  user-select: text;
+}
+
+/* ========== 启动加载动画 ========== */
+@keyframes float1 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-20px, 20px); }
+}
+
+@keyframes float2 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(20px, -20px); }
+}
+
+@keyframes float3 {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-50%, -50%) scale(1.2); }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ========== 骨架屏动画 ========== */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s infinite;
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-text {
+  height: 16px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.skeleton-title {
+  height: 24px;
+  border-radius: 4px;
+  width: 60%;
+  margin-bottom: 16px;
+}
+
+.skeleton-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.skeleton-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.skeleton-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.skeleton-button {
+  height: 32px;
+  border-radius: 4px;
+  width: 80px;
+}
+
+/* ========== 页面切换动画 ========== */
+.page-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+.page-exit {
+  opacity: 1;
+}
+
+.page-exit-active {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+/* ========== 消息提示动画 ========== */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.notification-enter {
+  animation: slideInRight 0.3s ease forwards;
+}
+
+.notification-exit {
+  animation: slideOutRight 0.3s ease forwards;
+}
+
+/* ========== 暗色模式骨架屏 ========== */
+[data-theme='dark'] .skeleton {
+  background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+  background-size: 200% 100%;
+}
+
+[data-theme='dark'] .skeleton-card {
+  background: #1f1f1f;
+}
+
+/* ========== 离线模式提示样式 ========== */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  background: linear-gradient(90deg, #faad14, #d48806);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  z-index: 10000;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ========== 性能监控面板样式 ========== */
+.performance-panel {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  z-index: 9999;
+  backdrop-filter: blur(8px);
+}
+
+.performance-panel .metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 4px;
+}
+
+.performance-panel .metric:last-child {
+  margin-bottom: 0;
+}
+
+.performance-panel .label {
+  color: #888;
+}
+
+.performance-panel .value {
+  font-weight: 600;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+/* ========== 版本更新提示 ========== */
+.update-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #1890ff, #52c41a);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 10000;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateX(-50%) translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+.update-toast .update-btn {
+  background: #fff;
+  color: #1890ff;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.2s;
+}
+
+.update-toast .update-btn:hover {
+  transform: scale(1.05);
+}
+
+.update-toast .close-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  padding: 4px;
+  margin-left: 8px;
+}
+
+.update-toast .close-btn:hover {
+  color: #fff;
+}
+
+/* ========== 信号执行高亮 ========== */
+@keyframes executed-flash {
+  0% { background-color: rgba(82, 196, 26, 0.25); }
+  100% { background-color: transparent; }
+}
+
+.signal-executed-row {
+  animation: executed-flash 2s ease-out;
+}
+
+.signal-executed-row td {
+  background-color: inherit;
+}

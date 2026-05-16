@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lianghua-backend
+  namespace: lianghua
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lianghua-backend-vault-auth
+  namespace: lianghua
+  annotations:
+    kubernetes.io/service-account.name: lianghua-backend
+type: kubernetes.io/service-account-token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lianghua-backend
+  namespace: lianghua
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "lianghua-backend"
+        vault.hashicorp.com/agent-inject-secret-database: "secret/data/lianghua/database"
+        vault.hashicorp.com/agent-inject-template-database: |
+          {{- with secret "secret/data/lianghua/database" -}}
+          export DATABASE_URL="postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@{{ .Data.data.host }}:{{ .Data.data.port }}/{{ .Data.data.database }}"
+          {{- end }}
+        vault.hashicorp.com/agent-inject-secret-redis: "secret/data/lianghua/redis"
+        vault.hashicorp.com/agent-inject-template-redis: |
+          {{- with secret "secret/data/lianghua/redis" -}}
+          export REDIS_URL="redis://:{{ .Data.data.password }}@{{ .Data.data.host }}:{{ .Data.data.port }}/0"
+          {{- end }}
+        vault.hashicorp.com/agent-inject-secret-jwt: "secret/data/lianghua/jwt"
+        vault.hashicorp.com/agent-inject-template-jwt: |
+          {{- with secret "secret/data/lianghua/jwt" -}}
+          export JWT_SECRET_KEY="{{ .Data.data.secret_key }}"
+          {{- end }}
+    spec:
+      serviceAccountName: lianghua-backend
+      containers:
+        - name: backend
+          image: lianghua/backend:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - source /vault/secrets/database && source /vault/secrets/redis && source /vault/secrets/jwt && python -m uvicorn app.main:app
+---
+# Vault Agent配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-config
+  namespace: lianghua
+data:
+  config.hcl: |
+    pid_file = "/tmp/vault-agent.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role = "lianghua-backend"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    template {
+      source      = "/vault/secrets/database"
+      destination = "/etc/app/database.env"
+      exec {
+        command = ["/bin/sh", "-c", "source /etc/app/database.env"]
+      }
+    }
+
+    template {
+      source      = "/vault/secrets/redis"
+      destination = "/etc/app/redis.env"
+    }
+
+    template {
+      source      = "/vault/secrets/jwt"
+      destination = "/etc/app/jwt.env"
+    }

@@ -10,3 +10,47 @@ __pycache__/
 .ruff_cache/
 *.db
 .DS_Store
+electron/dist/
+release/
+main.js
+index.html
+frontend/dist/
+frontend/test-results/
+*.map
+
+# PyInstaller artifacts
+backend/lianghua-backend
+backend/lianghua-backend.exe
+backend/*.spec
+backend/build/
+
+# Benchmarks
+.benchmarks/
+
+# Data files (generated)
+frontend/data/
+
+# Test artifacts
+*.test-results/
+.coverage/
+coverage/
+htmlcov/
+.nyc_output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+*.log
+.DS_Store?
+
+# Vite / bundler cache
+frontend/.vite/
+
+# Electron builder debug
+builder-debug.yml
+builder-effective-config.yaml

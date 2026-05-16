@@ -1,4 +1,5 @@
 import uuid
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -17,6 +18,7 @@ class SimBroker:
         self._positions: dict[str, Position] = {}
         self._orders: list[Order] = []
         self._trade_records: list = []
+        self._lock = threading.Lock()
 
     @property
     def account(self) -> Account:
@@ -32,6 +34,11 @@ class SimBroker:
 
     def place_order(self, code: str, name: str, side: OrderSide,
                     price: float, volume: int, order_type: OrderType = OrderType.MARKET) -> Order:
+        with self._lock:
+            return self._place_order_impl(code, name, side, price, volume, order_type)
+
+    def _place_order_impl(self, code: str, name: str, side: OrderSide,
+                    price: float, volume: int, order_type: OrderType) -> Order:
         order = Order(
             id=uuid.uuid4().hex[:12],
             code=code, name=name,
@@ -51,7 +58,6 @@ class SimBroker:
                 return order
 
             self._account.cash -= total_cost
-            self._account.frozen += amount
 
             if code in self._positions:
                 pos = self._positions[code]
@@ -83,7 +89,6 @@ class SimBroker:
             pos.available_volume -= volume
 
             self._account.cash += amount - commission
-            self._account.frozen -= amount
 
             if pos.volume <= 0:
                 del self._positions[code]
@@ -96,6 +101,7 @@ class SimBroker:
         self._account.market_value = sum(
             p.current_price * p.volume for p in self._positions.values()
         )
+        self._account.frozen = sum(p.cost_price * p.volume for p in self._positions.values())
         self._account.total_asset = self._account.cash + self._account.market_value
         self._account.total_profit = self._account.total_asset - self.initial_cash
         self._account.updated_at = datetime.now()

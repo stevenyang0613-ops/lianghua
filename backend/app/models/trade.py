@@ -57,6 +57,10 @@ class Account(BaseModel):
     total_profit: float = 0.0
     updated_at: datetime = Field(default_factory=datetime.now)
 
+    @property
+    def available(self) -> float:
+        return self.cash - self.frozen
+
 
 class TradeRecord(BaseModel):
     id: str = ""

@@ -1,14 +1,34 @@
 import asyncio
+import time as time_mod
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
 import logging
 import pandas as pd
 
 from app.models.convertible import ConvertibleQuote
-from app.strategies import get_strategy, list_strategies
+from app.strategies import get_strategy, list_strategies, Strategy
 from app.engine.storage import DataStorage
+from app.engine.trade import TradeEngine
+from app.engine.confidence import calc_confidence
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExecutedPosition:
+    """自动执行信号的持仓记录"""
+    code: str
+    name: str
+    side: str  # 'buy' or 'sell'
+    price: float
+    volume: int
+    ts: datetime
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d['ts'] = self.ts.isoformat()
+        return d
 
 
 class TradeSignal:
@@ -44,21 +64,169 @@ class TradeSignal:
 class SignalEngine:
     """实时信号引擎 - 在每次行情更新时运行策略生成信号"""
 
+    # 策略缓存TTL：6小时后自动重建，防止长期运行时数据漂移
+    _CACHE_TTL_SECONDS = 6 * 3600
+
     def __init__(self):
         self._signals: list[TradeSignal] = []
         self._active_strategies: list[str] = ["dual_low"]
         self._subscribers: set[Callable[[list[TradeSignal]], Awaitable[None]]] = set()
         self._storage: Optional[DataStorage] = None
+        self._trade_engine: Optional['TradeEngine'] = None
+        self._auto_execute_threshold: float = 0.0
+        self._executed_positions: list[ExecutedPosition] = []
+        # 策略实例缓存: {strat_id: (Strategy, init_timestamp, params_sig)}
+        self._strategy_cache: dict[str, tuple[Strategy, float, str]] = {}
+        self._last_init_date: Optional[str] = None
+        # 策略参数覆盖: {strat_id: {param_name: value}}
+        self._strategy_params: dict[str, dict] = {}
+        # 跨调用去重: {(code, strategy, action): (timestamp, price)}
+        self._recent_signals: dict[tuple[str, str, str], tuple[float, float]] = {}
+        self._dedup_window_seconds: int = 300
+        self._dedup_price_threshold: float = 0.02
+
+    def set_strategy_params(self, strat_id: str, params: dict) -> None:
+        """设置策略参数覆盖。参数变更会自动使对应缓存失效。"""
+        old_sig = self._params_signature(strat_id, self._strategy_params.get(strat_id, {}))
+        self._strategy_params[strat_id] = params
+        new_sig = self._params_signature(strat_id, params)
+        if old_sig != new_sig:
+            self.invalidate_cache(strat_id)
+
+    def set_dedup_config(self, window_seconds: int | None = None, price_threshold: float | None = None) -> dict:
+        """配置去重参数，返回当前配置"""
+        if window_seconds is not None:
+            self._dedup_window_seconds = max(0, window_seconds)
+        if price_threshold is not None:
+            self._dedup_price_threshold = max(0, min(1.0, price_threshold))
+        # 持久化到存储
+        if self._storage:
+            self._storage.set_config("dedup_window_seconds", str(self._dedup_window_seconds))
+            self._storage.set_config("dedup_price_threshold", str(self._dedup_price_threshold))
+        return self.get_dedup_config()
+
+    def get_dedup_config(self) -> dict:
+        """获取当前去重配置"""
+        return {"window_seconds": self._dedup_window_seconds, "price_threshold": self._dedup_price_threshold}
+
+    @staticmethod
+    def _params_signature(strat_id: str, params: dict) -> str:
+        """生成参数签名字符串，用于检测参数变更"""
+        if not params:
+            return ""
+        return f"{strat_id}:{sorted(params.items())}"
 
     def set_storage(self, storage: DataStorage) -> None:
         self._storage = storage
+        self._load_executed_positions()
+        # 恢复持久化的去重配置
+        w = storage.get_config("dedup_window_seconds")
+        if w is not None:
+            try:
+                self._dedup_window_seconds = max(0, int(w))
+            except (ValueError, TypeError):
+                pass
+        t = storage.get_config("dedup_price_threshold")
+        if t is not None:
+            try:
+                self._dedup_price_threshold = max(0, min(1.0, float(t)))
+            except (ValueError, TypeError):
+                pass
+        # 恢复持久化的活跃策略
+        saved_strategies = storage.get_config("active_strategies")
+        if saved_strategies:
+            try:
+                import json
+                strategies = json.loads(saved_strategies)
+                if isinstance(strategies, list):
+                    self._active_strategies = strategies
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     @property
     def active_strategies(self) -> list[str]:
         return list(self._active_strategies)
 
     def set_active_strategies(self, strategies: list[str]):
+        # 清除不再活跃的策略缓存
+        removed = set(self._active_strategies) - set(strategies)
+        for s in removed:
+            entry = self._strategy_cache.pop(s, None)
+            if entry:
+                entry[0].on_destroy()
         self._active_strategies = strategies
+        # 持久化到存储
+        if self._storage:
+            import json
+            self._storage.set_config("active_strategies", json.dumps(strategies))
+
+    def invalidate_cache(self, strat_id: Optional[str] = None) -> None:
+        """使策略缓存失效。strat_id=None时清除全部缓存。"""
+        if strat_id is None:
+            for entry in self._strategy_cache.values():
+                entry[0].on_destroy()
+            self._strategy_cache.clear()
+        else:
+            entry = self._strategy_cache.pop(strat_id, None)
+            if entry:
+                entry[0].on_destroy()
+
+    def _process_strategies(
+        self, df: pd.DataFrame, bonds: list[ConvertibleQuote]
+    ) -> list[TradeSignal]:
+        """同步执行所有活跃策略，返回信号列表（在线程池中运行以避免阻塞事件循环）"""
+        signals: list[TradeSignal] = []
+        today = str(datetime.now().date())
+        date_changed = today != self._last_init_date
+        now = time_mod.monotonic()
+
+        for strat_id in self._active_strategies:
+            try:
+                current_sig = self._params_signature(strat_id, self._strategy_params.get(strat_id, {}))
+                cached = self._strategy_cache.get(strat_id)
+                if cached and not date_changed:
+                    strategy, init_ts, cached_sig = cached
+                    # TTL过期或参数签名变更则重建
+                    if now - init_ts > self._CACHE_TTL_SECONDS or cached_sig != current_sig:
+                        strategy.on_destroy()
+                        cached = None
+                else:
+                    cached = None
+
+                if cached:
+                    strategy = cached[0]
+                else:
+                    strategy_cls = get_strategy(strat_id)
+                    params = self._strategy_params.get(strat_id, {})
+                    strategy = strategy_cls(**params)
+                    strategy.on_init(df)
+                    self._strategy_cache[strat_id] = (strategy, now, current_sig)
+
+                result = strategy.on_data(df, 0)
+                if result:
+                    for sig in result:
+                        bond = next(
+                            (b for b in bonds if b.code == sig["code"]), None
+                        )
+                        confidence = calc_confidence(strat_id, bond, sig)
+                        signals.append(
+                            TradeSignal(
+                                strategy=strat_id,
+                                code=sig["code"],
+                                name=bond.name if bond else sig.get("code", ""),
+                                action=sig["action"],
+                                price=sig["price"],
+                                reason=sig.get("reason", ""),
+                                confidence=confidence,
+                            )
+                        )
+            except Exception as e:
+                logger.warning(f"[Signal] Strategy {strat_id} failed: {e}")
+
+        if date_changed:
+            self._last_init_date = today
+
+        return signals
 
     async def process_quotes(self, bonds: list[ConvertibleQuote]) -> list[TradeSignal]:
         """处理行情数据，生成交易信号"""
@@ -82,68 +250,48 @@ class SignalEngine:
 
         df = pd.DataFrame(rows)
 
-        for strat_id in self._active_strategies:
-            try:
-                strategy_cls = get_strategy(strat_id)
-                strategy = strategy_cls()
-                strategy.on_init(df)
-                result = strategy.on_data(df, 0)
-                if result:
-                    for sig in result:
-                        bond = next((b for b in bonds if b.code == sig["code"]), None)
-                        confidence = self._calc_confidence(strat_id, bond, sig)
-                        signals.append(TradeSignal(
-                            strategy=strat_id,
-                            code=sig["code"],
-                            name=bond.name if bond else sig.get("code", ""),
-                            action=sig["action"],
-                            price=sig["price"],
-                            reason=sig.get("reason", ""),
-                            confidence=confidence,
-                        ))
-            except Exception as e:
-                logger.warning(f"[Signal] Strategy {strat_id} failed: {e}")
+        # Run all strategies in a thread to avoid blocking the event loop
+        signals = await asyncio.to_thread(self._process_strategies, df, bonds)
 
         if signals:
+            # Deduplicate within this call: keep highest confidence per (code, strategy)
+            seen: dict[tuple[str, str], TradeSignal] = {}
+            for s in signals:
+                key = (s.code, s.strategy)
+                if key not in seen or s.confidence > seen[key].confidence:
+                    seen[key] = s
+            signals = list(seen.values())
+
+            # Cross-call dedup: suppress signals already sent recently with same action & similar price
+            now_ts = time_mod.monotonic()
+            deduped = []
+            for s in signals:
+                dedup_key = (s.code, s.strategy, s.action)
+                prev = self._recent_signals.get(dedup_key)
+                if prev:
+                    prev_ts, prev_price = prev
+                    price_close = abs(s.price - prev_price) / max(prev_price, 0.01) < self._dedup_price_threshold
+                    if now_ts - prev_ts < self._dedup_window_seconds and price_close:
+                        continue  # Skip duplicate
+                self._recent_signals[dedup_key] = (now_ts, s.price)
+                deduped.append(s)
+
+            # Clean up expired dedup entries
+            expired = [k for k, (ts, _) in self._recent_signals.items() if now_ts - ts > self._dedup_window_seconds]
+            for k in expired:
+                del self._recent_signals[k]
+
+            signals = deduped
+
             self._signals = signals
             # Save to DuckDB history
             if self._storage:
                 self._storage.save_signals_batch([s.to_dict() for s in signals])
+            # Auto-execute high-confidence buy signals
+            self._auto_execute(signals)
             await self._notify(signals)
 
         return signals
-
-    def _calc_confidence(self, strategy: str, bond: Optional[ConvertibleQuote],
-                         signal: dict) -> float:
-        """计算信号置信度 (0~1)"""
-        if not bond:
-            return 0.5
-
-        score = 0.5
-
-        if strategy == "dual_low":
-            # Lower dual_low = higher confidence
-            if bond.dual_low < 130:
-                score += 0.3
-            elif bond.dual_low < 150:
-                score += 0.15
-            # Low premium boosts confidence
-            if bond.premium_ratio < 10:
-                score += 0.2
-            elif bond.premium_ratio < 20:
-                score += 0.1
-        elif strategy == "low_premium":
-            if bond.premium_ratio < 5:
-                score += 0.3
-            elif bond.premium_ratio < 10:
-                score += 0.15
-        elif strategy == "momentum":
-            if bond.change_pct and bond.change_pct > 2:
-                score += 0.2
-                if bond.volume and bond.volume > 1e8:
-                    score += 0.1
-
-        return min(score, 1.0)
 
     @property
     def current_signals(self) -> list[dict]:
@@ -153,6 +301,99 @@ class SignalEngine:
         for s in self._signals:
             if s.code == code and s.strategy == strategy and not s.executed:
                 s.executed = True
+
+    def set_trade_engine(self, engine: 'TradeEngine') -> None:
+        self._trade_engine = engine
+
+    def set_auto_execute_min_confidence(self, threshold: float) -> None:
+        self._auto_execute_threshold = threshold
+
+    def _auto_execute(self, signals: list[TradeSignal]) -> None:
+        trade_engine = self._trade_engine
+        if not trade_engine:
+            return
+        threshold = self._auto_execute_threshold
+        if threshold <= 0:
+            return
+
+        batch_positions: list[dict] = []
+
+        # 1. Process all sells first (freeing cash)
+        for s in signals:
+            if s.action == 'sell' and s.confidence >= threshold and not s.executed:
+                try:
+                    pos = next((p for p in trade_engine.positions if p.code == s.code), None)
+                    volume = pos.volume if pos else 10
+                    trade_engine.sell(code=s.code, name=s.name, price=s.price, volume=volume)
+                    s.executed = True
+                    self._executed_positions.append(ExecutedPosition(
+                        code=s.code, name=s.name, side='sell',
+                        price=s.price, volume=volume, ts=datetime.now(),
+                    ))
+                    batch_positions.append(self._executed_positions[-1].to_dict())
+                    logger.info(f'[Signal] Auto-executed SELL {s.code} ({s.strategy}) at {s.price}')
+                except Exception as e:
+                    logger.warning(f'[Signal] Auto-execute sell failed {s.code}: {e}')
+
+        # 2. Pre-compute buy candidates
+        buy_candidates = [s for s in signals if s.action == 'buy' and s.confidence >= threshold and not s.executed]
+        remaining = len(buy_candidates)
+
+        # 3. Process buys with dynamic volume based on remaining count
+        for s in buy_candidates:
+            try:
+                alloc = trade_engine.account.cash / max(remaining, 1)
+                volume = max(1, int(alloc / s.price))
+                trade_engine.buy(code=s.code, name=s.name, price=s.price, volume=volume)
+                s.executed = True
+                self._executed_positions.append(ExecutedPosition(
+                    code=s.code, name=s.name, side='buy',
+                    price=s.price, volume=volume, ts=datetime.now(),
+                ))
+                batch_positions.append(self._executed_positions[-1].to_dict())
+                logger.info(f'[Signal] Auto-executed BUY {s.code} ({s.strategy}) at {s.price}')
+            except Exception as e:
+                logger.warning(f'[Signal] Auto-execute buy failed {s.code}: {e}')
+            finally:
+                remaining -= 1
+
+        # 4. Batch save
+        if self._storage and batch_positions:
+            self._storage.save_executed_positions_batch(batch_positions)
+
+    def cleanup_history(self, keep_days: int = 30) -> None:
+        if self._storage:
+            deleted = self._storage.cleanup_signal_history(keep_days)
+            if deleted:
+                logger.info(f'[Signal] Cleaned up {deleted} old signal records')
+            deleted_ep = self._storage.cleanup_executed_positions(keep_days)
+            if deleted_ep:
+                logger.info(f'[Signal] Cleaned up {deleted_ep} old executed position records')
+
+    def _load_executed_positions(self):
+        if not self._storage:
+            return
+        saved = self._storage.get_executed_positions(limit=100)
+        # Only load if current list is empty (fresh start)
+        if not self._executed_positions:
+            for s in reversed(saved):  # oldest first
+                self._executed_positions.append(ExecutedPosition(
+                    code=s.get('code', ''),
+                    name=s.get('name', ''),
+                    side=s.get('side', ''),
+                    price=s.get('price', 0.0),
+                    volume=s.get('volume', 0),
+                    ts=s.get('ts', datetime.now()),
+                ))
+
+    @property
+    def executed_positions(self) -> list[dict]:
+        """返回已自动执行的持仓记录列表"""
+        return [ep.to_dict() for ep in self._executed_positions]
+
+    def clear_executed_positions(self) -> None:
+        """清空已自动执行的持仓记录"""
+        self._executed_positions.clear()
 
     def subscribe(self, callback: Callable[[list[TradeSignal]], Awaitable[None]]) -> None:
         self._subscribers.add(callback)

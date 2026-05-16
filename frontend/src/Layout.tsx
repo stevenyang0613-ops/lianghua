@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Drawer, Button, Badge } from 'antd'
 import { MenuOutlined, BellOutlined } from '@ant-design/icons'
 import Sidebar from './components/Sidebar'
@@ -6,8 +6,14 @@ import StatusBar from './components/StatusBar'
 import DetailPanel from './components/DetailPanel'
 import ThemeToggle from './components/ThemeToggle'
 import AlertPanel from './components/AlertPanel'
+import TitleBar from './components/electron/TitleBar'
+import OfflineIndicator from './components/OfflineIndicator'
+import PerformanceMonitor from './components/PerformanceMonitor'
+import { useResponsive } from './hooks/useResponsive'
 import { useAppStore } from './stores/useAppStore'
 import { useAlertStore } from './stores/useAlertStore'
+import { isElectron } from './utils/electron'
+import './styles/electron.css'
 import type React from 'react'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -15,17 +21,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [sidebarVisible, setSidebarVisible] = useState(false)
   const [alertVisible, setAlertVisible] = useState(false)
   const triggers = useAlertStore((s) => s.triggers)
-  const [isMobile, setIsMobile] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const { isMobile } = useResponsive()
 
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768)
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
+  const electron = isElectron()
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div
+      className={electron ? 'electron-window' : ''}
+      data-platform={electron ? window.electronAPI?.platform : undefined}
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <TitleBar />
       {isMobile && (
         <div style={{
           height: 48,
@@ -56,18 +67,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Sidebar collapsed={false} onCollapse={() => {}} />
           </Drawer>
         ) : (
-          <div style={{ width: 200, borderRight: '1px solid #f0f0f0', overflow: 'auto' }}>
-            <Sidebar collapsed={false} onCollapse={() => {}} />
+          <div style={{ width: sidebarCollapsed ? 80 : 200, borderRight: '1px solid #f0f0f0', overflow: 'auto', transition: 'width 0.2s', flexShrink: 0 }}>
+            <Sidebar collapsed={sidebarCollapsed} onCollapse={setSidebarCollapsed} />
           </div>
         )}
 
-        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-color, #f5f5f5)' }}>
-          {!isMobile && (
-            <div style={{ position: 'absolute', top: 8, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
-              <ThemeToggle />
-            </div>
-          )}
-          {children}
+        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-color, #f5f5f5)', display: 'flex', flexDirection: 'column' }}>
+          <OfflineIndicator />
+          <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+            {!isMobile && (
+              <div style={{ position: 'absolute', top: 8, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
+                <ThemeToggle />
+              </div>
+            )}
+            {children}
+          </div>
         </div>
 
         {selectedBond && !isMobile && <DetailPanel />}
@@ -78,6 +92,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {isMobile && (
         <AlertPanel visible={alertVisible} onClose={() => setAlertVisible(false)} />
       )}
+
+      {/* 性能监控面板 - 仅在开发环境或设置启用时显示 */}
+      <PerformanceMonitor />
     </div>
   )
 }

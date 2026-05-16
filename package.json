@@ -1,16 +1,26 @@
 {
   "name": "lianghua",
+  "version": "1.0.0",
+  "description": "LiangHua 可转债量化交易系统",
+  "author": "LiangHua Team",
+  "main": "electron/dist/main.js",
   "private": true,
   "scripts": {
     "dev": "chmod +x scripts/dev.sh && ./scripts/dev.sh",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
-    "dev:electron": "cd frontend && npm run dev:electron",
+    "dev:electron": "npm run build:electron-ts && concurrently \"cd frontend && npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build:frontend": "cd frontend && npm run build",
-    "build:electron": "cd frontend && npm run build && cd .. && npx electron-builder",
-    "build:mac": "cd frontend && npm run build && cd .. && npx electron-builder --mac",
-    "build:win": "cd frontend && npm run build && cd .. && npx electron-builder --win",
-    "build:linux": "cd frontend && npm run build && cd .. && npx electron-builder --linux"
+    "build:electron-ts": "cd electron && npx tsc",
+    "validate": "bash scripts/validate-build.sh",
+    "build:electron": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder",
+    "build:mac": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --mac",
+    "build:win": "npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --win",
+    "build:linux": "npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --linux",
+    "pack": "npm run build:electron-ts && npx electron-builder --dir",
+    "postinstall": "cd electron && npm install",
+    "generate-icons": "node scripts/generate-icons.js",
+    "electron": "electron ."
   },
   "build": {
     "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
@@ -22,31 +32,60 @@
     },
     "files": [
       "electron/dist/**/*",
-      "frontend/dist/**/*"
+      "frontend/dist/**/*",
+      "resources/**/*"
     ],
     "extraResources": [
       {
         "from": "backend",
         "to": "backend",
         "filter": [
-          "**/*",
+          "**/*.py",
+          "**/pyproject.toml",
+          "**/requirements.txt",
+          "wheels/**/*",
+          "lianghua-backend",
+          "lianghua-backend.exe",
           "!__pycache__/**",
-          "!.venv/**"
+          "!.pytest_cache/**",
+          "!tests/**",
+          "!*.pyc",
+          "!.venv/**",
+          "!dist/**",
+          "!build/**",
+          "!*.spec"
         ]
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "lianghua",
+      "repo": "lianghua-app",
+      "releaseType": "release"
+    },
     "mac": {
       "category": "public.app-category.finance",
-      "target": ["dmg", "zip"],
-      "artifactName": "${productName}-${version}-mac.${ext}"
+      "target": [
+        "dir",
+        "dmg"
+      ],
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     },
     "win": {
-      "target": ["nsis"],
-      "artifactName": "${productName}-${version}-win.${ext}"
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
-      "artifactName": "${productName}-${version}-linux.${ext}",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
       "category": "Finance"
     },
     "nsis": {
@@ -54,6 +93,33 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "LiangHua"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "concurrently": "^9.2.1",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "electron-updater": "^6.8.3",
+    "sharp": "^0.34.5",
+    "typescript": "^5.9.3",
+    "wait-on": "^9.0.10"
+  },
+  "dependencies": {
+    "ws": "^8.20.1"
   }
 }

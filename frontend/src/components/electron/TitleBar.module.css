@@ -1,0 +1,76 @@
+.titleBar {
+  height: 32px;
+  background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  -webkit-app-region: drag;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 9999;
+}
+
+.dragRegion {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-left: 12px;
+  -webkit-app-region: drag;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.controls {
+  display: flex;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.controlButton {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.controlButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.closeButton:hover {
+  background: #e94560;
+  color: white;
+}
+
+/* Window inactive state */
+:global(.window-inactive) .titleBar {
+  background: linear-gradient(90deg, #141428 0%, #121a32 100%);
+}
+
+:global(.window-inactive) .title {
+  color: rgba(255, 255, 255, 0.5);
+}

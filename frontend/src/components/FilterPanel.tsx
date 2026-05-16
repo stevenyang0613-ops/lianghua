@@ -1,3 +1,4 @@
+import React from 'react'
 import { Form, InputNumber, Select, Button, Space, Collapse, Row, Col } from 'antd'
 import { FilterOutlined, ClearOutlined } from '@ant-design/icons'
 import { useState } from 'react'
@@ -28,7 +29,7 @@ const presetFilters: { label: string; value: FilterValues }[] = [
   { label: '临期债', value: { remainingYearsMin: 0, remainingYearsMax: 1 } },
 ]
 
-export default function FilterPanel({ onChange }: FilterPanelProps) {
+function FilterPanel({ onChange }: FilterPanelProps) {
   const [form] = Form.useForm()
   const [activeKey, setActiveKey] = useState<string[]>()
   const [currentPreset, setCurrentPreset] = useState<string>()
@@ -165,3 +166,5 @@ export default function FilterPanel({ onChange }: FilterPanelProps) {
     </div>
   )
 }
+
+export default React.memo(FilterPanel)

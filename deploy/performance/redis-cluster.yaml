@@ -1,0 +1,229 @@
+# Redis Cluster 高可用部署
+# 6节点集群（3主3从）
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: lianghua
+data:
+  redis.conf: |
+    # 集群配置
+    cluster-enabled yes
+    cluster-config-file /data/nodes.conf
+    cluster-node-timeout 5000
+    cluster-announce-bus-port 16379
+    cluster-require-full-coverage yes
+    
+    # 内存配置
+    maxmemory 2gb
+    maxmemory-policy allkeys-lru
+    
+    # 持久化配置
+    appendonly yes
+    appendfsync everysec
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    
+    # 性能优化
+    tcp-backlog 511
+    tcp-keepalive 300
+    timeout 0
+    
+    # 慢查询日志
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+    # 客户端限制
+    maxclients 10000
+    
+    # 安全
+    protected-mode no
+    
+    # 日志
+    loglevel notice
+---
+# Redis StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+  namespace: lianghua
+spec:
+  serviceName: redis-cluster
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis-cluster
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 6379
+              name: client
+            - containerPort: 16379
+              name: gossip
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/redis
+          resources:
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: redis-cluster-config
+            items:
+              - key: redis.conf
+                path: redis.conf
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Redis Cluster Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster
+  namespace: lianghua
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: client
+    - port: 16379
+      targetPort: 16379
+      name: gossip
+  selector:
+    app: redis-cluster
+---
+# Redis Sentinel 高可用配置
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-sentinel
+  namespace: lianghua
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel
+    spec:
+      containers:
+        - name: sentinel
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 26379
+          command:
+            - redis-sentinel
+            - /etc/redis/sentinel.conf
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redis
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+      volumes:
+        - name: config
+          configMap:
+            name: redis-sentinel-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  namespace: lianghua
+data:
+  sentinel.conf: |
+    port 26379
+    sentinel monitor mymaster redis-cluster-0.redis-cluster 6379 2
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel failover-timeout mymaster 60000
+    sentinel parallel-syncs mymaster 1
+    
+    # 通知脚本
+    sentinel notification-script mymaster /scripts/notify.sh
+    sentinel client-reconfig-script mymaster /scripts/reconfig.sh
+---
+# Redis监控
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-exporter-config
+  namespace: lianghua
+data:
+  redis-metrics.py: |
+    """Redis监控指标"""
+    import redis
+    from prometheus_client import Gauge, start_http_server
+    import time
+    
+    # Redis指标
+    MEMORY_USAGE = Gauge('redis_memory_usage_bytes', 'Redis内存使用')
+    CONNECTED_CLIENTS = Gauge('redis_connected_clients', '连接客户端数')
+    KEYSPACE_HITS = Gauge('redis_keyspace_hits', '缓存命中次数')
+    KEYSPACE_MISSES = Gauge('redis_keyspace_misses', '缓存未命中次数')
+    TOTAL_COMMANDS = Gauge('redis_total_commands', '命令执行总数')
+    SLOWLOG_LENGTH = Gauge('redis_slowlog_length', '慢查询日志长度')
+    
+    def collect_metrics(client):
+        info = client.info()
+        MEMORY_USAGE.set(info.get('used_memory', 0))
+        CONNECTED_CLIENTS.set(info.get('connected_clients', 0))
+        KEYSPACE_HITS.set(info.get('keyspace_hits', 0))
+        KEYSPACE_MISSES.set(info.get('keyspace_misses', 0))
+        TOTAL_COMMANDS.set(info.get('total_commands_processed', 0))
+        SLOWLOG_LENGTH.set(len(client.slowlog_get(10)))
+    
+    if __name__ == '__main__':
+        start_http_server(9121)
+        client = redis.RedisCluster(
+            host='redis-cluster',
+            port=6379
+        )
+        while True:
+            collect_metrics(client)
+            time.sleep(15)

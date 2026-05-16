@@ -1,0 +1,178 @@
+/**
+ * Electron-specific styles
+ * These styles are applied when running in Electron environment
+ */
+
+/* Base electron window styles */
+.electron-window {
+  /* Custom scrollbar for electron */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  /* Disable text selection on UI elements */
+  .no-select {
+    user-select: none;
+  }
+
+  /* Enable text selection on content */
+  .selectable {
+    user-select: text;
+  }
+}
+
+/* MacOS specific styles */
+.electron-window[data-platform="darwin"] {
+  /* macOS has native title bar, no custom title bar needed */
+}
+
+/* Windows specific styles */
+.electron-window[data-platform="win32"] {
+  /* Windows uses custom title bar */
+  padding-top: 0;
+}
+
+/* Linux specific styles */
+.electron-window[data-platform="linux"] {
+  /* Linux uses custom title bar */
+  padding-top: 0;
+}
+
+/* Window inactive state */
+.window-inactive {
+  opacity: 0.95;
+}
+
+.window-inactive .ant-layout-header {
+  background: linear-gradient(90deg, #141428 0%, #121a32 100%);
+}
+
+.window-inactive .ant-menu {
+  background: transparent;
+}
+
+/* Drag regions for custom title bar */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Native menu styles */
+.native-menu {
+  -webkit-app-region: drag;
+}
+
+.native-menu-item {
+  -webkit-app-region: no-drag;
+}
+
+/* Frameless window adjustments */
+.frameless {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* System notification toast styles */
+.electron-toast {
+  position: fixed;
+  top: 40px;
+  right: 16px;
+  z-index: 10000;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Loading overlay for electron */
+.electron-loading {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(26, 26, 46, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+}
+
+.electron-loading .logo {
+  width: 80px;
+  height: 80px;
+  margin-bottom: 24px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(0.95);
+  }
+}
+
+/* Context menu for electron */
+.electron-context-menu {
+  position: fixed;
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10000;
+  min-width: 160px;
+  padding: 4px 0;
+}
+
+.electron-context-menu-item {
+  padding: 8px 16px;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.electron-context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.electron-context-menu-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.electron-context-menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+}

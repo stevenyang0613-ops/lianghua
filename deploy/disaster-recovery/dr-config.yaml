@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: disaster-recovery-config
+  namespace: lianghua
+data:
+  # 主区域配置
+  primary-region: "asia-east1"
+
+  # 备份区域列表
+  backup-regions: "asia-northeast1,us-west1"
+
+  # RPO/RTO目标
+  rpo-minutes: "60"
+  rto-minutes: "30"
+
+  # 备份计划
+  backup-schedule: "0 */4 * * *"  # 每4小时
+
+  # 保留策略
+  retention-days: "30"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-job
+  namespace: lianghua
+spec:
+  schedule: "0 */4 * * *"  # 每4小时执行一次
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: backup-service-account
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: google/cloud-sdk:alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # 安装PostgreSQL客户端
+                  apk add --no-cache postgresql-client redis
+
+                  # 执行备份脚本
+                  /scripts/backup.sh
+              env:
+                - name: DB_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: lianghua-db-credentials
+                      key: host
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: lianghua-db-credentials
+                      key: username
+                - name: DB_NAME
+                  value: "lianghua"
+                - name: REDIS_HOST
+                  value: "redis"
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: backup-temp
+                  mountPath: /tmp
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
+                defaultMode: 0755
+            - name: backup-temp
+              emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-service-account
+  namespace: lianghua
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-role
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: backup-service-account
+    namespace: lianghua
+roleRef:
+  kind: ClusterRole
+  name: backup-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# 健康检查探测器
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cross-region-health-check
+  namespace: lianghua
+spec:
+  schedule: "*/5 * * * *"  # 每5分钟
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: health-check
+              image: curlimages/curl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # 检查主区域
+                  curl -sf https://asia-east1.lianghua.example.com/api/v1/health || \
+                    echo "Primary region unhealthy"
+
+                  # 检查备份区域
+                  curl -sf https://asia-northeast1.lianghua.example.com/api/v1/health || \
+                    echo "Backup region 1 unreachable"
+
+                  curl -sf https://us-west1.lianghua.example.com/api/v1/health || \
+                    echo "Backup region 2 unreachable"
+---
+# 故障转移策略
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lianghua-pdb
+  namespace: lianghua
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: lianghua-backend

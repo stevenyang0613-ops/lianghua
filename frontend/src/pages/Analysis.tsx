@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, Table, Tabs, Tag, Row, Col, Statistic, Typography, Spin, Empty, message, Space, Progress } from 'antd'
 import { FundProjectionScreenOutlined, AlertOutlined, RiseOutlined, FallOutlined, LinkOutlined, OrderedListOutlined } from '@ant-design/icons'
 import { fetchForcedRedemption, fetchDualLowRanking, fetchPulseScan, fetchRevisionProbability, fetchStockCorrelation } from '../services/api'

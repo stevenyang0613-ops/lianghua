@@ -60,8 +60,12 @@ export const useUserStore = create<UserState>()(
       switchUser: (id) => set((state) => {
         const user = state.users.find((u) => u.id === id)
         if (user) {
-          user.lastActiveAt = Date.now()
-          return { currentUserId: id, currentUser: user }
+          const updated = { ...user, lastActiveAt: Date.now() }
+          return {
+            currentUserId: id,
+            currentUser: updated,
+            users: state.users.map((u) => u.id === id ? updated : u),
+          }
         }
         return state
       }),

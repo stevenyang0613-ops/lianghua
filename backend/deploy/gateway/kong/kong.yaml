@@ -1,0 +1,396 @@
+# 松岗量化可转债策略 V3.0 - API网关配置
+# Kong配置
+
+_format_version: "3.0"
+
+_transformations:
+  - description: "松岗量化策略API网关配置"
+    mappings: []
+
+services:
+  # ============ 打分服务 ============
+  - name: scoring-service
+    url: http://scoring-service.sg-strategy.svc.cluster.local:8000
+    routes:
+      - name: scoring-route
+        paths:
+          - /api/v3/scoring
+        strip_path: false
+        methods:
+          - GET
+          - POST
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: local
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - X-Forwarded-By:Kong
+      - name: correlation-id
+        config:
+          header_name: X-Request-ID
+          generator: uuid
+
+  # ============ 信号服务 ============
+  - name: signal-service
+    url: http://signal-service.sg-strategy.svc.cluster.local:8001
+    routes:
+      - name: signal-route
+        paths:
+          - /api/v3/signals
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 50
+          policy: local
+      - name: jwt
+        config:
+          secret_is_base64: false
+          claims_to_verify:
+            - exp
+
+  # ============ 执行服务 ============
+  - name: execution-service
+    url: http://execution-service.sg-strategy.svc.cluster.local:8002
+    routes:
+      - name: execution-route
+        paths:
+          - /api/v3/execution
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 30
+          policy: local
+      - name: jwt
+        config:
+          secret_is_base64: false
+      - name: request-validation
+        config:
+          body_schema: |
+            {
+              "type": "object",
+              "required": ["code", "action", "quantity"],
+              "properties": {
+                "code": {"type": "string"},
+                "action": {"type": "string", "enum": ["buy", "sell"]},
+                "quantity": {"type": "integer", "minimum": 1}
+              }
+            }
+
+  # ============ 风控服务 ============
+  - name: risk-service
+    url: http://risk-service.sg-strategy.svc.cluster.local:8003
+    routes:
+      - name: risk-route
+        paths:
+          - /api/v3/risk
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: local
+      - name: jwt
+        config:
+          secret_is_base64: false
+
+  # ============ 数据服务 ============
+  - name: data-service
+    url: http://data-service.sg-strategy.svc.cluster.local:8004
+    routes:
+      - name: data-route
+        paths:
+          - /api/v3/data
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 200
+          policy: local
+      - name: caching
+        config:
+          strategy: memory
+          content_type:
+            - application/json
+          cache_ttl: 300
+          cache_control: true
+
+  # ============ 回测服务 ============
+  - name: backtest-service
+    url: http://backtest-service.sg-strategy.svc.cluster.local:8005
+    routes:
+      - name: backtest-route
+        paths:
+          - /api/v3/backtest
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local
+      - name: jwt
+        config:
+          secret_is_base64: false
+
+plugins:
+  # ============ 全局插件 ============
+  - name: prometheus
+    config:
+      per_consumer: true
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+
+  - name: file-log
+    config:
+      path: /var/log/kong/access.log
+
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10  # MB
+
+  - name: response-ratelimiting
+    config:
+      limits:
+        api:
+          minute: 500
+
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Version
+        - Content-Length
+        - Content-MD5
+        - Content-Type
+        - Date
+        - X-Auth-Token
+        - Authorization
+        - X-API-Key
+      exposed_headers:
+        - X-Request-ID
+      credentials: true
+      max_age: 3600
+
+  - name: compression
+    config:
+      algorithms:
+        - gzip
+        - deflate
+      types:
+        - application/json
+        - text/plain
+        - text/html
+
+  - name: ip-restriction
+    config:
+      allow:
+        - 0.0.0.0/0  # 允许所有，实际部署时限制
+
+---
+# Istio VirtualService配置
+
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: sg-strategy-api
+  namespace: sg-strategy
+spec:
+  hosts:
+    - api.sg-strategy.com
+  gateways:
+    - sg-strategy-gateway
+  http:
+    # 打分服务路由
+    - match:
+        - uri:
+            prefix: /api/v3/scoring
+      route:
+        - destination:
+            host: scoring-service
+            port:
+              number: 8000
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure,refused-stream
+
+    # 信号服务路由
+    - match:
+        - uri:
+            prefix: /api/v3/signals
+      route:
+        - destination:
+            host: signal-service
+            port:
+              number: 8001
+      timeout: 60s
+
+    # 执行服务路由
+    - match:
+        - uri:
+            prefix: /api/v3/execution
+      route:
+        - destination:
+            host: execution-service
+            port:
+              number: 8002
+      fault:
+        abort:
+          percentage:
+            value: 0.1  # 0.1%故障注入测试
+          httpStatus: 503
+
+    # 风控服务路由
+    - match:
+        - uri:
+            prefix: /api/v3/risk
+      route:
+        - destination:
+            host: risk-service
+            port:
+              number: 8003
+
+    # 数据服务路由
+    - match:
+        - uri:
+            prefix: /api/v3/data
+      route:
+        - destination:
+            host: data-service
+            port:
+              number: 8004
+      headers:
+        response:
+          set:
+            Cache-Control: "max-age=300"
+
+---
+# Istio DestinationRule配置
+
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: scoring-service
+  namespace: sg-strategy
+spec:
+  host: scoring-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 5s
+      http:
+        h2UpgradePolicy: UPGRADE
+        http1MaxPendingRequests: 100
+        http2MaxRequests: 100
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 25
+    tls:
+      mode: ISTIO_MUTUAL
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+  trafficPolicy:
+    loadBalancer:
+      consistentHash:
+        httpHeaderName: X-User-ID
+
+---
+# Istio Gateway配置
+
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: sg-strategy-gateway
+  namespace: sg-strategy
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - api.sg-strategy.com
+      tls:
+        httpsRedirect: true
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - api.sg-strategy.com
+      tls:
+        mode: SIMPLE
+        credentialName: sg-strategy-tls
+
+---
+# Istio AuthorizationPolicy配置
+
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: sg-strategy-authz
+  namespace: sg-strategy
+spec:
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/sg-strategy/sa/api-gateway
+      to:
+        - operation:
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+            paths:
+              - /api/v3/*
+    - from:
+        - source:
+            namespaces:
+              - monitoring
+      to:
+        - operation:
+            methods:
+              - GET
+            paths:
+              - /metrics
+              - /health
+
+---
+# Istio PeerAuthentication配置
+
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: sg-strategy
+spec:
+  mtls:
+    mode: STRICT

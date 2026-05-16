@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="chart" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d4aa"/>
+      <stop offset="100%" style="stop-color:#00a884"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="100%" style="stop-color:#ff6b6b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="180" fill="url(#bg)"/>
+
+  <!-- Grid lines -->
+  <g stroke="rgba(255,255,255,0.1)" stroke-width="2">
+    <line x1="200" y1="300" x2="824" y2="300"/>
+    <line x1="200" y1="450" x2="824" y2="450"/>
+    <line x1="200" y1="600" x2="824" y2="600"/>
+    <line x1="300" y1="200" x2="300" y2="700"/>
+    <line x1="500" y1="200" x2="500" y2="700"/>
+    <line x1="700" y1="200" x2="700" y2="700"/>
+  </g>
+
+  <!-- Candlestick chart -->
+  <g stroke-width="12" stroke-linecap="round">
+    <!-- Green candle (up) -->
+    <line x1="300" y1="550" x2="300" y2="480" stroke="#00d4aa"/>
+    <rect x="285" y="480" width="30" height="50" rx="4" fill="#00d4aa"/>
+    <line x1="300" y1="480" x2="300" y2="420" stroke="#00d4aa"/>
+
+    <!-- Red candle (down) -->
+    <line x1="450" y1="450" x2="450" y2="520" stroke="#e94560"/>
+    <rect x="435" y="470" width="30" height="50" rx="4" fill="#e94560"/>
+    <line x1="450" y1="470" x2="450" y2="400" stroke="#e94560"/>
+
+    <!-- Green candle (up) -->
+    <line x1="600" y1="500" x2="600" y2="420" stroke="#00d4aa"/>
+    <rect x="585" y="420" width="30" height="60" rx="4" fill="#00d4aa"/>
+    <line x1="600" y1="420" x2="600" y2="350" stroke="#00d4aa"/>
+
+    <!-- Green candle (up) -->
+    <line x1="750" y1="400" x2="750" y2="320" stroke="#00d4aa"/>
+    <rect x="735" y="320" width="30" height="70" rx="4" fill="#00d4aa"/>
+    <line x1="750" y1="320" x2="750" y2="250" stroke="#00d4aa"/>
+  </g>
+
+  <!-- Trend line -->
+  <path d="M200 600 Q400 500 512 450 T824 250" stroke="url(#accent)" stroke-width="8" fill="none" stroke-linecap="round"/>
+
+  <!-- Arrow -->
+  <polygon points="824,250 800,270 800,250 780,250 800,220 800,240 824,240" fill="#e94560"/>
+
+  <!-- Bond icon -->
+  <circle cx="280" cy="750" r="60" fill="rgba(0,212,170,0.2)" stroke="#00d4aa" stroke-width="4"/>
+  <text x="280" y="770" font-size="70" fill="#00d4aa" text-anchor="middle" font-family="system-ui">债</text>
+
+  <!-- Mini chart in corner -->
+  <g transform="translate(700, 750)">
+    <rect x="0" y="0" width="120" height="80" rx="8" fill="rgba(233,69,96,0.2)" stroke="#e94560" stroke-width="2"/>
+    <polyline points="10,60 35,45 60,50 85,30 110,20" stroke="#e94560" stroke-width="3" fill="none"/>
+  </g>
+</svg>

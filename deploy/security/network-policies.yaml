@@ -1,0 +1,247 @@
+# Network Policies - 网络隔离策略
+# 实现零信任网络架构
+
+# 默认拒绝所有入站流量
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: lianghua
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 默认拒绝所有出站流量
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: lianghua
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# 后端服务网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: lianghua
+spec:
+  podSelector:
+    matchLabels:
+      app: lianghua-backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 允许来自Istio Ingress Gateway的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+          podSelector:
+            matchLabels:
+              app: istio-ingressgateway
+      ports:
+        - protocol: TCP
+          port: 8000
+    # 允许健康检查
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8000
+    # 允许Prometheus抓取指标
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # 允许访问数据库
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    # 允许访问Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # 允许访问Vault
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+      ports:
+        - protocol: TCP
+          port: 8200
+    # 允许DNS解析
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 允许访问外部API（行情数据源）
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# PostgreSQL网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgresql-network-policy
+  namespace: lianghua
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresql
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 仅允许后端服务访问
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lianghua-backend
+      ports:
+        - protocol: TCP
+          port: 5432
+    # 允许备份服务访问
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backup-service
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    # 允许DNS解析
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Redis网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-network-policy
+  namespace: lianghua
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 仅允许后端服务访问
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lianghua-backend
+      ports:
+        - protocol: TCP
+          port: 6379
+    # 允许Sentinel通信
+    - from:
+        - podSelector:
+            matchLabels:
+              app: redis-sentinel
+      ports:
+        - protocol: TCP
+          port: 26379
+  egress:
+    # 允许DNS解析
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+---
+# Vault网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-network-policy
+  namespace: lianghua
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 允许后端服务访问
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lianghua-backend
+      ports:
+        - protocol: TCP
+          port: 8200
+    # 允许Vault节点间通信（Raft）
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+      ports:
+        - protocol: TCP
+          port: 8201
+  egress:
+    # 允许DNS解析
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+    # 允许Vault节点间通信
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+      ports:
+        - protocol: TCP
+          port: 8201

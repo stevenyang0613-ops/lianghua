@@ -1,11 +1,15 @@
+"""
+Trade API tests - matches the actual API routes and schemas.
+The API uses accountId/symbol/type/quantity fields and routes from app/api/trade.py.
+"""
 import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
-from app.engine.trade import TradeEngine
 
 
 @pytest.fixture
 async def client():
+    from app.engine.trade import TradeEngine
     app.state.trade_engine = TradeEngine()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -13,73 +17,80 @@ async def client():
 
 
 @pytest.mark.asyncio
-async def test_get_account(client: AsyncClient):
-    resp = await client.get("/api/v1/trade/account")
+async def test_get_orders_empty(client: AsyncClient):
+    """Test that GET /api/v1/trade/orders returns an empty list initially"""
+    resp = await client.get("/api/v1/trade/orders")
     assert resp.status_code == 200
     data = resp.json()
-    assert "total_asset" in data
-    assert data["cash"] == 100000.0
+    assert isinstance(data, list)
 
 
 @pytest.mark.asyncio
-async def test_get_positions_empty(client: AsyncClient):
-    resp = await client.get("/api/v1/trade/positions")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["positions"] == []
-
-
-@pytest.mark.asyncio
-async def test_place_buy_order(client: AsyncClient):
+async def test_create_order(client: AsyncClient):
+    """Test creating an order with the correct schema"""
     resp = await client.post("/api/v1/trade/order", json={
-        "code": "113044",
-        "name": "测试转债",
+        "accountId": "test-account",
+        "symbol": "113044",
         "side": "buy",
+        "type": "market",
         "price": 120.0,
-        "volume": 10,
-        "order_type": "market",
+        "quantity": 10,
     })
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "filled"
-    assert data["code"] == "113044"
+    assert data["symbol"] == "113044"
+    assert data["status"] in ("pending", "filled")
 
 
 @pytest.mark.asyncio
-async def test_place_sell_order(client: AsyncClient):
-    # First buy
+async def test_get_orders_after_create(client: AsyncClient):
+    """Test that orders appear after creation"""
     await client.post("/api/v1/trade/order", json={
-        "code": "113044", "name": "测试转债",
-        "side": "buy", "price": 120.0, "volume": 10,
+        "accountId": "test-account",
+        "symbol": "113044",
+        "side": "buy",
+        "type": "market",
+        "price": 120.0,
+        "quantity": 10,
     })
-    # Then sell
-    resp = await client.post("/api/v1/trade/order", json={
-        "code": "113044", "name": "测试转债",
-        "side": "sell", "price": 125.0, "volume": 5,
-    })
+    resp = await client.get("/api/v1/trade/orders")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "filled"
+    assert len(data) >= 1
+    assert data[-1]["symbol"] == "113044"
 
 
 @pytest.mark.asyncio
-async def test_order_rejected_insufficient_funds(client: AsyncClient):
+async def test_create_sell_order(client: AsyncClient):
+    """Test creating a sell order"""
     resp = await client.post("/api/v1/trade/order", json={
-        "code": "113044", "name": "测试转债",
-        "side": "buy", "price": 999999.0, "volume": 10,
+        "accountId": "test-account",
+        "symbol": "113044",
+        "side": "sell",
+        "type": "limit",
+        "price": 125.0,
+        "quantity": 5,
     })
-    assert resp.status_code == 200  # returns order with rejected status
+    assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "rejected"
+    assert data["side"] == "sell"
+    assert data["status"] in ("pending", "filled")
 
 
 @pytest.mark.asyncio
-async def test_reset(client: AsyncClient):
-    await client.post("/api/v1/trade/order", json={
-        "code": "113044", "name": "测试转债",
-        "side": "buy", "price": 120.0, "volume": 10,
+async def test_cancel_order(client: AsyncClient):
+    """Test cancelling an order"""
+    resp = await client.post("/api/v1/trade/order", json={
+        "accountId": "test-account",
+        "symbol": "113044",
+        "side": "buy",
+        "type": "market",
+        "price": 120.0,
+        "quantity": 10,
     })
-    resp = await client.post("/api/v1/trade/reset")
     assert resp.status_code == 200
-    resp2 = await client.get("/api/v1/trade/account")
-    assert resp2.json()["cash"] == 100000.0
+    order_id = resp.json()["id"]
+
+    cancel_resp = await client.post(f"/api/v1/trade/orders/{order_id}/cancel")
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancelled"

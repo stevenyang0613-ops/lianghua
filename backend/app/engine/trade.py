@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from app.models.trade import (
@@ -6,6 +7,8 @@ from app.models.trade import (
 )
 from app.adapters.broker_sim import SimBroker
 from app.models.convertible import ConvertibleQuote
+
+logger = logging.getLogger(__name__)
 
 
 class TradeEngine:
@@ -30,6 +33,12 @@ class TradeEngine:
 
     def buy(self, code: str, name: str, price: float, volume: int,
             order_type: OrderType = OrderType.MARKET) -> Order:
+        if not code:
+            raise ValueError("code must be non-empty")
+        if price <= 0:
+            raise ValueError("price must be greater than 0")
+        if volume <= 0:
+            raise ValueError("volume must be greater than 0")
         return self._broker.place_order(
             code=code, name=name,
             side=OrderSide.BUY,
@@ -39,6 +48,12 @@ class TradeEngine:
 
     def sell(self, code: str, name: str, price: float, volume: int,
              order_type: OrderType = OrderType.MARKET) -> Order:
+        if not code:
+            raise ValueError("code must be non-empty")
+        if price <= 0:
+            raise ValueError("price must be greater than 0")
+        if volume <= 0:
+            raise ValueError("volume must be greater than 0")
         return self._broker.place_order(
             code=code, name=name,
             side=OrderSide.SELL,
@@ -50,7 +65,11 @@ class TradeEngine:
         self._broker.update_prices(quotes)
 
     def cancel_order(self, order_id: str) -> bool:
-        return self._broker.cancel_order(order_id)
+        result = self._broker.cancel_order(order_id)
+        if not result:
+            logger.warning(f"cancel_order failed: order_id={order_id} not found or already filled")
+        return result
 
     def reset(self):
+        logger.info("TradeEngine reset called")
         self._broker.reset()

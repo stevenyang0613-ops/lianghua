@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  # Redis主节点
+  redis-master:
+    image: redis:7-alpine
+    container_name: redis-master
+    command: redis-server /etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-master.conf:/etc/redis/redis.conf:ro
+      - redis-master-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.10
+
+  # Redis从节点1
+  redis-slave-1:
+    image: redis:7-alpine
+    container_name: redis-slave-1
+    command: redis-server /etc/redis/redis.conf
+    ports:
+      - "6380:6379"
+    volumes:
+      - ./redis-slave.conf:/etc/redis/redis.conf:ro
+      - redis-slave-1-data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.11
+
+  # Redis从节点2
+  redis-slave-2:
+    image: redis:7-alpine
+    container_name: redis-slave-2
+    command: redis-server /etc/redis/redis.conf
+    ports:
+      - "6381:6379"
+    volumes:
+      - ./redis-slave.conf:/etc/redis/redis.conf:ro
+      - redis-slave-2-data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.12
+
+  # Sentinel 1
+  sentinel-1:
+    image: redis:7-alpine
+    container_name: sentinel-1
+    command: redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf:ro
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.20
+
+  # Sentinel 2
+  sentinel-2:
+    image: redis:7-alpine
+    container_name: sentinel-2
+    command: redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26380:26379"
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf:ro
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.21
+
+  # Sentinel 3
+  sentinel-3:
+    image: redis:7-alpine
+    container_name: sentinel-3
+    command: redis-sentinel /etc/redis/sentinel.conf
+    ports:
+      - "26381:26379"
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf:ro
+    depends_on:
+      - redis-master
+      - redis-slave-1
+      - redis-slave-2
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.22
+
+  # Redis Exporter - Prometheus监控
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis-master:6379
+    depends_on:
+      - redis-master
+    restart: unless-stopped
+    networks:
+      redis-net:
+        ipv4_address: 172.28.1.30
+
+networks:
+  redis-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  redis-master-data:
+  redis-slave-1-data:
+  redis-slave-2-data:

@@ -1,0 +1,80 @@
+/**
+ * 移动端底部导航样式
+ */
+
+.mobile-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  background: #1a1a2e;
+  border-top: 1px solid #2a2a4a;
+  display: none;
+  justify-content: space-around;
+  align-items: center;
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 1000;
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav-item:active {
+  opacity: 0.7;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mobile-nav-item.active {
+  color: #1890ff;
+}
+
+.mobile-nav-item.active .mobile-nav-icon {
+  transform: scale(1.1);
+}
+
+.mobile-nav-icon {
+  font-size: 22px;
+  margin-bottom: 2px;
+  transition: transform 0.2s ease;
+}
+
+.mobile-nav-label {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* 深色模式 */
+@media (prefers-color-scheme: dark) {
+  .mobile-nav {
+    background: #0d0d1a;
+    border-top-color: #1a1a2e;
+  }
+}
+
+/* 仅在移动端显示 */
+@media screen and (max-width: 768px) {
+  .mobile-nav {
+    display: flex;
+  }
+}
+
+/* iOS 安全区域 */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .mobile-nav {
+    height: calc(60px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-nav-item {
+    height: 60px;
+  }
+}

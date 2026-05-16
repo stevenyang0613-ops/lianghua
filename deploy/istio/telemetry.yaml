@@ -1,0 +1,77 @@
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: lianghua-telemetry
+  namespace: lianghua
+spec:
+  selector:
+    matchLabels:
+      app: lianghua-backend
+
+  tracing:
+    - providers:
+        - name: jaeger
+      randomSamplingPercentage: 10.0
+
+  metrics:
+    - providers:
+        - name: prometheus
+      overrides:
+        - match:
+            metric: REQUEST_COUNT
+          tagOverrides:
+            request_method:
+              operation: INSERT
+              value: request.method
+            request_path:
+              operation: INSERT
+              value: request.path
+            response_code:
+              operation: INSERT
+              value: response.code
+
+        - match:
+            metric: REQUEST_DURATION
+          tagOverrides:
+            request_host:
+              operation: INSERT
+              value: request.host
+
+  accessLogging:
+    - providers:
+        - name: envoy
+      filter:
+        expression: "response.code >= 400"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-custom-metrics
+  namespace: istio-system
+data:
+  custom-metrics.yaml: |
+    metric_configs:
+      - name: request_latency_histogram
+        dimensions:
+          - source_service
+          - destination_service
+          - response_code
+        buckets:
+          - 0.01
+          - 0.05
+          - 0.1
+          - 0.5
+          - 1.0
+          - 5.0
+          - 10.0
+
+      - name: request_size_histogram
+        dimensions:
+          - source_service
+          - destination_service
+        buckets:
+          - 100
+          - 500
+          - 1000
+          - 5000
+          - 10000

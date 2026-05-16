@@ -1,0 +1,212 @@
+networks:
+  default:
+    name: lianghua-network
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lianghua-backend
+    depends_on:
+    - postgres
+    - redis
+    environment:
+    - APP_ENV=${APP_ENV:-production}
+    - DATABASE_URL=postgresql://lianghua:${POSTGRES_PASSWORD:-lianghua}@postgres:5432/lianghua
+    - REDIS_URL=redis://redis:6379/0
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+    - WS_AUTH_TOKEN=${WS_AUTH_TOKEN:-lianghua-ws-secret-token}
+    healthcheck:
+      interval: 30s
+      retries: 3
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8765/health
+      timeout: 10s
+    ports:
+    - 8765:8765
+    restart: unless-stopped
+    volumes:
+    - ./backend/app:/app/app
+    - backend-data:/app/data
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_config beat --loglevel=info
+    container_name: lianghua-celery-beat
+    depends_on:
+    - postgres
+    - redis
+    environment:
+    - APP_ENV=${APP_ENV:-production}
+    - DATABASE_URL=postgresql://lianghua:${POSTGRES_PASSWORD:-lianghua}@postgres:5432/lianghua
+    - REDIS_URL=redis://redis:6379/0
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    healthcheck:
+      interval: 30s
+      retries: 3
+      start_period: 20s
+      test:
+      - CMD-SHELL
+      - celery -A app.tasks.celery_config status 2>/dev/null || exit 1
+      timeout: 10s
+    restart: unless-stopped
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_config worker --loglevel=info
+    container_name: lianghua-celery-worker
+    depends_on:
+    - postgres
+    - redis
+    environment:
+    - APP_ENV=${APP_ENV:-production}
+    - DATABASE_URL=postgresql://lianghua:${POSTGRES_PASSWORD:-lianghua}@postgres:5432/lianghua
+    - REDIS_URL=redis://redis:6379/0
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    healthcheck:
+      interval: 30s
+      retries: 3
+      start_period: 20s
+      test:
+      - CMD-SHELL
+      - celery -A app.tasks.celery_config inspect ping 2>/dev/null || exit 1
+      timeout: 10s
+    restart: unless-stopped
+  flower:
+    container_name: lianghua-flower
+    depends_on:
+    - redis
+    - celery-worker
+    environment:
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    - FLOWER_PORT=5555
+    image: mher/flower:2.0.1
+    ports:
+    - 5555:5555
+    restart: unless-stopped
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lianghua-frontend
+    depends_on:
+    - backend
+    ports:
+    - 3000:80
+    restart: unless-stopped
+  grafana:
+    container_name: lianghua-grafana
+    depends_on:
+    - prometheus
+    - loki
+    environment:
+    - GF_SECURITY_ADMIN_USER=admin
+    - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+    - GF_USERS_ALLOW_SIGN_UP=false
+    image: grafana/grafana:11.0.0
+    ports:
+    - 3001:3000
+    restart: unless-stopped
+    volumes:
+    - grafana-data:/var/lib/grafana
+    - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+  loki:
+    command: -config.file=/etc/loki/local-config.yaml
+    container_name: lianghua-loki
+    image: grafana/loki:3.0.0
+    ports:
+    - 3100:3100
+    restart: unless-stopped
+    volumes:
+    - ./deploy/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+    - loki-data:/loki
+  nginx:
+    container_name: lianghua-nginx
+    depends_on:
+    - backend
+    - frontend
+    environment:
+    - NGINX_HOST=${NGINX_HOST:-localhost}
+    image: nginx:alpine
+    ports:
+    - 80:80
+    - 443:443
+    restart: unless-stopped
+    volumes:
+    - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    - ./nginx/ssl:/etc/nginx/ssl:ro
+  postgres:
+    container_name: lianghua-postgres
+    environment:
+    - POSTGRES_USER=${POSTGRES_USER:-lianghua}
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lianghua}
+    - POSTGRES_DB=${POSTGRES_DB:-lianghua}
+    healthcheck:
+      interval: 10s
+      retries: 5
+      test:
+      - CMD-SHELL
+      - pg_isready -U lianghua
+      timeout: 5s
+    image: postgres:15-alpine
+    ports:
+    - 5432:5432
+    restart: unless-stopped
+    volumes:
+    - postgres-data:/var/lib/postgresql/data
+  prometheus:
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.path=/prometheus
+    - --web.enable-lifecycle
+    container_name: lianghua-prometheus
+    image: prom/prometheus:v2.53.0
+    ports:
+    - 9090:9090
+    restart: unless-stopped
+    volumes:
+    - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    - prometheus-data:/prometheus
+  promtail:
+    command: -config.file=/etc/promtail/config.yaml
+    container_name: lianghua-promtail
+    depends_on:
+    - loki
+    image: grafana/promtail:3.0.0
+    restart: unless-stopped
+    volumes:
+    - ./deploy/loki/promtail-config.yaml:/etc/promtail/config.yaml:ro
+    - /var/log:/var/log:ro
+    - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  redis:
+    container_name: lianghua-redis
+    healthcheck:
+      interval: 10s
+      retries: 5
+      test:
+      - CMD
+      - redis-cli
+      - ping
+      timeout: 5s
+    image: redis:7-alpine
+    ports:
+    - 6379:6379
+    restart: unless-stopped
+    volumes:
+    - redis-data:/data
+version: '3.8'
+volumes:
+  backend-data: null
+  grafana-data: null
+  loki-data: null
+  postgres-data: null
+  prometheus-data: null
+  redis-data: null

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 
-interface Account {
+export interface Account {
   total_asset: number
   cash: number
   frozen: number
@@ -11,7 +11,7 @@ interface Account {
   updated_at: string
 }
 
-interface Position {
+export interface Position {
   code: string
   name: string
   volume: number
@@ -23,7 +23,7 @@ interface Position {
   profit_amount: number
 }
 
-interface Order {
+export interface Order {
   id: string
   code: string
   name: string
@@ -38,7 +38,7 @@ interface Order {
   reject_reason: string
 }
 
-interface FundPoint {
+export interface FundPoint {
   ts: string
   total_asset: number
   cash: number

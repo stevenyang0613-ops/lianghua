@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lianghua-image-updater
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: |
+      backend=lianghua/backend:latest,
+      frontend=lianghua/frontend:latest
+    argocd-image-updater.argoproj.io/backend.update-strategy: semver
+    argocd-image-updater.argoproj.io/backend.allow-tags: regexp:^v[0-9]+\.[0-9]+\.[0-9]+$
+    argocd-image-updater.argoproj.io/frontend.update-strategy: latest
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/lianghua/lianghua.git
+    targetRevision: main
+    path: deploy/kubernetes
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lianghua
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-image-updater-config
+  namespace: argocd
+data:
+  # 镜像更新器配置
+  registries.conf: |
+    registries:
+      - name: Docker Hub
+        api_url: https://registry-1.docker.io
+        ping: yes
+        credentials: secret:argocd/docker-credentials#creds
+      - name: GitHub Container Registry
+        api_url: https://ghcr.io
+        ping: yes
+
+  # Git写回配置
+  git.commit-message-template: |
+    chore: update image tags for {{.AppName}}
+
+    Updated images:
+    {{range .UpdatedImages}}- {{.}}
+    {{end}}
+
+  # 日志级别
+  log.level: info

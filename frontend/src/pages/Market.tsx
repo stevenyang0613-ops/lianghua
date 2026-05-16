@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Typography, Space, message, Switch, Input, Row, Col, Pagination, Empty, Spin, Button, Badge, Dropdown, type MenuProps } from 'antd'
-import { SearchOutlined, BellOutlined, DownloadOutlined, FileExcelOutlined, FileTextOutlined } from '@ant-design/icons'
+import { Typography, Space, message, Switch, Input, Row, Col, Pagination, Empty, Button, Badge, Dropdown, Skeleton, Card, type MenuProps } from 'antd'
+import { SearchOutlined, BellOutlined, DownloadOutlined, FileExcelOutlined, FileTextOutlined, WifiOutlined, DisconnectOutlined } from '@ant-design/icons'
 import VirtualTable from '../components/VirtualTable'
 import MarketTable from '../components/MarketTable'
 import FilterPanel from '../components/FilterPanel'
@@ -40,7 +40,9 @@ export default function Market() {
   const [alertVisible, setAlertVisible] = useState(false)
   const [selectedForAlert, setSelectedForAlert] = useState<{ code: string; name: string } | null>(null)
 
-  const { allBonds, setAllBonds, updateQuotes } = useMarketStore()
+  const allBonds = useMarketStore((s) => s.allBonds)
+  const setAllBonds = useMarketStore((s) => s.setAllBonds)
+  const updateQuotes = useMarketStore((s) => s.updateQuotes)
   const setSelectedBond = useAppStore((s) => s.setSelectedBond)
   const setBackendConnected = useAppStore((s) => s.setBackendConnected)
   const triggers = useAlertStore((s) => s.triggers)
@@ -50,7 +52,9 @@ export default function Market() {
     setBackendConnected(true)
   }, [updateQuotes, setBackendConnected])
 
-  useWebSocket(onWsMessage)
+  const { isConnected: wsConnected } = useWebSocket(onWsMessage, () => {
+    fetchAllQuotes().then(res => { setAllBonds(res.bonds); setBackendConnected(true) }).catch(() => {})
+  })
 
   useEffect(() => {
     fetchAllQuotes()
@@ -155,8 +159,14 @@ export default function Market() {
 
   if (loading) {
     return (
-      <div style={{ height: 'calc(100vh - 200px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Spin size="large" tip="加载中..." />
+      <div style={{ padding: 16 }}>
+        <Title level={4} style={{ margin: '0 0 16px' }}>实时行情</Title>
+        <Card>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Skeleton.Input active style={{ width: 200, height: 32 }} />
+            <Skeleton paragraph={{ rows: 10 }} active />
+          </div>
+        </Card>
       </div>
     )
   }
@@ -165,7 +175,14 @@ export default function Market() {
     <div style={{ padding: 16 }}>
       <Row justify="space-between" align="middle" style={{ marginBottom: 12 }}>
         <Col>
-          <Title level={4} style={{ margin: 0 }}>实时行情</Title>
+          <Space>
+            <Title level={4} style={{ margin: 0 }}>实时行情</Title>
+            <Badge status={wsConnected ? 'success' : 'error'} text={
+              <span style={{ fontSize: 12, color: wsConnected ? '#52c41a' : '#ff4d4f' }}>
+                {wsConnected ? <><WifiOutlined /> 实时</> : <><DisconnectOutlined /> 离线</>}
+              </span>
+            } />
+          </Space>
         </Col>
         <Col>
           <Space>
@@ -201,10 +218,8 @@ export default function Market() {
         <Empty description="无匹配数据" style={{ marginTop: 60 }} />
       ) : useVirtual ? (
         <VirtualTable
-          bonds={filteredBonds}
+          data={filteredBonds}
           loading={false}
-          onRowClick={(code) => setSelectedBond(code)}
-          height={600}
         />
       ) : (
         <>

@@ -13,7 +13,7 @@ class MomentumStrategy(Strategy):
     description = "计算过去N个交易日的价格涨幅，选取涨幅最大的可转债，趋势跟踪"
 
     params = [
-        StrategyParam(name="hold_count", label="持有数量", type="int", default=10, min_val=1, max_val=50),
+        StrategyParam(name="hold_count", label="持有数量", type="int", default=10, min_val=1, max_val=100),
         StrategyParam(name="rebalance_days", label="调仓间隔(天)", type="int", default=10, min_val=5, max_val=30),
         StrategyParam(name="momentum_window", label="动量窗口(天)", type="int", default=20, min_val=5, max_val=60),
         StrategyParam(name="max_premium", label="溢价率上限(%)", type="float", default=60, min_val=20, max_val=100),
@@ -33,13 +33,17 @@ class MomentumStrategy(Strategy):
             0
         )
 
+        # 预构建日期索引，避免 on_data 中 O(n) 过滤
+        self._date_data_map = {d: group for d, group in self._data.groupby('date')}
+
     def on_data(self, data: pd.DataFrame, idx: int) -> Optional[list[dict]]:
         current_date = self._dates[idx]
         if idx % self.get_param('rebalance_days') != 0:
             return None
 
-        day_data = data[data['date'] == current_date].copy()
-        momentum_data = self._data[self._data['date'] == current_date].copy()
+        # data 已是当日行情子集，无需再按日期过滤
+        day_data = data.copy()
+        momentum_data = self._date_data_map.get(current_date, pd.DataFrame()).copy()
 
         if day_data.empty or momentum_data.empty:
             return None
@@ -48,6 +52,10 @@ class MomentumStrategy(Strategy):
         day_data = day_data.merge(
             momentum_data[['code', 'momentum']], on='code', how='left'
         )
+
+        # Early return if merge produced no valid momentum (all codes unmatched)
+        if day_data['momentum'].isna().all():
+            return None
 
         # Filter
         day_data = day_data[
@@ -61,14 +69,25 @@ class MomentumStrategy(Strategy):
 
         # Pick highest momentum
         selected = day_data.nlargest(self.get_param('hold_count'), 'momentum')
+        new_codes = set(selected['code'].tolist())
 
         signals = []
-        for _, row in selected.iterrows():
-            signals.append({
-                'code': row['code'],
-                'action': 'buy',
-                'price': float(row['price']),
-                'reason': f'动量{row["momentum"]*100:.1f}%'
-            })
 
+        # 卖出不再持有的标的
+        to_sell = self._prev_selected - new_codes
+        if to_sell:
+            sell_rows = day_data[day_data['code'].isin(to_sell)]
+            signals.extend([
+                {'code': code, 'action': 'sell', 'price': float(price), 'reason': '调仓卖出'}
+                for code, price in zip(sell_rows['code'], sell_rows['price'])
+            ])
+
+        buy_list = selected[['code', 'price', 'momentum']].copy()
+        buy_list['reason'] = buy_list['momentum'].apply(lambda x: f'动量{x*100:.1f}%')
+        signals.extend([
+            {'code': code, 'action': 'buy', 'price': float(price), 'reason': reason}
+            for code, price, reason in zip(buy_list['code'], buy_list['price'], buy_list['reason'])
+        ])
+
+        self._prev_selected = new_codes
         return signals

@@ -1,0 +1,111 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: lianghua-canary
+  namespace: lianghua
+spec:
+  hosts:
+    - lianghua-backend
+  http:
+    # 金丝雀发布 - 10%流量到v2
+    - route:
+        - destination:
+            host: lianghua-backend
+            subset: v1
+          weight: 90
+        - destination:
+            host: lianghua-backend
+            subset: v2
+          weight: 10
+
+    # 基于Header的路由（测试用户）
+    - match:
+        - headers:
+            x-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: lianghua-backend
+            subset: v2
+          weight: 100
+
+    # 故障注入测试
+    - fault:
+        delay:
+          percentage:
+            value: 0.1
+          fixedDelay: 5s
+        abort:
+          percentage:
+            value: 0.1
+          httpStatus: 500
+      route:
+        - destination:
+            host: lianghua-backend
+            subset: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: lianghua-timeout-retry
+  namespace: lianghua
+spec:
+  hosts:
+    - lianghua-backend
+  http:
+    - route:
+        - destination:
+            host: lianghua-backend
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        retryOn: gateway-error,connect-failure,refused-stream,5xx
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: lianghua-authz
+  namespace: lianghua
+spec:
+  selector:
+    matchLabels:
+      app: lianghua-backend
+
+  action: ALLOW
+  rules:
+    # 允许健康检查
+    - to:
+        - operation:
+            paths:
+              - /api/v1/health
+              - /metrics
+
+    # 允许API访问（需要认证）
+    - from:
+        - source:
+            requestPrincipals:
+              - "*"
+      to:
+        - operation:
+            paths:
+              - /api/*
+
+    # 允许内部服务通信
+    - from:
+        - source:
+            namespaces:
+              - lianghua
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: lianghua-peer-auth
+  namespace: lianghua
+spec:
+  selector:
+    matchLabels:
+      app: lianghua-backend
+
+  mtls:
+    mode: STRICT

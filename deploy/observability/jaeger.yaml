@@ -1,0 +1,150 @@
+# Jaeger分布式追踪配置
+# 实现端到端请求追踪
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.53
+          ports:
+            - containerPort: 16686
+              name: ui
+            - containerPort: 14268
+              name: collector-http
+            - containerPort: 14250
+              name: collector-grpc
+            - containerPort: 6831
+              name: agent-udp
+              protocol: UDP
+          env:
+            - name: COLLECTOR_ZIPKIN_HOST_PORT
+              value: ":9411"
+            - name: SPAN_STORAGE_TYPE
+              value: elasticsearch
+            - name: ES_SERVER_URLS
+              value: "http://elasticsearch:9200"
+            - name: ES_INDEX_PREFIX
+              value: "jaeger"
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 16686
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 16686
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: observability
+spec:
+  ports:
+    - port: 14268
+      name: http
+      targetPort: 14268
+    - port: 14250
+      name: grpc
+      targetPort: 14250
+  selector:
+    app: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-agent
+  namespace: observability
+spec:
+  ports:
+    - port: 6831
+      name: udp
+      protocol: UDP
+      targetPort: 6831
+    - port: 6832
+      name: udp-config
+      protocol: UDP
+      targetPort: 6832
+    - port: 5778
+      name: configs
+      targetPort: 5778
+  selector:
+    app: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-query
+  namespace: observability
+spec:
+  ports:
+    - port: 16686
+      name: query
+      targetPort: 16686
+  selector:
+    app: jaeger
+---
+# Jaeger Agent DaemonSet（每个节点运行）
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: jaeger-agent
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: jaeger-agent
+  template:
+    metadata:
+      labels:
+        app: jaeger-agent
+    spec:
+      containers:
+        - name: jaeger-agent
+          image: jaegertracing/jaeger-agent:1.53
+          ports:
+            - containerPort: 6831
+              hostPort: 6831
+              protocol: UDP
+              name: compact
+            - containerPort: 6832
+              hostPort: 6832
+              protocol: UDP
+              name: binary
+            - containerPort: 5778
+              hostPort: 5778
+              name: serve
+          env:
+            - name: REPORTER_GRPC_HOST_PORT
+              value: "jaeger-collector.observability:14250"
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+            requests:
+              memory: "64Mi"
+              cpu: "50m"

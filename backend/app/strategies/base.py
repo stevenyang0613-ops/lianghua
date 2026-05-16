@@ -16,6 +16,7 @@ class Strategy(ABC):
         self._params = {}
         for p in self.params:
             self._params[p.name] = kwargs.get(p.name, p.default)
+        self._prev_selected: set[str] = set()
 
     def get_param(self, name: str):
         val = self._params.get(name)
@@ -38,6 +39,11 @@ class Strategy(ABC):
     def on_data(self, data: pd.DataFrame, idx: int) -> Optional[list[dict]]:
         """
         在每个时间点生成交易信号
+
+        Args:
+            data: 当日行情数据（仅包含当前交易日的行），无需再按日期过滤
+            idx: 当前交易日索引（从0开始）
+
         Returns: [{"code": str, "action": "buy"|"sell", "price": float, "reason": str}]
         """
         ...

@@ -53,13 +53,26 @@ class HistoricalDataLoader:
 
     async def load_all_bonds_history(self, codes: list[str], days: int = 365) -> dict[str, list[dict]]:
         """批量加载多只可转债历史行情"""
+        sem = asyncio.Semaphore(5)
+
+        async def _load_one(code: str):
+            async with sem:
+                result = await self.load_bond_history(code, days)
+                await asyncio.sleep(0.1)
+                return code, result
+
+        tasks = [_load_one(code) for code in codes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
         all_records: dict[str, list[dict]] = {}
-        for code in codes:
-            records = await self.load_bond_history(code, days)
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning(f"Failed to load bond history: {r}")
+                continue
+            code, records = r
             if records:
                 all_records[code] = records
                 logger.info(f"[Historical] Loaded {len(records)} days for {code}")
-            await asyncio.sleep(0.5)
         return all_records
 
     def get_cached_history(self, start_date: date, end_date: date,

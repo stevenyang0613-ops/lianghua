@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import ReactECharts from 'echarts-for-react'
+import { useEffect, useMemo, useState } from 'react'
 import { Segmented, Empty, Spin, Typography, Space } from 'antd'
 import { useMarketStore } from '../stores/useMarketStore'
-import type { ConvertibleQuote } from '../types'
+import { getApiBase } from '../utils/config'
+import type { default as EChartsReact } from 'echarts-for-react'
 
 const { Text } = Typography
 
@@ -20,20 +20,43 @@ interface HistoryItem {
   dual_low: number
 }
 
+let EChartsComponent: typeof EChartsReact | null = null
+
+async function loadECharts() {
+  if (!EChartsComponent) {
+    const mod = await import('echarts-for-react')
+    EChartsComponent = mod.default
+  }
+  return EChartsComponent
+}
+
 export default function ChartPanel({ code, name }: ChartPanelProps) {
   const [chartType, setChartType] = useState<ChartType>('price')
   const [loading, setLoading] = useState(false)
   const [history, setHistory] = useState<HistoryItem[]>([])
-  const bonds = useMarketStore((s) => s.bonds)
-  const bond = bonds.get(code)
+  const [echartsReady, setEchartsReady] = useState(false)
+  const allBonds = useMarketStore((s) => s.allBonds)
+  const bond = useMemo(() => allBonds.find(b => b.code === code), [allBonds, code])
 
   useEffect(() => {
+    loadECharts().then(() => setEchartsReady(true))
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
     const fetchHistory = async () => {
       setLoading(true)
       try {
-        const resp = await fetch(`/api/v1/history/${code}?limit=100`)
-        const data = await resp.json()
-        if (data.history && data.history.length > 0) {
+        const baseUrl = getApiBase()
+        let data: any = null
+        if (window.electronAPI?.httpRequest) {
+          const result = await window.electronAPI.httpRequest('GET', `${baseUrl}/api/v1/history/${code}?limit=100`)
+          if (result.ok) data = result.data
+        } else {
+          const resp = await fetch(`${baseUrl}/api/v1/history/${code}?limit=100`, { signal: controller.signal })
+          data = await resp.json()
+        }
+        if (data?.history && data.history.length > 0) {
           const mapped: HistoryItem[] = data.history.map((h: { timestamp: string; price: number; premium_ratio: number; dual_low: number }) => ({
             time: new Date(h.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
             price: h.price,
@@ -42,13 +65,17 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
           })).reverse()
           setHistory(mapped)
         }
-      } catch (e) {
-        console.error('Failed to fetch history:', e)
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        console.error('Failed to fetch history')
       } finally {
-        setLoading(false)
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
       }
     }
     fetchHistory()
+    return () => controller.abort()
   }, [code])
 
   const getCurrentValue = (): number => {
@@ -78,7 +105,7 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
     }
   }
 
-  const getOption = () => {
+  const chartOption = useMemo(() => {
     const data = history.map(h => ({
       time: h.time,
       value: getChartValue(h),
@@ -127,15 +154,21 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
         },
       }],
     }
-  }
+  }, [history, chartType, changeValue])
 
   if (loading) {
     return <Spin style={{ display: 'flex', justifyContent: 'center', marginTop: 60 }} />
   }
 
   if (history.length === 0) {
-    return <Empty description="暂无历史数据" style={{ marginTop: 60 }} />
+    return <Empty description={'暂无历史数据'} style={{ marginTop: 60 }} />
   }
+
+  if (!echartsReady) {
+    return <Spin style={{ display: 'flex', justifyContent: 'center', marginTop: 60 }} />
+  }
+
+  const ECh = EChartsComponent!
 
   return (
     <div>
@@ -165,8 +198,8 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
         </Text>
       </div>
 
-      <ReactECharts
-        option={getOption()}
+      <ECh
+        option={chartOption}
         style={{ height: 200 }}
         opts={{ renderer: 'canvas' }}
       />

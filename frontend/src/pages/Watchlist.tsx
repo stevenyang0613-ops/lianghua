@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import { Typography, Space, Table, Button, Empty, Tag, Popconfirm } from 'antd'
 import { StarFilled, DeleteOutlined } from '@ant-design/icons'
 import { useWatchlistStore } from '../stores/useWatchlistStore'
@@ -12,14 +12,16 @@ export default function Watchlist() {
   const watchlist = useWatchlistStore((s) => s.watchlist)
   const removeWatch = useWatchlistStore((s) => s.removeWatch)
   const clearWatchlist = useWatchlistStore((s) => s.clearWatchlist)
-  const bonds = useMarketStore((s) => s.bonds)
+  const allBonds = useMarketStore((s) => s.allBonds)
   const setSelectedBond = useAppStore((s) => s.setSelectedBond)
+
+  const bondsMap = useMemo(() => new Map(allBonds.map(b => [b.code, b])), [allBonds])
 
   const watchlistBonds = useMemo(() => {
     return watchlist
-      .map((w) => bonds.get(w.code))
+      .map((w) => bondsMap.get(w.code))
       .filter((b): b is ConvertibleQuote => b !== undefined)
-  }, [watchlist, bonds])
+  }, [watchlist, bondsMap])
 
   const columns = [
     {

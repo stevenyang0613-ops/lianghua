@@ -1,0 +1,61 @@
+# Vault策略定义
+
+# 后端应用策略 - 用于应用访问数据库密码等
+path "secret/data/lianghua/database/*" {
+  capabilities = ["read"]
+}
+
+path "secret/data/lianghua/redis/*" {
+  capabilities = ["read"]
+}
+
+path "secret/data/lianghua/jwt/*" {
+  capabilities = ["read"]
+}
+
+path "secret/data/lianghua/api-keys/*" {
+  capabilities = ["read"]
+}
+
+# Celery Worker策略
+path "secret/data/lianghua/celery/*" {
+  capabilities = ["read"]
+}
+
+# 监控服务策略
+path "secret/data/lianghua/monitoring/*" {
+  capabilities = ["read"]
+}
+---
+# 管理员策略 - 用于DevOps团队
+path "secret/data/lianghua/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+path "secret/metadata/lianghua/*" {
+  capabilities = ["list", "delete"]
+}
+
+path "sys/leases/*" {
+  capabilities = ["list", "read", "update", "delete"]
+}
+---
+# 只读策略 - 用于审计和监控
+path "secret/data/lianghua/*" {
+  capabilities = ["read", "list"]
+}
+
+path "secret/metadata/lianghua/*" {
+  capabilities = ["list"]
+}
+---
+# 数据库动态凭证角色
+# PostgreSQL动态凭证
+path "database/creds/lianghua-app" {
+  capabilities = ["read"]
+}
+
+# Redis动态凭证
+path "redis/creds/lianghua-app" {
+  capabilities = ["read"]
+}

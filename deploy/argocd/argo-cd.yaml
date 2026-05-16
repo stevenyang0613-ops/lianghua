@@ -1,0 +1,162 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lianghua
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/lianghua/lianghua.git
+    targetRevision: main
+    path: deploy/kubernetes
+
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lianghua
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+
+    syncOptions:
+      - Validate=true
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  info:
+    - name: Description
+      value: 量化可转债投资系统
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: lianghua-environments
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: staging
+            namespace: lianghua-staging
+            valuesFile: values-staging.yaml
+          - name: production
+            namespace: lianghua-prod
+            valuesFile: values-prod.yaml
+  template:
+    metadata:
+      name: 'lianghua-{{name}}'
+      namespace: argocd
+      labels:
+        environment: '{{name}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/lianghua/lianghua.git
+        targetRevision: main
+        path: deploy/kubernetes
+        helm:
+          valueFiles:
+            - values.yaml
+            - '{{valuesFile}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: lianghua-project
+  namespace: argocd
+spec:
+  description: Lianghua Quantitative Investment System
+
+  sourceRepos:
+    - 'https://github.com/lianghua/*'
+    - 'https://charts.bitnami.com/*'
+    - 'https://prometheus-community.github.io/helm-charts'
+    - 'https://grafana.github.io/helm-charts'
+
+  destinations:
+    - namespace: 'lianghua*'
+      server: https://kubernetes.default.svc
+    - namespace: 'argocd'
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+  roles:
+    - name: admin
+      description: Admin access to lianghua project
+      policies:
+        - p, proj:lianghua-project:admin, applications, *, lianghua-project/*, allow
+        - p, proj:lianghua-project:admin, repositories, *, lianghua-project/*, allow
+      groups:
+        - lianghua-admins
+
+    - name: developer
+      description: Developer access to lianghua project
+      policies:
+        - p, proj:lianghua-project:developer, applications, get, lianghua-project/*, allow
+        - p, proj:lianghua-project:developer, applications, sync, lianghua-project/*, allow
+      groups:
+        - lianghua-developers
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # 应用状态badge
+  statusbadge.enabled: "true"
+  # 资源跟踪方法
+  application.resourceTrackingMethod: "annotation"
+  # 通知配置
+  notifications.enabled: "true"
+  # Webhook配置
+  webhook.github.enabled: "true"
+  # 同步窗口
+  timeouts.reconciliation: "180s"
