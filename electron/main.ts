@@ -163,12 +163,16 @@ function httpRequestHandler(
 
 // ---- Backend health check ----
 async function backendHealthcheck(): Promise<boolean> {
-  try {
-    const result = await httpRequestHandler('GET', `${BACKEND_URL}/api/v1/health`)
-    return result.ok && ['ok', 'healthy'].includes(result.data?.status)
-  } catch {
-    return false
+  const urls = [`${BACKEND_URL}/api/v1/health`, `${BACKEND_URL}/health`]
+  for (const url of urls) {
+    try {
+      const result = await httpRequestHandler('GET', url)
+      if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
+        return true
+      }
+    } catch {}
   }
+  return false
 }
 
 // ---- Wait for backend to be ready ----
@@ -186,15 +190,20 @@ async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boo
 
 async function waitForBackendWithPort(port: number, maxWaitMs = 60000, intervalMs = 1000): Promise<boolean> {
   const start = Date.now()
-  const url = `http://${BACKEND_HOST}:${port}/api/v1/health`
+  const urls = [
+    `http://${BACKEND_HOST}:${port}/api/v1/health`,
+    `http://${BACKEND_HOST}:${port}/health`
+  ]
   while (Date.now() - start < maxWaitMs) {
-    try {
-      const result = await httpRequestHandler('GET', url)
-      if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
-        perfMetrics.backendReadyTime = Date.now()
-        return true
-      }
-    } catch {}
+    for (const url of urls) {
+      try {
+        const result = await httpRequestHandler('GET', url)
+        if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
+          perfMetrics.backendReadyTime = Date.now()
+          return true
+        }
+      } catch {}
+    }
     await new Promise((r) => setTimeout(r, intervalMs))
   }
   return false
@@ -564,6 +573,7 @@ function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDi
     if (ready) {
       console.log('[Electron] Backend is ready, notifying renderer')
       const actualPort = parseInt(args[args.indexOf('--port') + 1])
+      savePreferredPort(actualPort)
       mainWindow?.webContents.send('backend-ready', { port: actualPort })
       startHealthMonitor()
     } else {
@@ -579,13 +589,36 @@ function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDi
   setTimeout(() => { pythonRestartCount = 0 }, PYTHON_RESTART_RESET_INTERVAL)
 }
 
+function getPreferredPort(): number {
+  try {
+    const portFile = path.join(app.getPath('userData'), 'last-port.txt')
+    if (fs.existsSync(portFile)) {
+      const port = parseInt(fs.readFileSync(portFile, 'utf-8').trim())
+      if (!isNaN(port) && port >= 8765 && port <= 8768) {
+        console.log(`[Electron] Using preferred port from last session: ${port}`)
+        return port
+      }
+    }
+  } catch {}
+  return BACKEND_PORT
+}
+
+function savePreferredPort(port: number): void {
+  try {
+    const portFile = path.join(app.getPath('userData'), 'last-port.txt')
+    fs.writeFileSync(portFile, String(port))
+    console.log(`[Electron] Saved preferred port: ${port}`)
+  } catch {}
+}
+
 function startPythonBackend() {
   const backendDir = getBackendDir()
   const pythonCmd = getPythonCmd(backendDir)
+  const preferredPort = getPreferredPort()
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
   const args = isPyinstaller
-    ? ['--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
-    : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
+    ? ['--host', BACKEND_HOST, '--port', String(preferredPort)]
+    : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(preferredPort)]
   startPythonBackendWithArgs(pythonCmd, args, backendDir)
 }
 
