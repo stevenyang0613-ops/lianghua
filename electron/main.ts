@@ -184,6 +184,22 @@ async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boo
   return false
 }
 
+async function waitForBackendWithPort(port: number, maxWaitMs = 60000, intervalMs = 1000): Promise<boolean> {
+  const start = Date.now()
+  const url = `http://${BACKEND_HOST}:${port}/api/v1/health`
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const result = await httpRequestHandler('GET', url)
+      if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
+        perfMetrics.backendReadyTime = Date.now()
+        return true
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  return false
+}
+
 // ---- Health monitoring loop ----
 let healthMonitorInterval: NodeJS.Timeout | null = null
 let healthFailCount = 0
@@ -489,15 +505,10 @@ function getPythonCmd(backendDir: string): string {
   return 'python3'
 }
 
-function startPythonBackend() {
-  const backendDir = getBackendDir()
-  const pythonCmd = getPythonCmd(backendDir)
-
+function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDir: string) {
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
-  const args = isPyinstaller
-    ? ['--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
-    : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
-
+  console.log(`[Electron] Starting Python backend: ${pythonCmd} ${args.join(' ')}`)
+  console.log(`[Electron] Backend directory: ${backendDir}`)
   pythonProcess = spawn(pythonCmd, args, {
     cwd: backendDir,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -535,13 +546,21 @@ function startPythonBackend() {
     console.error('[Electron] Failed to start Python:', err.message)
     recordCrash('backend', `Failed to start Python: ${err.message}`)
     if ((err as any).code === 'EADDRINUSE') {
-      console.error(`[Electron] Port ${BACKEND_PORT} is already in use by another process`)
-      mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Port ${BACKEND_PORT} is in use` })
+      const currentPort = parseInt(args[args.indexOf('--port') + 1] || String(BACKEND_PORT))
+      if (currentPort < BACKEND_PORT + 3) {
+        const nextPort = currentPort + 1
+        console.log(`[Electron] Port ${currentPort} in use, trying ${nextPort}`)
+        const newArgs = [...args]
+        newArgs[args.indexOf('--port') + 1] = String(nextPort)
+        startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
+      } else {
+        console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + 3} are in use`)
+        mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Ports ${BACKEND_PORT}-${BACKEND_PORT + 3} are all in use` })
+      }
     }
   })
 
-  // Wait for backend and signal readiness
-  waitForBackend().then((ready) => {
+  waitForBackendWithPort(parseInt(args[args.indexOf('--port') + 1])).then((ready) => {
     if (ready) {
       console.log('[Electron] Backend is ready, notifying renderer')
       mainWindow?.webContents.send('backend-ready')
@@ -556,8 +575,17 @@ function startPythonBackend() {
     }
   })
 
-  // Reset restart count after interval
   setTimeout(() => { pythonRestartCount = 0 }, PYTHON_RESTART_RESET_INTERVAL)
+}
+
+function startPythonBackend() {
+  const backendDir = getBackendDir()
+  const pythonCmd = getPythonCmd(backendDir)
+  const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
+  const args = isPyinstaller
+    ? ['--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
+    : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
+  startPythonBackendWithArgs(pythonCmd, args, backendDir)
 }
 
 // ---- Tray ----

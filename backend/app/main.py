@@ -175,6 +175,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 app.include_router(router, prefix="/api/v1")
 
+@app.get("/health")
+async def health_root():
+    return {"status": "ok"}
+
 
 def _health_response() -> dict:
     engine_running = False
