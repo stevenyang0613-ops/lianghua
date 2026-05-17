@@ -35,6 +35,9 @@ const APP_VERSION = '1.0.0'
 const BACKEND_PORT = 8765
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
+const BACKEND_STARTUP_TIMEOUT = 60000
+const HEALTH_CHECK_INTERVAL = 1000
+const MAX_PORT_FALLBACK = 3
 
 // Forward declaration
 let restartBackend: () => void
@@ -188,7 +191,7 @@ async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boo
   return false
 }
 
-async function waitForBackendWithPort(port: number, maxWaitMs = 60000, intervalMs = 1000): Promise<boolean> {
+async function waitForBackendWithPort(port: number, maxWaitMs = BACKEND_STARTUP_TIMEOUT, intervalMs = HEALTH_CHECK_INTERVAL): Promise<boolean> {
   const start = Date.now()
   const urls = [
     `http://${BACKEND_HOST}:${port}/api/v1/health`,
@@ -519,15 +522,22 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
   const available = await isPortAvailable(port)
   if (!available) {
     console.log(`[Electron] Port ${port} is not available, trying next port`)
-    if (port < BACKEND_PORT + 3) {
+    if (port < BACKEND_PORT + MAX_PORT_FALLBACK) {
       const nextPort = port + 1
       const newArgs = [...args]
       newArgs[args.indexOf('--port') + 1] = String(nextPort)
       startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
       return
     } else {
-      console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + 3} are in use`)
-      mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Ports ${BACKEND_PORT}-${BACKEND_PORT + 3} are all in use` })
+      console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + MAX_PORT_FALLBACK} are in use`)
+      const attemptedPorts = Array.from({ length: MAX_PORT_FALLBACK }, (_, i) => BACKEND_PORT + i)
+      mainWindow?.webContents.send('backend-error', {
+        code: 'EADDRINUSE',
+        title: '后端启动失败',
+        message: `端口 ${BACKEND_PORT}-${BACKEND_PORT + MAX_PORT_FALLBACK} 全部被占用`,
+        details: `请检查是否有其他应用占用了这些端口。\n\n诊断命令：\nmacOS: lsof -i :${BACKEND_PORT} -i :${BACKEND_PORT + 1} -i :${BACKEND_PORT + 2}\nWindows: netstat -ano | findstr "${BACKEND_PORT}"\n\n或尝试关闭其他占用端口的应用后重新启动。`,
+        portsAttempted: attemptedPorts
+      })
       return
     }
   }
@@ -580,8 +590,15 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
         newArgs[args.indexOf('--port') + 1] = String(nextPort)
         startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
       } else {
-        console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + 3} are in use`)
-        mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Ports ${BACKEND_PORT}-${BACKEND_PORT + 3} are all in use` })
+        console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + MAX_PORT_FALLBACK} are in use`)
+        const attemptedPorts = Array.from({ length: MAX_PORT_FALLBACK }, (_, i) => BACKEND_PORT + i)
+        mainWindow?.webContents.send('backend-error', {
+          code: 'EADDRINUSE',
+          title: '后端启动失败',
+          message: `端口 ${BACKEND_PORT}-${BACKEND_PORT + MAX_PORT_FALLBACK} 全部被占用`,
+          details: `请检查是否有其他应用占用了这些端口。\n\n诊断命令：\nmacOS: lsof -i :${BACKEND_PORT} -i :${BACKEND_PORT + 1} -i :${BACKEND_PORT + 2}\nWindows: netstat -ano | findstr "${BACKEND_PORT}"\n\n或尝试关闭其他占用端口的应用后重新启动。`,
+          portsAttempted: attemptedPorts
+        })
       }
     }
   })
