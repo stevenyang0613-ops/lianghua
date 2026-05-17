@@ -148,8 +148,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   httpRequest: (method: string, url: string, body?: any) => ipcRenderer.invoke('http-request', method, url, body),
 
   // Backend ready event
-  onBackendReady: (callback: () => void) => {
-    const listener = () => callback()
+  onBackendReady: (callback: (port: number) => void) => {
+    const listener = (_event: any, data: { port: number }) => callback(data.port)
     ipcRenderer.on('backend-ready', listener)
     listeners.set('backend-ready', listener)
     return () => {

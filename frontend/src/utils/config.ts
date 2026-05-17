@@ -6,12 +6,25 @@
 // 后端服务配置
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_PORT = 8765
+let _actualPort = BACKEND_PORT
+
+export function setBackendPort(port: number): void {
+  _actualPort = port
+}
+
+export function getActualPort(): number {
+  return _actualPort
+}
 
 export const ENV = {
   BACKEND_HOST,
   BACKEND_PORT,
-  BACKEND_URL: `http://${BACKEND_HOST}:${BACKEND_PORT}`,
-  WS_URL: `ws://${BACKEND_HOST}:${BACKEND_PORT}`,
+  get BACKEND_URL(): string {
+    return `http://${BACKEND_HOST}:${_actualPort}`
+  },
+  get WS_URL(): string {
+    return `ws://${BACKEND_HOST}:${_actualPort}`
+  },
   // WS_AUTH_TOKEN 由后端动态生成，前端通过 localStorage 缓存
   get WS_AUTH_TOKEN(): string {
     if (typeof window !== 'undefined') {

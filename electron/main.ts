@@ -563,7 +563,8 @@ function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDi
   waitForBackendWithPort(parseInt(args[args.indexOf('--port') + 1])).then((ready) => {
     if (ready) {
       console.log('[Electron] Backend is ready, notifying renderer')
-      mainWindow?.webContents.send('backend-ready')
+      const actualPort = parseInt(args[args.indexOf('--port') + 1])
+      mainWindow?.webContents.send('backend-ready', { port: actualPort })
       startHealthMonitor()
     } else {
       console.error('[Electron] Backend did not become ready in time')

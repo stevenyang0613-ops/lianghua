@@ -6,7 +6,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { healthCheck } from '../services/api'
 import { refreshWsToken } from '../utils/wsInstances'
-import { getApiBase, setWsAuthToken } from '../utils/config'
+import { getApiBase, setWsAuthToken, setBackendPort } from '../utils/config'
 import { useAppStore } from '../stores/useAppStore'
 import {
   enableOfflineMode,
@@ -94,8 +94,9 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
   useEffect(() => {
     if (backendConnected) return
 
-    const cleanup = window.electronAPI?.onBackendReady?.(() => {
-      console.log('[StartupLoading] Received backend-ready event from main process')
+    const cleanup = window.electronAPI?.onBackendReady?.((port: number) => {
+      console.log('[StartupLoading] Received backend-ready event from main process, port:', port)
+      setBackendPort(port)
       setBackendConnected(true)
     })
 
