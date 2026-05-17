@@ -164,7 +164,7 @@ function httpRequestHandler(
 // ---- Backend health check ----
 async function backendHealthcheck(): Promise<boolean> {
   try {
-    const result = await httpRequestHandler('GET', `${BACKEND_URL}/health`)
+    const result = await httpRequestHandler('GET', `${BACKEND_URL}/api/v1/health`)
     return result.ok && ['ok', 'healthy'].includes(result.data?.status)
   } catch {
     return false
