@@ -51,21 +51,18 @@ export function useWebSocket(onMessage: MessageHandler, onReconnect?: ReconnectH
       marketWs.connect()
     }
 
-    return () => {
-      unsubMsg()
-      unsubState()
-      unsubPort()
-    }
-  }, [])
-
-  useEffect(() => {
     const unsubPort = onPortChange(() => {
       if (marketWs.isConnected()) {
         marketWs.disconnect()
       }
       marketWs.connect()
     })
-    return unsubPort
+
+    return () => {
+      unsubMsg()
+      unsubState()
+      unsubPort()
+    }
   }, [])
 
   return { isConnected }

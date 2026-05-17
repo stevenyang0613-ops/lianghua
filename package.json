@@ -44,6 +44,7 @@
           "**/pyproject.toml",
           "**/requirements.txt",
           "wheels/**/*",
+          "dist/**/*",
           "lianghua-backend",
           "lianghua-backend.exe",
           "!__pycache__/**",
@@ -51,7 +52,6 @@
           "!tests/**",
           "!*.pyc",
           "!.venv/**",
-          "!dist/**",
           "!build/**",
           "!*.spec"
         ]

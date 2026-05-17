@@ -54,3 +54,5 @@ frontend/.vite/
 # Electron builder debug
 builder-debug.yml
 builder-effective-config.yaml
+/build
+/dist/lianghua-backend

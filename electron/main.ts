@@ -216,7 +216,7 @@ async function waitForBackendWithPort(port: number, maxWaitMs = BACKEND_STARTUP_
 let healthMonitorInterval: NodeJS.Timeout | null = null
 let healthFailCount = 0
 const HEALTH_MAX_FAILS = 3
-const HEALTH_CHECK_INTERVAL = 10000
+const HEALTH_MONITOR_INTERVAL = 10000
 
 function startHealthMonitor() {
   if (healthMonitorInterval) return
@@ -236,7 +236,7 @@ function startHealthMonitor() {
     } else {
       healthFailCount = 0
     }
-  }, HEALTH_CHECK_INTERVAL)
+  }, HEALTH_MONITOR_INTERVAL)
 }
 
 function stopHealthMonitor() {
