@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { notification } from 'antd'
 import type { ConvertibleQuote } from '../types'
 import { marketWs } from '../utils/wsInstances'
+import { onPortChange } from '../utils/config'
 
 type MessageHandler = (bonds: ConvertibleQuote[]) => void
 type ReconnectHandler = () => void
@@ -53,7 +54,18 @@ export function useWebSocket(onMessage: MessageHandler, onReconnect?: ReconnectH
     return () => {
       unsubMsg()
       unsubState()
+      unsubPort()
     }
+  }, [])
+
+  useEffect(() => {
+    const unsubPort = onPortChange(() => {
+      if (marketWs.isConnected()) {
+        marketWs.disconnect()
+      }
+      marketWs.connect()
+    })
+    return unsubPort
   }, [])
 
   return { isConnected }

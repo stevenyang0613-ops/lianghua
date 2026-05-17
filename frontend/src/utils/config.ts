@@ -7,13 +7,20 @@
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_PORT = 8765
 let _actualPort = BACKEND_PORT
+let _portChangeListeners: ((port: number) => void)[] = []
 
 export function setBackendPort(port: number): void {
   _actualPort = port
+  _portChangeListeners.forEach(cb => cb(port))
 }
 
 export function getActualPort(): number {
   return _actualPort
+}
+
+export function onPortChange(callback: (port: number) => void): () => void {
+  _portChangeListeners.push(callback)
+  return () => { _portChangeListeners = _portChangeListeners.filter(cb => cb !== callback) }
 }
 
 export const ENV = {

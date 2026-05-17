@@ -514,7 +514,24 @@ function getPythonCmd(backendDir: string): string {
   return 'python3'
 }
 
-function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDir: string) {
+async function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDir: string) {
+  const port = parseInt(args[args.indexOf('--port') + 1])
+  const available = await isPortAvailable(port)
+  if (!available) {
+    console.log(`[Electron] Port ${port} is not available, trying next port`)
+    if (port < BACKEND_PORT + 3) {
+      const nextPort = port + 1
+      const newArgs = [...args]
+      newArgs[args.indexOf('--port') + 1] = String(nextPort)
+      startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
+      return
+    } else {
+      console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + 3} are in use`)
+      mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Ports ${BACKEND_PORT}-${BACKEND_PORT + 3} are all in use` })
+      return
+    }
+  }
+
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
   console.log(`[Electron] Starting Python backend: ${pythonCmd} ${args.join(' ')}`)
   console.log(`[Electron] Backend directory: ${backendDir}`)
@@ -609,6 +626,16 @@ function savePreferredPort(port: number): void {
     fs.writeFileSync(portFile, String(port))
     console.log(`[Electron] Saved preferred port: ${port}`)
   } catch {}
+}
+
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = http.createServer()
+    server.once('error', () => { resolve(false) })
+    server.once('listening', () => { try { server.close() } catch {} resolve(true) })
+    server.listen(port, BACKEND_HOST)
+    setTimeout(() => { try { server.close() } catch {} resolve(true) }, 1000)
+  })
 }
 
 function startPythonBackend() {
