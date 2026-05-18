@@ -321,17 +321,24 @@ function startFrontendServer(frontendDir: string) {
   })
 
   frontendServer.on('upgrade', (req, socket, head) => {
-    if ((req.url || '').startsWith('/ws')) {
+    const reqUrl = req.url || ''
+    if (reqUrl.includes('/ws')) {
+      const proxyHeaders = { ...req.headers, host: `${BACKEND_HOST}:${BACKEND_PORT}` }
       const proxyReq = http.request(
-        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: req.url, method: 'GET', headers: { ...req.headers, host: `${BACKEND_HOST}:${BACKEND_PORT}` } },
+        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: reqUrl, method: 'GET', headers: proxyHeaders },
         (proxyRes) => { proxyRes.pipe(socket) }
       )
       proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-        socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`)
+        const headers = Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')
+        socket.write(`HTTP/1.1 101 Switching Protocols\r\n${headers}\r\n\r\n`)
+        if (proxyHead && proxyHead.length > 0) socket.write(proxyHead)
         proxySocket.pipe(socket)
         socket.pipe(proxySocket)
       })
-      proxyReq.on('error', () => { socket.end() })
+      proxyReq.on('error', (err) => {
+        console.error('[FrontendWS] Proxy error:', err.message)
+        socket.end()
+      })
       proxyReq.end()
     }
   })
