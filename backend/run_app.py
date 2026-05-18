@@ -22,6 +22,9 @@ if not os.path.isdir(app_path):
 # Set db_path relative to user data dir instead of bundle
 os.environ.setdefault('LH_DB_PATH', os.path.join(os.path.expanduser('~'), '.lianghua', 'market.db'))
 
+# Force PyInstaller to discover all imports (must be at module level)
+import app.main  # noqa: F401
+
 import argparse
 
 def parse_args():
