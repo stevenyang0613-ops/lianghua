@@ -197,14 +197,7 @@ def _health_response() -> dict:
         "version": settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
-}
-
-    return {
-        "status": "ok",
-        "app": settings.app_name,
-        "version": settings.app_version,
-        "market_running": engine_running,
-        "db_ok": db_ok,
+        "ws_auth_token": settings.ws_auth_token,
     }
 
 
@@ -212,7 +205,3 @@ def _health_response() -> dict:
 async def health_v1():
     return _health_response()
 
-
-@app.get("/api/v1/health")
-async def health_v1():
-    return _health_response()

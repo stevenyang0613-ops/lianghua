@@ -103,9 +103,12 @@ async def verify_ws_auth(websocket: WebSocket) -> bool:
     """Verify WebSocket authentication token and connection limits."""
     token = websocket.query_params.get("token", "")
     if not token or token != settings.ws_auth_token:
+        logger.warning(f"[WS] Auth failed: token_present={bool(token)}, expected_set={bool(settings.ws_auth_token)}, token_len={len(token)}, expected_len={len(settings.ws_auth_token)}")
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
         await websocket.close(code=4001, reason="Unauthorized")
         return False
+
+    logger.info("[WS] Auth successful")
 
     total = active_market_connections + active_signal_connections
     if total >= 50:

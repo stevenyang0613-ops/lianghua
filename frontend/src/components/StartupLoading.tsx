@@ -94,9 +94,15 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
   useEffect(() => {
     if (backendConnected) return
 
-    const cleanup = window.electronAPI?.onBackendReady?.((port: number) => {
-      console.log('[StartupLoading] Received backend-ready event from main process, port:', port)
+    const cleanup = window.electronAPI?.onBackendReady?.((data: any) => {
+      const port = typeof data === 'object' ? data.port : data
+      const token = typeof data === 'object' ? data.ws_auth_token : undefined
+      console.log('[StartupLoading] Received backend-ready event, port:', port, 'hasToken:', !!token)
       setBackendPort(port)
+      if (token) {
+        setWsAuthToken(token)
+        refreshWsToken()
+      }
       setBackendConnected(true)
     })
 

@@ -15,19 +15,17 @@ class Quote(BaseModel):
     timestamp: datetime
 
 @router.get("/quotes", response_model=List[Quote])
-async def get_quotes(request: Request, symbols: str = Query(...)):
+async def get_quotes(request: Request, symbols: Optional[str] = Query(None)):
     engine = getattr(request.app.state, "engine", None)
     storage = getattr(request.app.state, "storage", None)
 
     symbol_list = symbols.split(",") if symbols else []
-    if not symbol_list:
-        return []
 
     if engine:
         quotes = await engine.get_all_quotes()
         result = []
         for q in quotes:
-            if q.code in symbol_list:
+            if not symbol_list or q.code in symbol_list:
                 result.append(Quote(
                     symbol=q.code,
                     name=q.name,
@@ -44,7 +42,7 @@ async def get_quotes(request: Request, symbols: str = Query(...)):
         rows = storage.get_latest_quotes()
         result = []
         for r in rows:
-            if r.get("code") in symbol_list:
+            if not symbol_list or r.get("code") in symbol_list:
                 result.append(Quote(
                     symbol=r.get("code", ""),
                     name=r.get("name", ""),

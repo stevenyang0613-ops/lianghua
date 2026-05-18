@@ -59,6 +59,7 @@ const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
 const BACKEND_STARTUP_TIMEOUT = 180000
 const HEALTH_CHECK_INTERVAL = 1000
 const FRONTEND_PORT = 8766
+const WS_AUTH_TOKEN = 'lianghua_electron_' + crypto.randomBytes(16).toString('hex')
 const MAX_PORT_FALLBACK = 3
 
 // Forward declaration
@@ -161,6 +162,9 @@ function httpRequestHandler(
           parsed = JSON.parse(data)
         } catch {
           parsed = data
+        }
+        if (typeof parsed === 'object' && parsed !== null && url.includes('/health')) {
+          parsed.ws_auth_token = WS_AUTH_TOKEN
         }
         resolve({
           ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300,
@@ -275,8 +279,24 @@ function startFrontendServer(frontendDir: string) {
       const proxyReq = http.request(
         { hostname: BACKEND_HOST, port: BACKEND_PORT, path: url, method: req.method, headers: req.headers },
         (proxyRes) => {
-          res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
-          proxyRes.pipe(res)
+          if (url.includes('/health')) {
+            let body = ''
+            proxyRes.on('data', (chunk: Buffer) => { body += chunk.toString() })
+            proxyRes.on('end', () => {
+              try {
+                const data = JSON.parse(body)
+                data.ws_auth_token = WS_AUTH_TOKEN
+                res.writeHead(200, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify(data))
+              } catch {
+                res.writeHead(proxyRes.statusCode || 500)
+                res.end(body)
+              }
+            })
+          } else {
+            res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
+            proxyRes.pipe(res)
+          }
         }
       )
       proxyReq.on('error', () => { res.writeHead(502); res.end('Backend unavailable') })
@@ -635,6 +655,7 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
   pythonProcess = spawn(pythonCmd, args, {
     cwd: backendDir,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, LH_WS_AUTH_TOKEN: WS_AUTH_TOKEN },
   })
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
@@ -695,7 +716,7 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
       console.log('[Electron] Backend is ready, notifying renderer')
       const actualPort = parseInt(args[args.indexOf('--port') + 1])
       savePreferredPort(actualPort)
-      mainWindow?.webContents.send('backend-ready', { port: actualPort })
+      mainWindow?.webContents.send('backend-ready', { port: actualPort, ws_auth_token: WS_AUTH_TOKEN })
       startHealthMonitor()
     } else {
       console.error('[Electron] Backend did not become ready in time')
@@ -1016,7 +1037,13 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
       wsConnections.delete(wsId)
     }
 
-    const ws = new WebSocket(url)
+    // Inject WS_AUTH_TOKEN into the URL to ensure token matches backend
+    const parsedUrl = new URL(url)
+    parsedUrl.searchParams.set('token', WS_AUTH_TOKEN)
+    const correctedUrl = parsedUrl.toString()
+    console.log(`[WS ${wsId}] Connecting: ${parsedUrl.origin}${parsedUrl.pathname}?token=***`)
+
+    const ws = new WebSocket(correctedUrl)
 
     ws.on('open', () => {
       mainWindow?.webContents.send('ws-state', wsId, 'open')

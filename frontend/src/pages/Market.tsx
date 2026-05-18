@@ -66,8 +66,7 @@ export default function Market() {
       .catch((err) => {
         console.error('Failed to fetch quotes:', err)
         setLoading(false)
-        setBackendConnected(false)
-        message.error('连接后端失败，请检查服务是否启动')
+        message.error('加载行情数据失败')
       })
   }, [setAllBonds, setBackendConnected])
 
