@@ -269,7 +269,22 @@ function startFrontendServer(frontendDir: string) {
     frontendServer = null
   }
   frontendServer = http.createServer((req, res) => {
-    let filePath = req.url || '/'
+    const url = req.url || '/'
+
+    if (url.startsWith('/api/')) {
+      const proxyReq = http.request(
+        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: url, method: req.method, headers: req.headers },
+        (proxyRes) => {
+          res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
+          proxyRes.pipe(res)
+        }
+      )
+      proxyReq.on('error', () => { res.writeHead(502); res.end('Backend unavailable') })
+      req.pipe(proxyReq)
+      return
+    }
+
+    let filePath = url
     if (filePath === '/') filePath = '/index.html'
     const fullPath = path.join(frontendDir, filePath)
     try {
@@ -284,8 +299,25 @@ function startFrontendServer(frontendDir: string) {
       res.end('Not Found')
     }
   })
+
+  frontendServer.on('upgrade', (req, socket, head) => {
+    if ((req.url || '').startsWith('/ws')) {
+      const proxyReq = http.request(
+        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: req.url, method: 'GET', headers: { ...req.headers, host: `${BACKEND_HOST}:${BACKEND_PORT}` } },
+        (proxyRes) => { proxyRes.pipe(socket) }
+      )
+      proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+        socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`)
+        proxySocket.pipe(socket)
+        socket.pipe(proxySocket)
+      })
+      proxyReq.on('error', () => { socket.end() })
+      proxyReq.end()
+    }
+  })
+
   frontendServer.listen(FRONTEND_PORT, '127.0.0.1', () => {
-    console.log(`[Frontend] Server running on http://127.0.0.1:${FRONTEND_PORT}`)
+    console.log(`[Frontend] Server running on http://127.0.0.1:${FRONTEND_PORT} (proxy /api/* -> :${BACKEND_PORT})`)
   })
 }
 
