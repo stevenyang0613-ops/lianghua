@@ -6,7 +6,6 @@
   "main": "electron/dist/main.js",
   "private": true,
   "scripts": {
-    "dev": "chmod +x scripts/dev.sh && ./scripts/dev.sh",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
     "dev:electron": "npm run build:electron-ts && concurrently \"cd frontend && npm run dev\" \"wait-on http://localhost:5173 && electron .\"",

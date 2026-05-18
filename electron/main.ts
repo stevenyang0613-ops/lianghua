@@ -22,6 +22,27 @@ let isQuitting = false
 const isDev = !app.isPackaged
 
 // ---- Resource path helper ----
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase()
+  const mime: Record<string, string> = {
+    '.html': 'text/html',
+    '.js': 'application/javascript',
+    '.css': 'text/css',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.map': 'application/json',
+  }
+  return mime[ext] || 'application/octet-stream'
+}
+
 function resourcePath(relativePath: string): string {
   if (isDev) {
     return path.join(__dirname, '..', relativePath)
@@ -37,6 +58,7 @@ const BACKEND_HOST = '127.0.0.1'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
 const BACKEND_STARTUP_TIMEOUT = 180000
 const HEALTH_CHECK_INTERVAL = 1000
+const FRONTEND_PORT = 8766
 const MAX_PORT_FALLBACK = 3
 
 // Forward declaration
@@ -237,6 +259,34 @@ function startHealthMonitor() {
       healthFailCount = 0
     }
   }, HEALTH_MONITOR_INTERVAL)
+}
+
+let frontendServer: http.Server | null = null
+
+function startFrontendServer(frontendDir: string) {
+  if (frontendServer) {
+    frontendServer.close()
+    frontendServer = null
+  }
+  frontendServer = http.createServer((req, res) => {
+    let filePath = req.url || '/'
+    if (filePath === '/') filePath = '/index.html'
+    const fullPath = path.join(frontendDir, filePath)
+    try {
+      let content = fs.readFileSync(fullPath, 'utf-8')
+      if (filePath.endsWith('.html')) {
+        content = content.replace(/\bcrossorigin(="")?\b/g, '')
+      }
+      res.writeHead(200, { 'Content-Type': getMimeType(fullPath) })
+      res.end(content)
+    } catch {
+      res.writeHead(404)
+      res.end('Not Found')
+    }
+  })
+  frontendServer.listen(FRONTEND_PORT, '127.0.0.1', () => {
+    console.log(`[Frontend] Server running on http://127.0.0.1:${FRONTEND_PORT}`)
+  })
 }
 
 function stopHealthMonitor() {
@@ -828,7 +878,7 @@ function createWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
   } else {
-    mainWindow.loadFile(path.join(process.resourcesPath, 'frontend', 'index.html'))
+    mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`)
   }
 
   // Handle frontend loading errors
@@ -1215,9 +1265,7 @@ ipcMain.handle('create-chart-window', (_event, bondCode: string, bondName: strin
   if (isDev) {
     win.loadURL(`http://localhost:5173#/chart/${bondCode}`)
   } else {
-    win.loadFile(path.join(process.resourcesPath, 'frontend', 'index.html'), {
-      hash: `/chart/${bondCode}`,
-    })
+    win.loadURL(`http://127.0.0.1:${FRONTEND_PORT}#/chart/${bondCode}`)
   }
 
   win.on('closed', () => { childWindows.delete(id) })
@@ -1244,9 +1292,7 @@ ipcMain.handle('create-detail-window', (_event, bondCode: string, bondName: stri
   if (isDev) {
     win.loadURL(`http://localhost:5173#/detail/${bondCode}`)
   } else {
-    win.loadFile(path.join(process.resourcesPath, 'frontend', 'index.html'), {
-      hash: `/detail/${bondCode}`,
-    })
+    win.loadURL(`http://127.0.0.1:${FRONTEND_PORT}#/detail/${bondCode}`)
   }
 
   win.on('closed', () => { childWindows.delete(id) })
@@ -1443,6 +1489,12 @@ process.on('unhandledRejection', (reason: any) => {
 // ============================================================
 
 app.whenReady().then(() => {
+  if (!isDev) {
+    const frontendDir = isDev
+        ? path.join(__dirname, '..', 'frontend', 'dist')
+        : path.join(process.resourcesPath, 'frontend')
+    startFrontendServer(frontendDir)
+  }
   startPythonBackend()
   createApplicationMenu()
   createTrayIcon()
@@ -1490,5 +1542,9 @@ app.on('before-quit', () => {
   if (pythonProcess) {
     pythonProcess.kill()
     pythonProcess = null
+  }
+  if (frontendServer) {
+    frontendServer.close()
+    frontendServer = null
   }
 })
