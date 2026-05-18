@@ -9,6 +9,18 @@ import { initFirstScreenOptimize } from './utils/firstScreenOptimize'
 // 初始化首屏优化
 initFirstScreenOptimize()
 
+// Global error handlers for debugging
+window.addEventListener('error', (event) => {
+  console.error('[Global Error]', event.error?.message || event.message, event.error?.stack)
+  if ((window as any).electronAPI) {
+    console.error('[Global Error] Sending to main process...')
+  }
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[Unhandled Rejection]', event.reason)
+})
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>

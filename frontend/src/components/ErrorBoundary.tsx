@@ -47,6 +47,27 @@ export default class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     this.setState({ errorInfo })
 
+    // Send error to main process for logging
+    if (window.electronAPI) {
+      window.electronAPI.httpRequest?.('POST', '/api/errors', {
+        message: error.message,
+        stack: error.stack,
+        componentStack: errorInfo.componentStack,
+        url: window.location.href,
+        timestamp: Date.now(),
+      }).catch(() => {
+        // Fallback: send via IPC if HTTP fails
+        ;(window as any).electronAPI?.httpRequest?.('POST', '/api/errors', {
+          message: error.message,
+          stack: error.stack,
+          componentStack: errorInfo.componentStack,
+        })
+      })
+    }
+
+    console.error('[ErrorBoundary] Caught error:', error.message)
+    console.error('[ErrorBoundary] Component stack:', errorInfo.componentStack)
+
     logError({
       type: 'react',
       message: error.message,

@@ -949,6 +949,18 @@ function createWindow() {
     }
   })
 
+  mainWindow.webContents.on('console-message', (_event, level, message, _line, sourceId) => {
+    if (level >= 2) { // warning=2, error=3
+      console.error(`[Renderer] ${sourceId}:${_line} ${message}`)
+    }
+  })
+
+  // Capture unhandled renderer errors
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[Renderer] Process gone: ${details.reason} (exitCode: ${details.exitCode})`)
+    recordCrash('renderer', `Renderer process gone: ${details.reason}`)
+  })
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
@@ -1133,6 +1145,14 @@ ipcMain.handle('ws-state', async (_event, wsId: string) => {
     [WebSocket.CLOSED]: 'closed',
   }
   return { state: stateMap[ws.readyState] || 'unknown' }
+})
+
+// ---- Error reporting from renderer ----
+ipcMain.on('renderer-error', (_event, errorInfo: { message: string; stack?: string; componentStack?: string; url?: string }) => {
+  console.error(`[Renderer Error] ${errorInfo.message}`)
+  if (errorInfo.stack) console.error(`[Renderer Error] Stack: ${errorInfo.stack}`)
+  if (errorInfo.componentStack) console.error(`[Renderer Error] Component: ${errorInfo.componentStack}`)
+  recordCrash('renderer', errorInfo.message, errorInfo.stack)
 })
 
 // ---- Notifications ----
