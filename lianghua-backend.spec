@@ -1,22 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+akshare_data = collect_data_files('akshare')
+
 a = Analysis(
     ['backend/run_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('backend/app', 'app')],
+    datas=[('backend/app', 'app')] + akshare_data,
     hiddenimports=[
         'uvicorn', 'fastapi', 'starlette', 'pydantic',
-        'duckdb', 'pandas', 'httpx',
+        'app.main', 'app.config',
+        'app.api.router', 'app.api.auth', 'app.api.backtest',
+        'app.api.strategies', 'app.api.health', 'app.api.metrics',
+        'app.api.score', 'app.api.settings', 'app.api.signals',
+        'app.api.trade', 'app.api.ws', 'app.api.community',
+        'app.api.accounts', 'app.api.data_source',
+        'app.engine.market', 'app.engine.storage', 'app.engine.scheduler',
+        'app.engine.signals', 'app.engine.trade', 'app.engine.backtest',
+        'app.adapters.akshare',
+        'duckdb', 'pandas', 'numpy', 'akshare',
+        'httpx', 'aiohttp', 'multidict', 'yarl',
         'jose', 'passlib', 'passlib.handlers.bcrypt',
-        'bcrypt', 'cryptography', 'slowapi',
-        'sqlalchemy', 'aiosqlite', 'httptools',
-        'websockets', 'aiofiles', 'aiohttp',
-        'numpy', 'multidict', 'yarl',
+        'bcrypt', 'cryptography',
+        'slowapi', 'limits',
+        'sqlalchemy', 'aiosqlite',
+        'httptools', 'websockets', 'aiofiles',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'PIL', 'scipy', 'IPython', 'mypyc'],
+    excludes=['matplotlib', 'PIL', 'scipy', 'IPython', 'mypyc', 'tkinter', 'PyQt5', 'PySide2', 'PyQt6', 'PySide6'],
     noarchive=False,
     optimize=0,
 )
