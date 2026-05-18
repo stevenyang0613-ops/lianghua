@@ -98,10 +98,10 @@ export class WSReconnect {
       // 注册 IPC 事件监听
       const unsubState = window.electronAPI!.onWsState((id: string, state: string, code?: number, reason?: string) => {
         if (id !== this.wsId) return
-        if (state === 'connected') {
+        if (state === 'open') {
           this.clearConnectionTimeout()
           this.onConnected()
-        } else if (state === 'disconnected' || state === 'error') {
+        } else if (state === 'closed' || state === 'error') {
           this.clearConnectionTimeout()
           this.onDisconnected(code || 1000, reason || '')
         }
