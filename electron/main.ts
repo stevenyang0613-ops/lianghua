@@ -35,7 +35,7 @@ const APP_VERSION = '1.0.0'
 const BACKEND_PORT = 8765
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
-const BACKEND_STARTUP_TIMEOUT = 120000
+const BACKEND_STARTUP_TIMEOUT = 180000
 const HEALTH_CHECK_INTERVAL = 1000
 const MAX_PORT_FALLBACK = 3
 
@@ -540,6 +540,11 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
       })
       return
     }
+  }
+
+  if (pythonProcess) {
+    pythonProcess.kill()
+    pythonProcess = null
   }
 
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
