@@ -20,24 +20,3 @@ router.include_router(signal_router, prefix="", tags=["signals"])
 router.include_router(score_router, prefix="/analysis", tags=["score"])
 
 
-@router.get("/health")
-async def api_health_check(request: Request):
-    """API兼容的健康检查端点 - 路径: /api/v1/health"""
-    from app.config import settings
-    engine_running = False
-    db_ok = False
-    try:
-        engine = getattr(request.app.state, "engine", None)
-        engine_running = engine and engine.is_running
-    except Exception:
-        pass
-    try:
-        db_ok = getattr(request.app.state, "storage", None) is not None
-    except Exception:
-        pass
-    return {
-        "status": "ok",
-        "app": settings.app_name,
-        "market_running": engine_running,
-        "db_ok": db_ok,
-    }

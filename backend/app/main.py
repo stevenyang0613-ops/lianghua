@@ -177,7 +177,7 @@ app.include_router(router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_root():
-    return {"status": "ok"}
+    return _health_response()
 
 
 def _health_response() -> dict:
@@ -191,17 +191,33 @@ def _health_response() -> dict:
         db_ok = getattr(app.state, "storage", None) is not None
     except Exception:
         pass
-    return {
+    token = settings.ws_auth_token
+    result = {
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
-        "ws_auth_token": settings.ws_auth_token,
+        "ws_auth_token": token,
     }
+    return result
 
 
 @app.get("/api/v1/health")
 async def health_v1():
     return _health_response()
 
+
+@app.get("/debug/settings")
+async def debug_settings():
+    try:
+        from app.config import settings
+        import os
+        return {
+            "ws_auth_token": settings.ws_auth_token,
+            "ws_auth_token_len": len(settings.ws_auth_token),
+            "env_LH_WS_AUTH_TOKEN": os.environ.get("LH_WS_AUTH_TOKEN", ""),
+            "has_token_file": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "data", ".ws_token")),
+        }
+    except Exception as e:
+        return {"error": str(e)}
