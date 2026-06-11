@@ -13,6 +13,8 @@ const { Title, Text } = Typography
 const { RangePicker } = DatePicker
 
 export default function ReportCenter() {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [reports, setReports] = useState<GeneratedReport[]>([])
   const [createModalVisible, setCreateModalVisible] = useState(false)
   const [form] = Form.useForm()
@@ -272,7 +274,7 @@ export default function ReportCenter() {
             dataSource={reports}
             columns={columns}
             rowKey="id"
-            pagination={{ pageSize: 20 }}
+            pagination={{ current: page, pageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setPage(p); setPageSize(ps) } }}
             size="small"
           />
         )}

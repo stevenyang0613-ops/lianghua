@@ -442,7 +442,7 @@ class SteadyStateChecker:
             import requests
             response = requests.get(f"{base_url}/health", timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -457,7 +457,7 @@ class SteadyStateChecker:
             elapsed = (time.time() - start) * 1000
 
             return response.status_code == 200 and elapsed < max_ms
-        except:
+        except Exception:
             return False
 
     @staticmethod

@@ -3,6 +3,8 @@
  * 策略自动执行和订单管理
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface AutoTradeConfig {
   enabled: boolean
   strategy: string
@@ -72,7 +74,8 @@ function generateId(): string {
 // 获取配置
 export function getAutoTradeConfig(): AutoTradeConfig {
   const saved = localStorage.getItem(CONFIG_KEY)
-  return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG
+  const parsed = safeJsonParse<Partial<AutoTradeConfig>>(saved, {})
+  return { ...DEFAULT_CONFIG, ...parsed }
 }
 
 // 更新配置
@@ -86,7 +89,7 @@ export function updateAutoTradeConfig(updates: Partial<AutoTradeConfig>): AutoTr
 // 获取订单列表
 export function getAutoTradeOrders(): AutoTradeOrder[] {
   const saved = localStorage.getItem(ORDERS_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<AutoTradeOrder[]>(saved, [])
 }
 
 // 添加订单
@@ -125,7 +128,7 @@ export function updateOrderStatus(id: string, status: AutoTradeOrder['status'], 
 // 获取日志
 export function getAutoTradeLogs(): AutoTradeLog[] {
   const saved = localStorage.getItem(LOGS_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<AutoTradeLog[]>(saved, [])
 }
 
 // 添加日志
@@ -175,7 +178,7 @@ export function shouldExecuteTrade(
 
   // 检查置信度
   if (signal.confidence < config.minConfidence) {
-    return { should: false, reason: `置信度 ${signal.confidence.toFixed(2)} 低于阈值 ${config.minConfidence}` }
+    return { should: false, reason: `置信度 ${(signal.confidence ?? 0).toFixed(2)} 低于阈值 ${config.minConfidence}` }
   }
 
   // 检查排除列表

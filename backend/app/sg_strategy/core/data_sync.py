@@ -406,7 +406,8 @@ class CBDataSyncTask(SyncTask):
             if df.empty:
                 return []
             return sorted(df['date'].unique().tolist())
-        except:
+        except Exception as e:
+            logger.warning("[CBDataSync] get_existing_dates failed: %s", e)
             return []
 
 
@@ -446,7 +447,8 @@ class StockDataSyncTask(SyncTask):
             if df.empty:
                 return []
             return sorted(df['date'].unique().tolist())
-        except:
+        except Exception as e:
+            logger.warning("[StockDataSync] get_existing_dates failed: %s", e)
             return []
 
 

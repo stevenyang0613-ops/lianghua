@@ -171,8 +171,9 @@ const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
           if (!Array.isArray(params)) return ''
           let html = `<div style="font-weight:bold">${params[0].axisValue}</div>`
           params.forEach((p: any) => {
-            if (p.value !== null) {
-              html += `<div>${p.marker} ${p.seriesName}: ${p.value?.toFixed(4) || '-'}</div>`
+            const v = p.value
+            if (v != null && typeof v === 'number' && Number.isFinite(v)) {
+              html += `<div>${p.marker} ${p.seriesName}: ${v.toFixed(4)}</div>`
             }
           })
           return html

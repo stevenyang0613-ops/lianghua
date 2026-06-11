@@ -316,20 +316,20 @@ export default function OpsDashboard() {
           <Card>
             <Statistic
               title="内存使用"
-              value={health.memory.toFixed(1)}
+              value={(health.memory ?? 0).toFixed(1)}
               suffix="%"
-              valueStyle={{ color: health.memory > 80 ? '#ff4d4f' : health.memory > 60 ? '#faad14' : undefined }}
+              valueStyle={{ color: (health.memory ?? 0) > 80 ? '#ff4d4f' : (health.memory ?? 0) > 60 ? '#faad14' : undefined }}
             />
-            <Progress percent={health.memory} showInfo={false} strokeColor={health.memory > 80 ? '#ff4d4f' : health.memory > 60 ? '#faad14' : '#52c41a'} />
+            <Progress percent={health.memory ?? 0} showInfo={false} strokeColor={(health.memory ?? 0) > 80 ? '#ff4d4f' : (health.memory ?? 0) > 60 ? '#faad14' : '#52c41a'} />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
             <Statistic
               title="API 延迟"
-              value={health.apiLatency.toFixed(0)}
+              value={(health.apiLatency ?? 0).toFixed(0)}
               suffix="ms"
-              valueStyle={{ color: health.apiLatency > 500 ? '#ff4d4f' : health.apiLatency > 200 ? '#faad14' : undefined }}
+              valueStyle={{ color: (health.apiLatency ?? 0) > 500 ? '#ff4d4f' : (health.apiLatency ?? 0) > 200 ? '#faad14' : undefined }}
             />
           </Card>
         </Col>
@@ -414,7 +414,7 @@ export default function OpsDashboard() {
                 <List.Item>
                   <List.Item.Meta
                     title={item.name}
-                    description={`${item.duration.toFixed(2)}ms - ${new Date(item.timestamp).toLocaleTimeString()}`}
+                    description={`${(item.duration ?? 0).toFixed(2)}ms - ${new Date(item.timestamp).toLocaleTimeString()}`}
                   />
                   <Tag color={item.duration > 1000 ? 'red' : item.duration > 500 ? 'orange' : 'blue'}>
                     {item.duration > 1000 ? '慢' : item.duration > 500 ? '中' : '快'}

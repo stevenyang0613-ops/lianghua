@@ -3,7 +3,7 @@ import { render } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import Market from '../Market'
 
-const mockStore = {
+const mockStore: { allBonds: any[]; [k: string]: any } = {
   allBonds: [],
   updatedAt: '',
   loading: false,
@@ -80,5 +80,22 @@ describe('Market page', () => {
       </BrowserRouter>
     )
     expect(container.querySelector('.ant-skeleton')).toBeDefined()
+  })
+
+  it('行情数据列头可点击排序(代码、价格、涨跌幅等)', async () => {
+    // 给 mock 添加可转债数据,让 virtual table 渲染而不是显示空状态
+    mockStore.allBonds = [
+      { code: '113001', name: 'A', price: 100, change_pct: 1.0, premium_ratio: 10, dual_low: 110, volume: 1, remaining_years: 2, is_called: false, call_status: '', last_trade_date: null, maturity_date: null, redemption_price: null, forced_call_days: 5 } as any,
+    ]
+    const { container, findByTestId } = render(
+      <BrowserRouter>
+        <Market />
+      </BrowserRouter>
+    )
+    // 等待 fetchAllQuotes 完成后,loading 变为 false,virtual table 渲染
+    const priceHeader = await findByTestId('vt-sort-price', undefined, { timeout: 3000 })
+    expect(priceHeader).toBeTruthy()
+    // 强赎状态列不应可排序
+    expect(container.querySelector('[data-testid="vt-sort-call_status"]')).toBeNull()
   })
 })

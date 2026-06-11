@@ -8,8 +8,12 @@ import { RobotOutlined, PauseCircleOutlined, HistoryOutlined, CheckCircleOutline
 import { getAutoTradeConfig, updateAutoTradeConfig, getAutoTradeOrders, getAutoTradeLogs, clearAutoTradeLogs, getAutoTradeStats, type AutoTradeConfig, type AutoTradeOrder, type AutoTradeLog } from '../utils/autoTrader'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import { fmt } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
+
+
+
 
 export default function AutoTrade() {
   const [config, setConfig] = useState<AutoTradeConfig>(getAutoTradeConfig())
@@ -75,7 +79,7 @@ export default function AutoTrade() {
       title: '价格',
       dataIndex: 'price',
       width: 80,
-      render: (v: number) => v.toFixed(2),
+      render: (v: number) => fmt(v),
     },
     {
       title: '数量',
@@ -86,7 +90,7 @@ export default function AutoTrade() {
       title: '置信度',
       dataIndex: 'confidence',
       width: 80,
-      render: (v: number) => `${(v * 100).toFixed(0)}%`,
+      render: (v: number) => `${fmt((v ?? 0) * 100, 0)}%`,
     },
     {
       title: '状态',
@@ -163,7 +167,7 @@ export default function AutoTrade() {
                 <Statistic title="买入/卖出" value={`${stats.buyOrders}/${stats.sellOrders}`} />
               </Col>
               <Col span={4}>
-                <Statistic title="平均置信度" value={(stats.avgConfidence * 100).toFixed(0)} suffix="%" />
+                <Statistic title="平均置信度" value={fmt((stats.avgConfidence ?? 0) * 100, 0)} suffix="%" />
               </Col>
             </Row>
           </Col>

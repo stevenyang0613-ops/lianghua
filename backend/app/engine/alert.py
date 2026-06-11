@@ -1,10 +1,13 @@
 import asyncio
+import logging
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
 from collections import defaultdict
 
 from app.models.alert import AlertCondition, AlertTrigger, AlertType
 from app.models.convertible import ConvertibleQuote
+
+logger = logging.getLogger(__name__)
 
 
 class AlertEngine:
@@ -61,7 +64,7 @@ class AlertEngine:
                 try:
                     await callback(trigger)
                 except Exception as e:
-                    print(f"[AlertEngine] Callback error: {e}")
+                    logger.warning(f"[AlertEngine] Callback error: {e}")
 
         return triggers
 

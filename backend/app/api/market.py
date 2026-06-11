@@ -1,9 +1,21 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 router = APIRouter()
+
+
+def _iso(value) -> Optional[str]:
+    """将 date/datetime 序列化为 ISO 字符串;None 透传"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat() if value.time() == datetime.min.time() else value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    s = str(value).strip()
+    return s if s else None
 
 class Quote(BaseModel):
     symbol: str
@@ -14,48 +26,190 @@ class Quote(BaseModel):
     volume: int
     timestamp: datetime
 
-@router.get("/quotes", response_model=List[Quote])
-async def get_quotes(request: Request, symbols: Optional[str] = Query(None)):
+@router.get("/quotes")
+async def get_quotes(request: Request, symbols: str = Query(None)):
     engine = getattr(request.app.state, "engine", None)
     storage = getattr(request.app.state, "storage", None)
 
     symbol_list = symbols.split(",") if symbols else []
 
+    def quote_to_dict(q) -> dict:
+        return {
+            "code": q.code,
+            "name": getattr(q, "name", ""),
+            "price": getattr(q, "price", 0),
+            "change_pct": getattr(q, "change_pct", 0),
+            "stock_price": getattr(q, "stock_price", 0),
+            "stock_change_pct": getattr(q, "stock_change_pct", 0),
+            "conversion_price": getattr(q, "conversion_price", 0),
+            "conversion_value": getattr(q, "conversion_value", 0),
+            "premium_ratio": getattr(q, "premium_ratio", 0),
+            "dual_low": getattr(q, "dual_low", 0),
+            "ytm": getattr(q, "ytm", 0),
+            "volume": getattr(q, "volume", 0),
+            "remaining_years": getattr(q, "remaining_years", 0),
+            "forced_call_days": getattr(q, "forced_call_days", 0),
+            "is_called": bool(getattr(q, "is_called", False)),
+            "call_status": str(getattr(q, "call_status", "") or ""),
+            "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
+            "maturity_date": _iso(getattr(q, "maturity_date", None)),
+            "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+        }
+
+    def row_to_dict(r: dict) -> dict:
+        return {
+            "code": r.get("code", ""),
+            "name": r.get("name", ""),
+            "price": float(r.get("price", 0)),
+            "change_pct": float(r.get("change_pct", 0)),
+            "stock_price": float(r.get("stock_price", 0)),
+            "stock_change_pct": float(r.get("stock_change_pct", 0)),
+            "conversion_price": float(r.get("conversion_price", 0)),
+            "conversion_value": float(r.get("conversion_value", 0)),
+            "premium_ratio": float(r.get("premium_ratio", 0)),
+            "dual_low": float(r.get("dual_low", 0)),
+            "ytm": float(r.get("ytm", 0)),
+            "volume": float(r.get("volume", 0)) if r.get("volume") else 0,
+            "remaining_years": float(r.get("remaining_years", 0)),
+            "forced_call_days": int(r.get("forced_call_days", 0)),
+            "is_called": bool(r.get("is_called") or False),
+            "call_status": str(r.get("call_status", "") or ""),
+            "last_trade_date": _iso(r.get("last_trade_date")),
+            "maturity_date": _iso(r.get("maturity_date")),
+            "redemption_price": float(r.get("redemption_price", 0) or 0.0),
+        }
+
     if engine:
         quotes = await engine.get_all_quotes()
-        result = []
-        for q in quotes:
-            if not symbol_list or q.code in symbol_list:
-                result.append(Quote(
-                    symbol=q.code,
-                    name=q.name,
-                    price=q.price,
-                    change=q.change_pct,
-                    changePercent=q.change_pct,
-                    volume=int(q.volume) if q.volume else 0,
-                    timestamp=datetime.now(timezone.utc)
-                ))
-        if result:
-            return result
+        result = [quote_to_dict(q) for q in quotes if not symbol_list or q.code in symbol_list]
+        if not symbol_list:
+            return {
+                "total": len(result),
+                "bonds": result,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        return result
 
     if storage:
         rows = storage.get_latest_quotes()
-        result = []
-        for r in rows:
-            if not symbol_list or r.get("code") in symbol_list:
-                result.append(Quote(
-                    symbol=r.get("code", ""),
-                    name=r.get("name", ""),
-                    price=float(r.get("price", 0)),
-                    change=float(r.get("change_pct", 0)),
-                    changePercent=float(r.get("change_pct", 0)),
-                    volume=int(r.get("volume", 0)) if r.get("volume") else 0,
-                    timestamp=datetime.now(timezone.utc)
-                ))
-        if result:
-            return result
+        result = [row_to_dict(r) for r in rows if not symbol_list or r.get("code") in symbol_list]
+        if not symbol_list:
+            return {
+                "total": len(result),
+                "bonds": result,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        return result
 
+    if not symbol_list:
+        return {"total": 0, "bonds": [], "updated_at": ""}
     return []
+
+
+@router.get("/quotes/{code}")
+async def get_quote_by_code(request: Request, code: str):
+    """获取单个可转债的实时报价（前端 fetchQuote 使用）"""
+    engine = getattr(request.app.state, "engine", None)
+    storage = getattr(request.app.state, "storage", None)
+
+    def quote_to_dict(q) -> dict:
+        return {
+            "code": q.code,
+            "name": getattr(q, "name", ""),
+            "price": getattr(q, "price", 0),
+            "change_pct": getattr(q, "change_pct", 0),
+            "stock_price": getattr(q, "stock_price", 0),
+            "stock_change_pct": getattr(q, "stock_change_pct", 0),
+            "conversion_price": getattr(q, "conversion_price", 0),
+            "conversion_value": getattr(q, "conversion_value", 0),
+            "premium_ratio": getattr(q, "premium_ratio", 0),
+            "dual_low": getattr(q, "dual_low", 0),
+            "ytm": getattr(q, "ytm", 0),
+            "volume": getattr(q, "volume", 0),
+            "remaining_years": getattr(q, "remaining_years", 0),
+            "forced_call_days": getattr(q, "forced_call_days", 0),
+            "is_called": bool(getattr(q, "is_called", False)),
+            "call_status": str(getattr(q, "call_status", "") or ""),
+            "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
+            "maturity_date": _iso(getattr(q, "maturity_date", None)),
+            "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def row_to_dict(r: dict) -> dict:
+        return {
+            "code": r.get("code", ""),
+            "name": r.get("name", ""),
+            "price": float(r.get("price", 0)),
+            "change_pct": float(r.get("change_pct", 0)),
+            "stock_price": float(r.get("stock_price", 0)),
+            "stock_change_pct": float(r.get("stock_change_pct", 0)),
+            "conversion_price": float(r.get("conversion_price", 0)),
+            "conversion_value": float(r.get("conversion_value", 0)),
+            "premium_ratio": float(r.get("premium_ratio", 0)),
+            "dual_low": float(r.get("dual_low", 0)),
+            "ytm": float(r.get("ytm", 0)),
+            "volume": float(r.get("volume", 0)) if r.get("volume") else 0,
+            "remaining_years": float(r.get("remaining_years", 0)),
+            "forced_call_days": int(r.get("forced_call_days", 0)),
+            "is_called": bool(r.get("is_called") or False),
+            "call_status": str(r.get("call_status", "") or ""),
+            "last_trade_date": _iso(r.get("last_trade_date")),
+            "maturity_date": _iso(r.get("maturity_date")),
+            "redemption_price": float(r.get("redemption_price", 0) or 0.0),
+            "timestamp": str(r.get("timestamp", "")),
+        }
+
+    if engine:
+        quote = await engine.get_quote(code)
+        if quote:
+            return quote_to_dict(quote)
+
+    if storage:
+        for row in storage.get_latest_quotes():
+            if row.get("code") == code:
+                return row_to_dict(row)
+
+    raise HTTPException(status_code=404, detail=f"Quote for {code} not found")
+
+
+@router.get("/exchangeable")
+async def get_exchangeable_bonds(request: Request):
+    """获取可交换债(EB)行情数据"""
+    engine = getattr(request.app.state, "engine", None)
+
+    def quote_to_dict(q) -> dict:
+        return {
+            "code": q.code,
+            "name": getattr(q, "name", ""),
+            "price": getattr(q, "price", 0),
+            "change_pct": getattr(q, "change_pct", 0),
+            "stock_price": getattr(q, "stock_price", 0),
+            "conversion_price": getattr(q, "conversion_price", 0),
+            "conversion_value": getattr(q, "conversion_value", 0),
+            "premium_ratio": getattr(q, "premium_ratio", 0),
+            "dual_low": getattr(q, "dual_low", 0),
+            "volume": getattr(q, "volume", 0),
+            "remaining_years": getattr(q, "remaining_years", 0),
+            "forced_call_days": getattr(q, "forced_call_days", 0),
+            "is_called": bool(getattr(q, "is_called", False)),
+            "call_status": str(getattr(q, "call_status", "") or ""),
+            "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
+            "maturity_date": _iso(getattr(q, "maturity_date", None)),
+            "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+        }
+
+    if engine and engine.adapter:
+        eb_bonds = await engine.adapter.fetch_exchangeable_bonds()
+        result = [quote_to_dict(q) for q in eb_bonds]
+        return {
+            "total": len(result),
+            "bonds": result,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    return {"total": 0, "bonds": [], "updated_at": ""}
+
 
 @router.get("/kline")
 async def get_kline(request: Request, symbol: str, period: str = "1d", limit: int = 100):

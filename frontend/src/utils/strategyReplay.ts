@@ -181,7 +181,7 @@ class StrategyReplayEngine {
 
     this.steps.forEach(s => {
       if (s.totalValue > maxValue) maxValue = s.totalValue
-      const drawdown = (maxValue - s.totalValue) / maxValue
+      const drawdown = maxValue > 0 ? (maxValue - s.totalValue) / maxValue : 0
       if (drawdown > maxDrawdown) maxDrawdown = drawdown
     })
 

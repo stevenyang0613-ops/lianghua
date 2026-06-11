@@ -4,6 +4,7 @@
  */
 
 import { fetchAllQuotes, fetchDualLowRanking, fetchForcedRedemption, fetchPulseScan } from '../services/api'
+import { safeJsonParse } from './safeJson'
 
 const WARMUP_ENABLED_KEY = 'preload_data'
 const WARMUP_STATUS_KEY = 'warmup_status'
@@ -26,10 +27,7 @@ const warmupTasks: { name: string; fn: () => Promise<unknown> }[] = [
 
 function loadStatus(): WarmupStatus {
   const saved = localStorage.getItem(WARMUP_STATUS_KEY)
-  if (saved) {
-    return JSON.parse(saved)
-  }
-  return { lastWarmup: null, duration: 0, successCount: 0, errorCount: 0, errors: [] }
+  return safeJsonParse<WarmupStatus>(saved, { lastWarmup: null, duration: 0, successCount: 0, errorCount: 0, errors: [] })
 }
 
 function saveStatus(status: WarmupStatus): void {

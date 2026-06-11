@@ -72,7 +72,6 @@ export function BaseChart({
     if (!containerRef.current) return
 
     const chart = echarts.init(containerRef.current, theme)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     chartRef.current = chart as any
     setIsReady(true)
     onChartReady?.(chart as any)
@@ -149,14 +148,7 @@ export function exportChartImage(chart: ECharts, filename = 'chart'): void {
   link.click()
 }
 
-/**
- * 获取图表实例
- */
-export function useChartInstance(): React.MutableRefObject<ECharts | null> {
-  return chartRef
-}
-
-// 用于 useChartInstance hook
-const chartRef = { current: null as ECharts | null }
+// useChartInstance 需要在 BaseChart 内部调用，这里作为类型导出
+export type { ECharts } from 'echarts'
 
 export default BaseChart

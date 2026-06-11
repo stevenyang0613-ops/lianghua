@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { fetchSignals, fetchAvailableSignalsStrategies, setActiveStrategies, executeSignal, batchExecuteSignals, fetchSignalHistory, fetchSignalStats, type TradeSignal, type StrategyInfoItem, type SignalHistoryItem, type SignalStats } from '../services/api'
 import { signalsWs } from '../utils/wsInstances'
-import { notification } from 'antd'
+import { useAppStore } from './useAppStore'
 
 interface SignalState {
   signals: TradeSignal[]
@@ -12,7 +12,6 @@ interface SignalState {
   total: number
   loading: boolean
   error: string | null
-  wsConnected: boolean
   loadSignals: () => Promise<void>
   loadAvailableStrategies: () => Promise<void>
   loadHistory: (strategy?: string, code?: string) => Promise<void>
@@ -20,12 +19,15 @@ interface SignalState {
   setStrategies: (strategies: string[]) => Promise<void>
   execute: (code: string) => Promise<void>
   batchExecute: () => Promise<number>
-  connectWs: () => () => void
-  disconnectWs: () => void
+  subscribeWs: () => () => void
 }
 
 let wsSubCleanups: (() => void)[] = []
-let reconnectNotifyCount = 0
+let wsRefCount = 0
+// Request deduplication: stale loadSignals responses are discarded
+let _loadSignalsSeq = 0
+// Debounce WS reconnect → loadSignals to prevent flood during reconnection cycles
+let _reconnectLoadTimer: ReturnType<typeof setTimeout> | null = null
 
 export const useSignalStore = create<SignalState>((set, get) => ({
   signals: [],
@@ -36,14 +38,17 @@ export const useSignalStore = create<SignalState>((set, get) => ({
   total: 0,
   loading: false,
   error: null,
-  wsConnected: signalsWs.isConnected(),
 
   loadSignals: async () => {
+    const seq = ++_loadSignalsSeq
     set({ loading: true, error: null })
     try {
       const data = await fetchSignals()
+      // Discard stale responses — only the latest request updates state
+      if (seq !== _loadSignalsSeq) return
       set({ signals: data.signals, activeStrategies: data.active_strategies, total: data.total, loading: false })
     } catch (e) {
+      if (seq !== _loadSignalsSeq) return
       set({ error: String(e), loading: false })
     }
   },
@@ -52,30 +57,30 @@ export const useSignalStore = create<SignalState>((set, get) => ({
     try {
       const data = await fetchAvailableSignalsStrategies()
       set({ availableStrategies: data.strategies })
-    } catch { /* ignore */ }
+    } catch { /* non-critical */ }
   },
 
   loadHistory: async (strategy?, code?) => {
     try {
       const data = await fetchSignalHistory(strategy, code, 200)
       set({ history: data.signals })
-    } catch { /* ignore */ }
+    } catch { /* non-critical */ }
   },
 
   loadStats: async () => {
     try {
       const data = await fetchSignalStats()
       set({ stats: data })
-    } catch { /* ignore */ }
+    } catch { /* non-critical */ }
   },
 
   setStrategies: async (strategies) => {
     set({ loading: true, error: null })
     try {
       const data = await setActiveStrategies(strategies)
-      set({ activeStrategies: data.active_strategies, loading: false })
       const sigData = await fetchSignals()
-      set({ signals: sigData.signals, total: sigData.total })
+      // Atomic update: single set() to avoid race with WS message handler
+      set({ activeStrategies: data.active_strategies, signals: sigData.signals, total: sigData.total, loading: false })
     } catch (e) {
       set({ error: String(e), loading: false })
     }
@@ -105,50 +110,60 @@ export const useSignalStore = create<SignalState>((set, get) => ({
     }
   },
 
-  connectWs: () => {
-    // Clean up any existing subscriptions
-    get().disconnectWs()
+  subscribeWs: () => {
+    wsRefCount++
 
-    const unsubMsg = signalsWs.subscribe('signals', (data) => {
-      const signals = (data as TradeSignal[]).filter((s: TradeSignal) => !s.executed)
-      set({ signals, total: (data as TradeSignal[]).length })
-    })
-
-    const unsubState = signalsWs.onStateChange((state) => {
-      set({ wsConnected: state === 'connected' })
-      if (state === 'connected') {
-        if (reconnectNotifyCount >= 3) {
-          notification.success({ message: 'WebSocket 已重连', description: `经过 ${reconnectNotifyCount} 次重试后恢复连接`, duration: 5 })
+    if (wsRefCount === 1) {
+      const unsubMsg = signalsWs.subscribe('signals', (data) => {
+        try {
+          // Handle both array and { signals: [...] } formats defensively
+          let all: TradeSignal[]
+          if (Array.isArray(data)) {
+            all = data
+          } else if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).signals)) {
+            all = (data as Record<string, unknown>).signals as TradeSignal[]
+          } else {
+            return
+          }
+          const signals = all.filter((s: TradeSignal) => !s.executed)
+          queueMicrotask(() => {
+            try { set({ signals, total: all.length }) } catch (e) { console.error('[SignalStore] setState error:', e) }
+          })
+        } catch (e) {
+          console.error('[SignalStore] WS message handler error:', e)
         }
-        reconnectNotifyCount = 0
-        get().loadSignals()
-      } else if (state === 'reconnecting') {
-        reconnectNotifyCount = signalsWs.getAttemptCount()
-        if (reconnectNotifyCount >= 3 && reconnectNotifyCount % 3 === 0) {
-          notification.warning({ message: 'WebSocket 连接异常', description: `已重试 ${reconnectNotifyCount} 次，请检查后端服务是否正常运行`, duration: 8 })
+      })
+
+      // WS state change: debounced loadSignals on reconnect, auto-reconnect guard.
+      // Does NOT track wsConnected here — use useAppStore.signalWsConnected instead.
+      const unsubState = signalsWs.onStateChange((state) => {
+        if (state === 'connected') {
+          // Debounce: coalesce rapid reconnection cycles into a single loadSignals
+          if (_reconnectLoadTimer) clearTimeout(_reconnectLoadTimer)
+          _reconnectLoadTimer = setTimeout(() => {
+            _reconnectLoadTimer = null
+            // Only loadSignals if backend is connected (prevents API calls during backend outage)
+            if (useAppStore.getState().backendConnected) {
+              get().loadSignals().catch(() => {})
+            }
+          }, 2000)
         }
-      }
-    })
+        // Auto-reconnect guard — only if backend is up
+        if (!signalsWs.isConnected() && signalsWs.getState() === 'disconnected' && useAppStore.getState().backendConnected) {
+          signalsWs.connect()
+        }
+      })
 
-    const unsubLatency = signalsWs.onLatencyWarning((latency, consecutiveHigh) => {
-      if (consecutiveHigh >= 3 && consecutiveHigh % 3 === 0) {
-        notification.warning({ message: 'WS 延迟过高', description: `连续 ${consecutiveHigh} 次延迟 >500ms，当前 ${latency}ms，请检查网络状况`, duration: 8 })
-      }
-    })
-
-    wsSubCleanups = [unsubMsg, unsubState, unsubLatency]
-
-    if (!signalsWs.isConnected() && signalsWs.getState() === 'disconnected') {
-      signalsWs.connect()
+      wsSubCleanups = [unsubMsg, unsubState]
     }
 
-    return () => get().disconnectWs()
-  },
-
-  disconnectWs: () => {
-    wsSubCleanups.forEach(fn => fn())
-    wsSubCleanups = []
-    signalsWs.disconnect()
-    set({ wsConnected: false })
+    return () => {
+      wsRefCount = Math.max(0, wsRefCount - 1)
+      if (wsRefCount === 0) {
+        wsSubCleanups.forEach(fn => { try { fn() } catch { /* ignore */ } })
+        wsSubCleanups = []
+        if (_reconnectLoadTimer) { clearTimeout(_reconnectLoadTimer); _reconnectLoadTimer = null }
+      }
+    }
   },
 }))

@@ -135,11 +135,11 @@ export default React.memo(function BacktestHistoryTab() {
     for (let i = 0; i < n; i++) {
       cols.push({ title: `#${compareData.items[i].summary.id} 收益`, width: 90, render: (_: unknown, r: any) => {
         const d = r.details?.[i]
-        return d ? <span style={{ color: returnColor(d.avg_return_pct) }}>{d.avg_return_pct.toFixed(2)}%</span> : '-'
+        return d ? <span style={{ color: returnColor(d.avg_return_pct) }}>{(d.avg_return_pct ?? 0).toFixed(2)}%</span> : '-'
       }})
       cols.push({ title: `#${compareData.items[i].summary.id} 胜率`, width: 70, render: (_: unknown, r: any) => {
         const d = r.details?.[i]
-        return d ? `${d.win_rate.toFixed(1)}%` : '-'
+        return d ? `${(d.win_rate ?? 0).toFixed(1)}%` : '-'
       }})
     }
     return cols
@@ -345,7 +345,7 @@ export default React.memo(function BacktestHistoryTab() {
                     const dates = detailRows.map(d => d.date.slice(5))
                     const drawdowns = detailRows.map(d => -d.max_drawdown)
                     const option = {
-                      tooltip: { trigger: 'axis' as const, formatter: (ps: any) => `${ps[0].name}<br/>回撤: ${ps[0].value.toFixed(2)}%` },
+                      tooltip: { trigger: 'axis' as const, formatter: (ps: any) => `${ps[0].name}<br/>回撤: ${(ps[0].value ?? 0).toFixed(2)}%` },
                       grid: { left: 50, right: 20, top: 20, bottom: 30 },
                       xAxis: { type: 'category' as const, data: dates, axisLabel: { fontSize: 9 } },
                       yAxis: { type: 'value' as const, name: '%', max: 0 },
@@ -409,7 +409,7 @@ export default React.memo(function BacktestHistoryTab() {
               {(() => {
                 const data = detailRows.map(d => [d.max_drawdown, d.avg_return_pct, d.date.slice(5)])
                 const option = {
-                  tooltip: { formatter: (p: any) => `${p.data[2]}<br/>回撤: -${p.data[0].toFixed(2)}%<br/>收益: ${p.data[1].toFixed(2)}%` },
+                  tooltip: { formatter: (p: any) => `${p.data[2]}<br/>回撤: -${(p.data[0] ?? 0).toFixed(2)}%<br/>收益: ${(p.data[1] ?? 0).toFixed(2)}%` },
                   grid: { left: 50, right: 20, top: 20, bottom: 30 },
                   xAxis: { type: 'value' as const, name: '回撤%', inverse: true, axisLabel: { formatter: (v: number) => `-${v}%` } },
                   yAxis: { type: 'value' as const, name: '收益%', axisLabel: { formatter: (v: number) => `${v}%` } },
@@ -447,13 +447,13 @@ export default React.memo(function BacktestHistoryTab() {
                 const s = item.summary
                 return `<div class="card" style="border-left:3px solid ${COMPARE_COLORS[i % COMPARE_COLORS.length]}"><h3>${COMPARE_LABELS[i]} #${s.id}</h3>
                   <p>区间: ${s.start_date} ~ ${s.end_date}</p><p>参数: TopN=${s.top_n}, 持有=${s.hold_days}天</p>
-                  <div class="stat"><div><div class="val ${s.avg_return_pct > 0 ? 'pos' : 'neg'}">${s.avg_return_pct.toFixed(2)}%</div><div>平均收益</div></div>
-                  <div><div class="val">${s.win_rate.toFixed(1)}%</div><div>胜率</div></div>
+                  <div class="stat"><div><div class="val ${(s.avg_return_pct ?? 0) > 0 ? 'pos' : 'neg'}">${(s.avg_return_pct ?? 0).toFixed(2)}%</div><div>平均收益</div></div>
+                  <div><div class="val">${(s.win_rate ?? 0).toFixed(1)}%</div><div>胜率</div></div>
                   <div><div class="val">${s.total_periods}</div><div>期数</div></div></div></div>`
               }).join('\n')
               const thCells = compareData.items.map((_, i) => `<th>${COMPARE_LABELS[i]}收益</th><th>${COMPARE_LABELS[i]}胜率</th>`).join('')
               const rows = compareTableData.map((r: any) => {
-                const cells = r.details.map((d: any) => d ? `<td>${d.avg_return_pct.toFixed(2)}%</td><td>${d.win_rate.toFixed(1)}%</td>` : '<td>-</td><td>-</td>').join('')
+                const cells = r.details.map((d: any) => d ? `<td>${(d.avg_return_pct ?? 0).toFixed(2)}%</td><td>${(d.win_rate ?? 0).toFixed(1)}%</td>` : '<td>-</td><td>-</td>').join('')
                 return `<tr><td>${r.date}</td>${cells}</tr>`
               }).join('')
               const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>回测对比报告</title>
@@ -471,7 +471,7 @@ export default React.memo(function BacktestHistoryTab() {
               const headerParts = compareData.items.map((_, i) => `${COMPARE_LABELS[i]}收益%,${COMPARE_LABELS[i]}胜率%`)
               const header = `日期,${headerParts.join(',')}`
               const rows = compareTableData.map((r: any) => {
-                const cells = r.details.map((d: any) => d ? `${d.avg_return_pct.toFixed(2)},${d.win_rate.toFixed(1)}` : ',').join(',')
+                const cells = r.details.map((d: any) => d ? `${(d.avg_return_pct ?? 0).toFixed(2)},${(d.win_rate ?? 0).toFixed(1)}` : ',').join(',')
                 return `${r.date},${cells}`
               })
               const summaryLines = compareData.items.map((item, i) =>
@@ -592,7 +592,7 @@ export default React.memo(function BacktestHistoryTab() {
                   const option = {
                     tooltip: { trigger: 'axis' as const, formatter: (ps: any) => {
                       let s = ps[0].axisValue
-                      for (const p of ps) s += `<br/>${p.seriesName}: -${p.value.toFixed(2)}%`
+                      for (const p of ps) s += `<br/>${p.seriesName}: -${(p.value ?? 0).toFixed(2)}%`
                       return s
                     } },
                     legend: { data: compareData.items.map((item, i) => `${COMPARE_LABELS[i]} #${item.summary.id}`) },
@@ -662,12 +662,12 @@ export default React.memo(function BacktestHistoryTab() {
                 return (
                   <Card size="small" title="收益相关性矩阵" style={{ marginBottom: 16 }}>
                     <ReactEChartsCore echarts={echarts} option={{
-                      tooltip: { formatter: (p: any) => `${labels[p.data[0]]} vs ${labels[p.data[1]]}<br/>相关系数: ${p.data[2].toFixed(2)}` },
+                      tooltip: { formatter: (p: any) => `${labels[p.data[0]]} vs ${labels[p.data[1]]}<br/>相关系数: ${(p.data[2] ?? 0).toFixed(2)}` },
                       grid: { left: 80, right: 30, top: 10, bottom: 40 },
                       xAxis: { type: 'category' as const, data: labels, axisLabel: { fontSize: 10 } },
                       yAxis: { type: 'category' as const, data: labels, axisLabel: { fontSize: 10 } },
                       visualMap: { min: -1, max: 1, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#3f8600', '#f0f0f0', '#cf1322'] }, textStyle: { fontSize: 10 } },
-                      series: [{ type: 'heatmap', data, label: { show: true, formatter: (p: any) => p.data[2].toFixed(2), fontSize: 10 } }],
+                      series: [{ type: 'heatmap', data, label: { show: true, formatter: (p: any) => (p.data[2] ?? 0).toFixed(2), fontSize: 10 } }],
                     }} style={{ height: 180 }} />
                   </Card>
                 )

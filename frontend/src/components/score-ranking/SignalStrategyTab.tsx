@@ -11,16 +11,19 @@ import {
   type TradeSignal, type StrategyInfoItem, type SignalHistoryItem, type DedupPreset, type WsStats, type SignalsHealth, type StrategyVerifyResult, type ExecutedPosition,
 } from '../../services/api'
 import { useSignalStore } from '../../stores/useSignalStore'
+import { useAppStore } from '../../stores/useAppStore'
 import { signalsWs } from '../../utils/wsInstances'
 import type { WsLogEntry } from '../../utils/wsReconnect'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
 import echarts from '../../utils/echarts'
 
 export default React.memo(function SignalStrategyTab() {
-  const {
-    signals, activeStrategies, wsConnected,
-    loadSignals, setStrategies, connectWs,
-  } = useSignalStore()
+  const signals = useSignalStore((s) => s.signals)
+  const activeStrategies = useSignalStore((s) => s.activeStrategies)
+  const wsConnected = useAppStore((s) => s.signalWsConnected)
+  const loadSignals = useSignalStore((s) => s.loadSignals)
+  const setStrategies = useSignalStore((s) => s.setStrategies)
+  const subscribeWs = useSignalStore((s) => s.subscribeWs)
 
   const [availableStrategies, setAvailableStrategies] = useState<StrategyInfoItem[]>([])
   const [strategyParamJson, setStrategyParamJson] = useState('{}')
@@ -88,11 +91,12 @@ export default React.memo(function SignalStrategyTab() {
   useEffect(() => {
     loadData()
     loadSignalHistory()
-    const cleanup = connectWs()
+    const cleanup = subscribeWs()
     fetchDedupConfig().then(c => { setDedupWindow(c.window_seconds); setDedupThreshold(c.price_threshold) }).catch(() => {})
     fetchDedupPresets().then(p => setDedupPresets(p)).catch(() => {})
     return cleanup
-  }, [loadData, connectWs, loadSignalHistory])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Debounce search: auto-query when strategy or code changes
   useEffect(() => {
@@ -120,7 +124,7 @@ export default React.memo(function SignalStrategyTab() {
         if (preset && (dedupWindow !== preset.window_seconds || Math.abs(dedupThreshold - preset.price_threshold) > 0.001)) {
           setDedupWindow(preset.window_seconds)
           setDedupThreshold(preset.price_threshold)
-          message.info(`已自动匹配 ${ids[0]} 去重预设: ${preset.window_seconds}s / ${(preset.price_threshold * 100).toFixed(0)}%`, 3)
+          message.info(`已自动匹配 ${ids[0]} 去重预设: ${preset.window_seconds}s / ${((preset.price_threshold ?? 0) * 100).toFixed(0)}%`, 3)
         }
       }
     } catch { message.error('更新策略失败') }
@@ -155,7 +159,7 @@ export default React.memo(function SignalStrategyTab() {
     try {
       const res = await setAutoExecuteConfig(autoExecuteThreshold)
       setAutoExecuteThreshold(res.auto_execute_min_confidence)
-      message.success(`自动执行阈值已设为 ${(res.auto_execute_min_confidence * 100).toFixed(0)}%`)
+      message.success(`自动执行阈值已设为 ${((res.auto_execute_min_confidence ?? 0) * 100).toFixed(0)}%`)
     } catch {
       message.error('更新自动执行阈值失败')
     }
@@ -208,12 +212,12 @@ export default React.memo(function SignalStrategyTab() {
     { title: '已执行', dataIndex: 'executed', width: 70, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? '是' : '否'}</Tag> },
     { title: '操作', width: 80, render: (_: unknown, r: TradeSignal) => !r.executed ? (
       <Popconfirm title={(() => {
-        const slippage = r.action === 'buy' ? 0.05 : 0.05
-        const estPrice = r.price * (r.action === 'buy' ? 1 + slippage / 100 : 1 - slippage / 100)
+        const slippage = 0.05
+        const estPrice = r.price ? r.price * (r.action === 'buy' ? 1 + slippage / 100 : 1 - slippage / 100) : undefined
         return <div>
           <div>确认执行 {r.code} {r.action === 'buy' ? '买入' : '卖出'}？</div>
           <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
-            委托价: {r.price?.toFixed(3)} → 预估成交: {estPrice.toFixed(3)}
+            委托价: {Number.isFinite(r.price) ? r.price!.toFixed(3) : '-'} → 预估成交: {Number.isFinite(estPrice) ? estPrice!.toFixed(3) : '-'}
           </div>
           <div style={{ fontSize: 11, color: '#faad14' }}>预估滑点: ~{slippage}%</div>
         </div>
@@ -257,7 +261,7 @@ export default React.memo(function SignalStrategyTab() {
     { title: '名称', dataIndex: 'name', width: 110, ellipsis: true },
     { title: '动作', dataIndex: 'action', width: 70, render: (v: string) => <Tag color={v === 'buy' ? 'green' : 'red'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
     { title: '价格', dataIndex: 'price', width: 75, render: (v: number) => v?.toFixed(3), sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => (a.price ?? 0) - (b.price ?? 0) },
-    { title: '置信度', dataIndex: 'confidence', width: 80, render: (v: number) => (v * 100).toFixed(0) + '%', sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => a.confidence - b.confidence },
+    { title: '置信度', dataIndex: 'confidence', width: 80, render: (v: number) => ((v ?? 0) * 100).toFixed(0) + '%', sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => a.confidence - b.confidence },
     { title: '原因', dataIndex: 'reason', width: 180, ellipsis: true },
     { title: '时间', dataIndex: 'ts', width: 130, render: (v: string) => dayjs(v).format('MM-DD HH:mm'), sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => new Date(a.ts).getTime() - new Date(b.ts).getTime() },
     { title: '已执行', dataIndex: 'executed', width: 60, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? '是' : '否'}</Tag>, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => Number(a.executed) - Number(b.executed) },
@@ -311,7 +315,7 @@ export default React.memo(function SignalStrategyTab() {
               <span style={{ marginRight: 8 }}>策略置信度 Sharpe:</span>
               {sharpeList.sort((a, b) => b.sharpe - a.sharpe).map(s => (
                 <Tag key={s.name} color={s.sharpe >= 1 ? 'green' : s.sharpe >= 0.5 ? 'blue' : 'orange'} style={{ fontSize: 11 }}>
-                  {s.name}: {s.sharpe.toFixed(2)} ({s.count}信号)
+                  {s.name}: {(s.sharpe ?? 0).toFixed(2)} ({s.count}信号)
                 </Tag>
               ))}
             </div>
@@ -435,7 +439,7 @@ export default React.memo(function SignalStrategyTab() {
       </Card>
       <Card size="small" title={`实时信号 (${signals.length})`}>
         {signals.length > 0 ? (
-          <Table dataSource={signals} rowKey="code" size="small" pagination={{ pageSize: 10 }} columns={signalColumns}
+          <Table dataSource={signals} rowKey={(r) => `${r.code}-${r.strategy}`} size="small" pagination={{ pageSize: 10 }} columns={signalColumns}
             rowClassName={(r) => executedCodes.has(r.code) ? 'signal-executed-row' : ''} />
         ) : <Empty description="暂无信号，WebSocket连接后实时推送" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
       </Card>
@@ -503,7 +507,7 @@ export default React.memo(function SignalStrategyTab() {
         {signalHistory.length > 0 ? (
           <Table
             dataSource={filteredHistory}
-            rowKey="ts"
+            rowKey={(r: any) => r.id || `${r.code}-${r.ts}`}
             size="small"
             columns={historyColumns}
             pagination={{
@@ -552,11 +556,11 @@ export default React.memo(function SignalStrategyTab() {
           const totalSlippage = totalAmount * slippageRate
           return (
             <Row gutter={12} style={{ marginBottom: 8 }}>
-              <Col span={4}><Statistic title="成交金额" value={totalAmount.toFixed(0)} suffix="元" valueStyle={{ fontSize: 14 }} /></Col>
+              <Col span={4}><Statistic title="成交金额" value={(totalAmount ?? 0).toFixed(0)} suffix="元" valueStyle={{ fontSize: 14 }} /></Col>
               <Col span={3}><Statistic title="买入" value={buyCount} suffix="笔" valueStyle={{ fontSize: 14, color: '#52c41a' }} /></Col>
               <Col span={3}><Statistic title="卖出" value={sellCount} suffix="笔" valueStyle={{ fontSize: 14, color: '#cf1322' }} /></Col>
-              <Col span={4}><Statistic title="预估佣金" value={totalCommission.toFixed(2)} suffix="元" valueStyle={{ fontSize: 14, color: '#faad14' }} /></Col>
-              <Col span={4}><Statistic title="预估滑点" value={totalSlippage.toFixed(2)} suffix="元" valueStyle={{ fontSize: 14, color: '#faad14' }} /></Col>
+              <Col span={4}><Statistic title="预估佣金" value={(totalCommission ?? 0).toFixed(2)} suffix="元" valueStyle={{ fontSize: 14, color: '#faad14' }} /></Col>
+              <Col span={4}><Statistic title="预估滑点" value={(totalSlippage ?? 0).toFixed(2)} suffix="元" valueStyle={{ fontSize: 14, color: '#faad14' }} /></Col>
               <Col span={6}><Statistic title="总成本占比" value={((totalCommission + totalSlippage) / Math.max(totalAmount, 1) * 100).toFixed(3)} suffix="%" valueStyle={{ fontSize: 14, color: ((totalCommission + totalSlippage) / Math.max(totalAmount, 1)) > 0.002 ? '#cf1322' : '#3f8600' }} /></Col>
             </Row>
           )
@@ -564,7 +568,7 @@ export default React.memo(function SignalStrategyTab() {
         {executedPositions.length > 0 ? (
           <Table
             dataSource={filteredExecuted}
-            rowKey="ts"
+            rowKey={(r: any) => `${r.code}-${r.ts}`}
             size="small"
             pagination={{
               current: executedPage,
@@ -598,7 +602,7 @@ export default React.memo(function SignalStrategyTab() {
               </div>
             </Col>
             <Col span={3}>
-              <Statistic title="行情流量" value={(wsStats.messages.market_bytes_sent / 1024).toFixed(1)} suffix="KB" />
+              <Statistic title="行情流量" value={((wsStats?.messages?.market_bytes_sent ?? 0) / 1024).toFixed(1)} suffix="KB" />
             </Col>
             <Col span={4}>
               <Statistic title="信号消息" value={wsStats.messages.signal_messages_sent} />
@@ -607,7 +611,7 @@ export default React.memo(function SignalStrategyTab() {
               )}
             </Col>
             <Col span={3}>
-              <Statistic title="信号流量" value={(wsStats.messages.signal_bytes_sent / 1024).toFixed(1)} suffix="KB" />
+              <Statistic title="信号流量" value={((wsStats?.messages?.signal_bytes_sent ?? 0) / 1024).toFixed(1)} suffix="KB" />
             </Col>
             <Col span={5}>
               {(() => {
@@ -728,15 +732,15 @@ export default React.memo(function SignalStrategyTab() {
             <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
               <Descriptions.Item label="测试期数">{verifyResult.summary.total_periods}</Descriptions.Item>
               <Descriptions.Item label="过拟合期数">
-                <span style={{ color: verifyResult.summary.overfit_ratio > 0.5 ? '#cf1322' : '#3f8600' }}>{verifyResult.summary.overfit_periods} ({(verifyResult.summary.overfit_ratio * 100).toFixed(0)}%)</span>
+                <span style={{ color: (verifyResult.summary.overfit_ratio ?? 0) > 0.5 ? '#cf1322' : '#3f8600' }}>{verifyResult.summary.overfit_periods} {((verifyResult.summary.overfit_ratio ?? 0) * 100).toFixed(0)}%</span>
               </Descriptions.Item>
               <Descriptions.Item label="平均年化收益">
-                <span style={{ color: verifyResult.summary.avg_test_return > 0 ? '#cf1322' : '#3f8600' }}>{(verifyResult.summary.avg_test_return * 100).toFixed(2)}%</span>
+                <span style={{ color: (verifyResult.summary.avg_test_return ?? 0) > 0 ? '#cf1322' : '#3f8600' }}>{((verifyResult.summary.avg_test_return ?? 0) * 100).toFixed(2)}%</span>
               </Descriptions.Item>
-              <Descriptions.Item label="收益标准差">{(verifyResult.summary.std_test_return * 100).toFixed(2)}%</Descriptions.Item>
-              <Descriptions.Item label="平均回撤">{(verifyResult.summary.avg_test_drawdown * 100).toFixed(2)}%</Descriptions.Item>
-              <Descriptions.Item label="平均夏普">{verifyResult.summary.avg_test_sharpe.toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="平均胜率">{(verifyResult.summary.avg_test_win_rate * 100).toFixed(1)}%</Descriptions.Item>
+              <Descriptions.Item label="收益标准差">{((verifyResult.summary.std_test_return ?? 0) * 100).toFixed(2)}%</Descriptions.Item>
+              <Descriptions.Item label="平均回撤">{((verifyResult.summary.avg_test_drawdown ?? 0) * 100).toFixed(2)}%</Descriptions.Item>
+              <Descriptions.Item label="平均夏普">{(verifyResult?.summary?.avg_test_sharpe ?? 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="平均胜率">{((verifyResult.summary.avg_test_win_rate ?? 0) * 100).toFixed(1)}%</Descriptions.Item>
               <Descriptions.Item label="最佳时段">{verifyResult.summary.best_period}</Descriptions.Item>
             </Descriptions>
             {Object.keys(verifyResult.yearly).length > 0 && (
@@ -777,9 +781,9 @@ export default React.memo(function SignalStrategyTab() {
                   pagination={false}
                   columns={[
                     { title: '年份', dataIndex: 'year', width: 80 },
-                    { title: '年化收益', dataIndex: 'annual_return', width: 100, render: (v: number) => <span style={{ color: v > 0 ? '#cf1322' : '#3f8600' }}>{(v * 100).toFixed(2)}%</span> },
-                    { title: '最大回撤', dataIndex: 'max_drawdown', width: 100, render: (v: number) => <span style={{ color: '#3f8600' }}>-{(v * 100).toFixed(2)}%</span> },
-                    { title: '夏普', dataIndex: 'sharpe_ratio', width: 70, render: (v: number) => v.toFixed(2) },
+                    { title: '年化收益', dataIndex: 'annual_return', width: 100, render: (v: number) => <span style={{ color: (v ?? 0) > 0 ? '#cf1322' : '#3f8600' }}>{((v ?? 0) * 100).toFixed(2)}%</span> },
+                    { title: '最大回撤', dataIndex: 'max_drawdown', width: 100, render: (v: number) => <span style={{ color: '#3f8600' }}>-{((v ?? 0) * 100).toFixed(2)}%</span> },
+                    { title: '夏普', dataIndex: 'sharpe_ratio', width: 70, render: (v: number) => (v ?? 0).toFixed(2) },
                     { title: '期数', dataIndex: 'periods', width: 60 },
                   ]}
                 />

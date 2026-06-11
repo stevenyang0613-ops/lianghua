@@ -3,6 +3,8 @@
  * 记录所有交易操作便于审计和分析
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface TradeLog {
   id: string
   timestamp: number
@@ -59,7 +61,7 @@ export function getTradeLogs(options?: {
   limit?: number
 }): TradeLog[] {
   const saved = localStorage.getItem(TRADE_LOG_KEY)
-  let logs: TradeLog[] = saved ? JSON.parse(saved) : []
+  let logs: TradeLog[] = safeJsonParse<TradeLog[]>(saved, [])
 
   if (options) {
     if (options.code) {

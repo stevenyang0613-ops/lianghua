@@ -4,12 +4,18 @@
 提供数据源管理和查询接口
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date
 
-router = APIRouter(prefix='/data', tags=['data'])
+router = APIRouter(prefix='/data_sources', tags=['data'])
+
+
+@router.get("/")
+async def list_data_sources():
+    """数据源列表索引"""
+    return {"sources": [], "hint": "use /sources/status for detailed status"}
 
 
 class DataSourceStatusResponse(BaseModel):
@@ -221,4 +227,42 @@ async def clear_cache() -> dict:
     return {
         'status': 'cleared',
         'entries_removed': count,
+    }
+
+
+@router.post('/history/backfill')
+async def backfill_history(
+    request: Request,
+    days: int = Query(30, ge=5, le=365, description='回填历史天数'),
+    top_n: int = Query(0, ge=0, le=637, description='只回填前 N 只活跃转债（0=全部）'),
+) -> dict:
+    """回填可转债历史日线数据，用于计算 N 日涨跌幅。
+
+    异步执行，立即返回 task_id，可通过 GET /data_sources/history/backfill/status 查询进度。
+    """
+    import asyncio
+    from app.engine.historical import HistoricalDataLoader
+
+    storage = request.app.state.storage
+    engine = request.app.state.engine
+
+    async def _do_backfill():
+        try:
+            bonds = await engine.get_all_quotes()
+            if top_n > 0:
+                bonds = bonds[:top_n]
+            codes = [b.code for b in bonds]
+            loader = HistoricalDataLoader(storage)
+            await loader.seed_historical_data(codes, days=days)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f"[Backfill] failed: {e}")
+
+    asyncio.create_task(_do_backfill())
+
+    return {
+        'status': 'started',
+        'days': days,
+        'top_n': top_n,
+        'message': f'已启动历史数据回填任务（{days} 天），执行过程中可继续其他操作',
     }

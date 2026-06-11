@@ -181,12 +181,16 @@ function calculateMA(data: KlineData[], period: number): number[] {
   const result: number[] = []
   for (let i = 0; i < data.length; i++) {
     if (i < period - 1) {
-      result.push(NaN as unknown as number)
+      result.push(NaN)
     } else {
       let sum = 0
+      let valid = true
       for (let j = 0; j < period; j++) {
-        sum += data[i - j].close
+        const v = data[i - j]?.close
+        if (typeof v !== 'number' || !Number.isFinite(v)) { valid = false; break }
+        sum += v
       }
+      if (!valid) { result.push(NaN); continue }
       result.push(+(sum / period).toFixed(2))
     }
   }

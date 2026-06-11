@@ -7,10 +7,16 @@ import { Card, Table, Button, Space, Modal, Form, Input, InputNumber, Select, Sw
 import { BellOutlined, PlusOutlined, DeleteOutlined, EditOutlined, WarningOutlined, ClearOutlined } from '@ant-design/icons'
 import { getAlerts, addAlert, updateAlert, deleteAlert, clearAlerts, clearTriggeredAlerts, getAlertStats, getAlertLabel, ALERT_TYPE_OPTIONS, type PriceAlert } from '../utils/priceAlert'
 import type { ColumnsType } from 'antd/es/table'
+import { fmt } from '../utils/format'
 
 const { Title } = Typography
 
+
+
+
 export default function AlertManager() {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [alerts, setAlerts] = useState<PriceAlert[]>([])
   const [stats, setStats] = useState(getAlertStats())
   const [createModalVisible, setCreateModalVisible] = useState(false)
@@ -117,11 +123,11 @@ export default function AlertManager() {
       width: 100,
       render: (v: number, record) => {
         if (record.type.includes('change')) {
-          return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+          return `${v >= 0 ? '+' : ''}${fmt(v)}%`
         } else if (record.type.includes('volume')) {
-          return `${(v / 10000).toFixed(0)}万`
+          return `${fmt((v ?? 0) / 10000, 0)}万`
         }
-        return `¥${v.toFixed(2)}`
+        return `¥${fmt(v)}`
       },
     },
     {
@@ -244,7 +250,7 @@ export default function AlertManager() {
             dataSource={alerts}
             columns={columns}
             rowKey="id"
-            pagination={{ pageSize: 20 }}
+            pagination={{ current: page, pageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setPage(p); setPageSize(ps) } }}
             size="small"
             scroll={{ x: 1000 }}
           />

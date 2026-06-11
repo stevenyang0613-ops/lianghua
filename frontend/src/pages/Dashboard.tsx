@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card, Button, Space, Typography, Row, Col, Statistic, Table, List, Tag, Select, Modal, Input, message, Dropdown, Empty } from 'antd'
 import { SettingOutlined, PlusOutlined, DeleteOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, SaveOutlined } from '@ant-design/icons'
 import { getLayouts, getCurrentLayout, setCurrentLayout, createLayout, deleteLayout, addWidget, deleteWidget, duplicateLayout, exportLayout, importLayout, type DashboardLayout, type DashboardWidget } from '../utils/dashboardLayout'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
@@ -64,7 +65,7 @@ function WidgetRenderer({ widget, data }: WidgetRendererProps) {
               { title: '代码', dataIndex: 'code', width: 80 },
               { title: '名称', dataIndex: 'name', width: 100 },
               { title: '持仓', dataIndex: 'volume', width: 80 },
-              { title: '盈亏', dataIndex: 'profit', width: 100, render: (v: number) => <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f' }}>{v?.toFixed(2)}%</Text> },
+              { title: '盈亏', dataIndex: 'profit', width: 100, render: (v: number) => <Text style={{ color: (v ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmt(v)}%</Text> },
             ]}
             pagination={false}
             scroll={{ y: 200 }}

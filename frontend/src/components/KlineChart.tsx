@@ -80,7 +80,11 @@ export default function KlineChart({ data, loading, height = 500 }: KlineChartPr
           result.push(null)
         } else {
           const sum = data.slice(i - period + 1, i + 1).reduce((acc, d) => acc + d.close, 0)
-          result.push(+(sum / period).toFixed(2))
+          if (!isFinite(sum)) {
+            result.push(null)
+          } else {
+            result.push(+(sum / period).toFixed(2))
+          }
         }
       }
       return result

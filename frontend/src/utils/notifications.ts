@@ -43,7 +43,7 @@ export function sendAlertNotification(code: string, name: string, alertType: str
 
   notificationService.show({
     title: `告警: ${name} (${code})`,
-    body: `${label}阈值 ${threshold}，当前值: ${value.toFixed(2)}`,
+    body: `${label}阈值 ${threshold}，当前值: ${Number.isFinite(value) ? value.toFixed(2) : value}`,
     tag: `alert-${code}-${alertType}`,
     data: { code, alertType },
   })
@@ -99,9 +99,13 @@ class NotificationService {
   private loadSettings(): void {
     const saved = localStorage.getItem('notification_settings')
     if (saved) {
-      const settings = JSON.parse(saved)
-      this.enabled = settings.enabled ?? true
-      this.audioEnabled = settings.audioEnabled ?? true
+      try {
+        const settings = JSON.parse(saved)
+        this.enabled = settings.enabled ?? true
+        this.audioEnabled = settings.audioEnabled ?? true
+      } catch {
+        console.warn('[Notifications] Corrupted settings, using defaults')
+      }
     }
   }
 

@@ -319,7 +319,7 @@ class AlertEngine extends EventEmitter {
       cross_down: '下穿',
     }
 
-    return `[${name}] ${trigger.symbol} ${condition.field} ${operatorText[condition.operator] || condition.operator} ${condition.value}，当前值: ${trigger.value.toFixed(2)}`
+    return `[${name}] ${trigger.symbol} ${condition.field} ${operatorText[condition.operator] || condition.operator} ${condition.value}，当前值: ${Number.isFinite(trigger.value) ? trigger.value.toFixed(2) : trigger.value}`
   }
 
   private executeActions(actions: AlertAction[], event: AlertEvent): void {

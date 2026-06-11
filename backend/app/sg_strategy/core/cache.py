@@ -344,7 +344,8 @@ class RedisCache:
 
         try:
             return self._redis.exists(key) > 0
-        except:
+        except Exception as e:
+            logger.warning("[RedisCache] exists failed: %s", e)
             return False
 
     def ttl(self, key: str) -> int:
@@ -354,7 +355,8 @@ class RedisCache:
 
         try:
             return self._redis.ttl(key)
-        except:
+        except Exception as e:
+            logger.warning("[RedisCache] ttl failed: %s", e)
             return -1
 
     def incr(self, key: str, amount: int = 1) -> int:
@@ -364,7 +366,8 @@ class RedisCache:
 
         try:
             return self._redis.incrby(key, amount)
-        except:
+        except Exception as e:
+            logger.warning("[RedisCache] incr failed: %s", e)
             return 0
 
     def expire(self, key: str, ttl: int) -> bool:
@@ -374,7 +377,8 @@ class RedisCache:
 
         try:
             return self._redis.expire(key, ttl)
-        except:
+        except Exception as e:
+            logger.warning("[RedisCache] expire failed: %s", e)
             return False
 
 
@@ -406,19 +410,9 @@ class DistributedLock:
 
         for _ in range(self.config.lock_max_retries):
             try:
-                # SETNX原子操作
-                if self.redis._redis.setnx(lock_key, identifier):
-                    self.redis._redis.expire(lock_key, timeout)
+                result = self.redis._redis.set(lock_key, identifier, nx=True, ex=timeout)
+                if result:
                     return True
-
-                # 检查锁是否过期
-                current = self.redis._redis.get(lock_key)
-                if current:
-                    ttl = self.redis._redis.ttl(lock_key)
-                    if ttl < 0:
-                        # 锁已过期，尝试获取
-                        self.redis._redis.set(lock_key, identifier, ex=timeout)
-                        return True
 
             except Exception as e:
                 logger.error(f"[DistributedLock] 获取锁失败: {e}")
@@ -427,7 +421,7 @@ class DistributedLock:
 
         return False
 
-    def release(self, lock_name: str):
+    def release(self, lock_name: str, identifier: str = None):
         """释放锁"""
         if not self.redis.is_connected:
             return
@@ -435,19 +429,24 @@ class DistributedLock:
         lock_key = f"lock:{lock_name}"
 
         try:
-            self.redis._redis.delete(lock_key)
+            current = self.redis._redis.get(lock_key)
+            if current and current == identifier:
+                self.redis._redis.delete(lock_key)
         except Exception as e:
             logger.error(f"[DistributedLock] 释放锁失败: {e}")
 
     @contextmanager
     def lock(self, lock_name: str, timeout: int = None):
         """锁上下文管理器"""
+        timeout = timeout or self.config.lock_timeout
+        lock_key = f"lock:{lock_name}"
+        identifier = f"{time.time()}_{id(self)}"
         acquired = self.acquire(lock_name, timeout)
         try:
             yield acquired
         finally:
             if acquired:
-                self.release(lock_name)
+                self.release(lock_name, identifier)
 
 
 # ============ 多级缓存管理器 ============

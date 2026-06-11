@@ -49,11 +49,13 @@ function getLocalData(): SyncData {
 
   // 自选股
   const watchlistStr = localStorage.getItem('watchlist')
-  const watchlist = watchlistStr ? JSON.parse(watchlistStr) : []
+  let watchlist: string[] = []
+  try { watchlist = watchlistStr ? JSON.parse(watchlistStr) : [] } catch { watchlist = [] }
 
   // 快捷键
   const shortcutsStr = localStorage.getItem('shortcuts')
-  const shortcuts = shortcutsStr ? JSON.parse(shortcutsStr) : {}
+  let shortcuts: Record<string, string> = {}
+  try { shortcuts = shortcutsStr ? JSON.parse(shortcutsStr) : {} } catch { shortcuts = {} }
 
   return {
     settings,

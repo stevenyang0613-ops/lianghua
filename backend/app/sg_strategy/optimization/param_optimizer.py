@@ -295,7 +295,8 @@ class GeneticOptimizer:
                 try:
                     corr = np.corrcoef(values, scores)[0, 1]
                     importance[pr.name] = abs(corr) if not np.isnan(corr) else 0
-                except:
+                except Exception as e:
+                    logger.warning("[ParamOptimizer] corrcoef failed for %s: %s", pr.name, e)
                     importance[pr.name] = 0
             else:
                 importance[pr.name] = 0
@@ -356,7 +357,7 @@ class BayesianOptimizer:
                 # 简化处理
                 for i, pr in enumerate(param_ranges):
                     importance[pr.name] = 1.0 / len(param_ranges)  # 等权重
-            except:
+            except Exception:
                 pass
 
         return OptimizationResult(

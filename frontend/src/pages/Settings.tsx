@@ -13,6 +13,7 @@ import {
   ErrorLogCard,
   LogViewerCard,
   ShortcutSettingsCard,
+  WsDiagnosticCard,
 } from '../components/settings'
 
 const { Title } = Typography
@@ -22,7 +23,7 @@ export default function Settings() {
   const [perfMetrics, setPerfMetrics] = useState(() => {
     const saved = localStorage.getItem('perf_metrics')
     if (saved) {
-      return JSON.parse(saved)
+      try { return JSON.parse(saved) } catch { /* fall through */ }
     }
     return {
       startupTime: null as number | null,
@@ -37,7 +38,7 @@ export default function Settings() {
   useEffect(() => {
     const saved = localStorage.getItem('perf_metrics')
     if (saved) {
-      setPerfMetrics(JSON.parse(saved))
+      try { setPerfMetrics(JSON.parse(saved)) } catch { /* ignore corrupt data */ }
     }
   }, [])
 
@@ -61,6 +62,7 @@ export default function Settings() {
       <UserManagementCard />
       <DisplaySettingsCard />
       <NetworkSettingsCard onSyncComplete={handleSyncComplete} />
+      <WsDiagnosticCard />
       <CacheManagementCard />
       <PerformanceMonitorCard
         avgApiTime={perfMetrics.avgApiTime}

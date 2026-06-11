@@ -4,6 +4,9 @@
   --text-color: #1f1f1f;
   --border-color: #e8e8e8;
   --hover-bg: #e6f7ff;
+  /* 表格统一字号(antd Table + 自研 VirtualTable 共享) */
+  --table-cell-font-size: 13px;
+  --table-header-font-size: 13px;
 }
 
 [data-theme='dark'] {
@@ -49,6 +52,20 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 
 [data-theme='dark'] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); }
+
+/* 行情表格统一字号 — antd + 自研 VirtualTable 共享基线 */
+.ant-table-wrapper .ant-table,
+.virtual-table {
+  font-size: var(--table-cell-font-size);
+}
+.ant-table-wrapper .ant-table-thead > tr > th,
+.virtual-table .vt-header {
+  font-size: var(--table-header-font-size);
+  font-weight: 600;
+}
+.ant-table-wrapper .ant-table-tbody > tr > td {
+  padding: 8px 12px;
+}
 
 @media (max-width: 768px) {
   .ant-table-wrapper .ant-table { font-size: 12px; }

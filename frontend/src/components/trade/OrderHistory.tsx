@@ -2,8 +2,12 @@ import { Table, Button, Empty, Tag, Typography, Space } from 'antd'
 import { ExportOutlined, HistoryOutlined } from '@ant-design/icons'
 import type { Order } from '../../stores/useTradeStore'
 import { exportTrades } from '../../utils/export'
+import { fmt } from '../../utils/format'
 
 const { Text } = Typography
+
+
+
 
 const statusColors: Record<string, string> = {
   filled: 'green',
@@ -29,7 +33,7 @@ const orderColumns = (onCancelOrder: (orderId: string) => void) => [
   { title: '代码', dataIndex: 'code', width: 90 },
   { title: '名称', dataIndex: 'name', width: 100, ellipsis: true },
   { title: '方向', dataIndex: 'side', width: 60, render: (v: string) => <Tag color={v === 'buy' ? 'red' : 'green'}>{v === 'buy' ? '买' : '卖'}</Tag> },
-  { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v.toFixed(2) },
+  { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
   { title: '数量', dataIndex: 'volume', width: 60 },
   { title: '成交', dataIndex: 'filled_volume', width: 60 },
   { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => <Tag color={statusColors[v]}>{statusLabels[v] || v}</Tag> },

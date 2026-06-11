@@ -60,6 +60,8 @@ interface PerformanceRecord {
 }
 
 export default function Performance() {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [stats, setStats] = useState(getStats())
   const [records, setRecords] = useState<PerformanceRecord[]>([])
   const [storageStats, setStorageStats] = useState(getStorageStats())
@@ -412,7 +414,7 @@ export default function Performance() {
             dataSource={records}
             columns={columns}
             rowKey={(r) => `${r.timestamp}-${r.api}`}
-            pagination={{ pageSize: 20 }}
+            pagination={{ current: page, pageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setPage(p); setPageSize(ps) } }}
             size="small"
           />
         )}
@@ -480,7 +482,7 @@ export default function Performance() {
                       title="堆使用率"
                       value={electronMetrics.memoryUsage.heapTotal > 0 ? Math.round((electronMetrics.memoryUsage.heapUsed / electronMetrics.memoryUsage.heapTotal) * 100) : 0}
                       suffix="%"
-                      valueStyle={{ color: electronMetrics.memoryUsage.heapUsed / electronMetrics.memoryUsage.heapTotal > 0.9 ? '#ff4d4f' : '#52c41a' }}
+                      valueStyle={{ color: (electronMetrics.memoryUsage.heapTotal > 0 ? electronMetrics.memoryUsage.heapUsed / electronMetrics.memoryUsage.heapTotal : 0) > 0.9 ? '#ff4d4f' : '#52c41a' }}
                     />
                   </Col>
                 </Row>
@@ -488,7 +490,7 @@ export default function Performance() {
 
               <Card title="启动时间线" style={{ marginBottom: 16 }}>
                 <Descriptions column={2} size="small">
-                  <Descriptions.Item label="应用启动">{new Date(electronMetrics.startupTime).toLocaleString('zh-CN')}</Descriptions.Item>
+                  <Descriptions.Item label="应用启动">{electronMetrics.startupTime > 0 ? new Date(electronMetrics.startupTime).toLocaleString('zh-CN') : '-'}</Descriptions.Item>
                   <Descriptions.Item label="后端就绪">{electronMetrics.backendReadyTime > 0 ? new Date(electronMetrics.backendReadyTime).toLocaleString('zh-CN') : '-'}</Descriptions.Item>
                   <Descriptions.Item label="前端加载">{electronMetrics.frontendLoadTime > 0 ? new Date(electronMetrics.frontendLoadTime).toLocaleString('zh-CN') : '-'}</Descriptions.Item>
                   <Descriptions.Item label="最后崩溃">{electronMetrics.lastCrashTime ? new Date(electronMetrics.lastCrashTime).toLocaleString('zh-CN') : '-'}</Descriptions.Item>

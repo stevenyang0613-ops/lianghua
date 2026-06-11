@@ -33,7 +33,7 @@ let records: PerformanceRecord[] = loadRecords()
 function loadConfig(): PerformanceConfig {
   const saved = localStorage.getItem(CONFIG_KEY)
   if (saved) {
-    return JSON.parse(saved)
+    try { return JSON.parse(saved) } catch { /* fall through */ }
   }
   return {
     warningThreshold: DEFAULT_THRESHOLDS.warning,
@@ -51,7 +51,7 @@ function saveConfig(): void {
 function loadRecords(): PerformanceRecord[] {
   const saved = localStorage.getItem(RECORDS_KEY)
   if (saved) {
-    return JSON.parse(saved)
+    try { return JSON.parse(saved) } catch { /* fall through */ }
   }
   return []
 }

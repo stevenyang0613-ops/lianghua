@@ -1,4 +1,6 @@
 import threading
+import uuid
+from contextlib import contextmanager
 
 import duckdb
 from datetime import datetime, date, timedelta
@@ -14,15 +16,78 @@ logger = logging.getLogger(__name__)
 class DataStorage:
     """DuckDB数据持久化存储"""
 
-    def __init__(self, db_path: str = "data/market.db"):
+    def __init__(self, db_path: str = "data/market.db", read_only: bool = False, checkpoint_interval: int = 3600, on_revision=None):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = duckdb.connect(db_path)
+        self._db_path = db_path
         self._write_lock = threading.Lock()
-        self._init_tables()
-        logger.info(f"[Storage] Connected to {db_path}")
+        self._reconnect_lock = threading.Lock()
+        self._read_only = read_only
+        self._checkpoint_interval = checkpoint_interval
+        self._checkpoint_timer: threading.Timer | None = None
+        self._on_revision = on_revision
+        self._conn = self._connect_with_recovery(db_path, read_only)
+        if not read_only:
+            self._init_tables()
+            if checkpoint_interval > 0:
+                self._start_checkpoint_timer()
+        logger.info(f"[Storage] Connected to {db_path}{' (read-only)' if read_only else ''}")
+
+    def _connect_with_recovery(self, db_path: str, read_only: bool):
+        try:
+            return duckdb.connect(db_path, read_only=read_only)
+        except Exception as e:
+            logger.warning(f"[Storage] duckdb.connect failed: {e}, attempting WAL recovery")
+            wal_path = db_path + ".wal"
+            try:
+                if Path(wal_path).exists():
+                    Path(wal_path).unlink()
+                    logger.info(f"[Storage] Deleted WAL file, retrying connect")
+                return duckdb.connect(db_path, read_only=read_only)
+            except Exception as e2:
+                logger.warning(f"[Storage] Connect after WAL delete failed: {e2}, deleting DB and WAL")
+                try:
+                    if Path(wal_path).exists():
+                        Path(wal_path).unlink()
+                    if Path(db_path).exists():
+                        Path(db_path).unlink()
+                    logger.warning(f"[Storage] Deleted DB and WAL files (history data lost), retrying connect")
+                    return duckdb.connect(db_path, read_only=read_only)
+                except Exception as e3:
+                    raise RuntimeError(
+                        f"Cannot open DuckDB at {db_path} even after deleting DB and WAL. "
+                        f"Original error: {e}. WAL-delete error: {e2}. Full-delete error: {e3}"
+                    ) from e3
+
+    @property
+    def conn(self):
+        """自动确保连接可用的 conn 属性"""
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            self._reconnect()
+        return self._conn
+
+    def _reconnect(self):
+        """重建数据库连接 - 使用 reconnect_lock 防止并发替换"""
+        with self._reconnect_lock:
+            # 双重检查：如果其他线程已经重连成功，跳过
+            try:
+                self._conn.execute("SELECT 1")
+                return
+            except Exception:
+                pass
+            logger.warning("[Storage] Connection lost, reconnecting...")
+            try:
+                self._conn.close()
+            except Exception as e:
+                logger.debug(f"[Storage] Close old connection: {e}")
+            self._conn = duckdb.connect(self._db_path, read_only=self._read_only)
+            if not self._read_only:
+                self._init_tables()
+            logger.info(f"[Storage] Reconnected to {self._db_path}")
 
     def _init_tables(self):
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS quotes_history (
                 code VARCHAR,
                 name VARCHAR,
@@ -38,11 +103,35 @@ class DataStorage:
                 volume DOUBLE,
                 remaining_years DOUBLE,
                 forced_call_days INTEGER,
+                is_called BOOLEAN DEFAULT FALSE,
+                call_status VARCHAR DEFAULT '',
+                last_trade_date DATE,
+                maturity_date DATE,
+                redemption_price DOUBLE DEFAULT 0,
                 timestamp TIMESTAMP
             )
         """)
 
-        self.conn.execute("""
+        # Migration: 给老库补字段(列已存在会抛错,吞掉)
+        # duckdb 在 DDL 失败时事务不会自动回滚,需显式 ROLLBACK
+        for ddl in (
+            "ALTER TABLE quotes_history ADD COLUMN is_called BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE quotes_history ADD COLUMN call_status VARCHAR DEFAULT ''",
+            "ALTER TABLE quotes_history ADD COLUMN last_trade_date DATE",
+            "ALTER TABLE quotes_history ADD COLUMN maturity_date DATE",
+            "ALTER TABLE quotes_history ADD COLUMN redemption_price DOUBLE DEFAULT 0",
+        ):
+            try:
+                self._conn.execute(ddl)
+                col_name = ddl.split("ADD COLUMN")[-1].strip()
+                logger.info(f"[Storage] Migrated quotes_history: {col_name}")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_snapshots (
                 code VARCHAR,
                 name VARCHAR,
@@ -56,18 +145,19 @@ class DataStorage:
             )
         """)
 
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes_history(code)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_timestamp ON quotes_history(timestamp)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes_history(code)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_timestamp ON quotes_history(timestamp)")
         try:
-            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_unique ON quotes_history(code, timestamp)")
+            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_unique ON quotes_history(code, timestamp)")
         except duckdb.ConstraintException:
             # Deduplicate existing data then retry
-            self.conn.execute("DELETE FROM quotes_history WHERE rowid NOT IN (SELECT MAX(rowid) FROM quotes_history GROUP BY code, timestamp)")
-            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_unique ON quotes_history(code, timestamp)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_snapshots(snapshot_date)")
+            self._conn.execute("DELETE FROM quotes_history WHERE rowid NOT IN (SELECT MAX(rowid) FROM quotes_history GROUP BY code, timestamp)")
+            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_unique ON quotes_history(code, timestamp)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_snapshots(snapshot_date)")
 
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS signal_history (
+                id VARCHAR,
                 strategy VARCHAR,
                 code VARCHAR,
                 name VARCHAR,
@@ -80,11 +170,12 @@ class DataStorage:
             )
         """)
 
-        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_unique ON signal_history(strategy, code, ts)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_ts ON signal_history(ts)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_code ON signal_history(code)")
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_id ON signal_history(id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_unique ON signal_history(strategy, code, ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_ts ON signal_history(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_code ON signal_history(code)")
 
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS executed_positions (
                 code VARCHAR,
                 name VARCHAR,
@@ -94,11 +185,39 @@ class DataStorage:
                 ts TIMESTAMP
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_pos_ts ON executed_positions(ts)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_pos_code ON executed_positions(code)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_pos_ts ON executed_positions(ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_pos_code ON executed_positions(code)")
+
+        # Migration: add id column to signal_history if missing
+        try:
+            self._conn.execute("SELECT id FROM signal_history LIMIT 0")
+        except Exception:
+            try:
+                self._conn.execute("ALTER TABLE signal_history ADD COLUMN id VARCHAR")
+                logger.info("[Storage] Migrated signal_history: added id column")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+
+        # Backfill: assign id to existing rows without one
+        backfill_count = self._conn.execute(
+            "SELECT COUNT(*) FROM signal_history WHERE id IS NULL"
+        ).fetchone()[0]
+        if backfill_count > 0:
+            rows = self._conn.execute(
+                "SELECT rowid FROM signal_history WHERE id IS NULL"
+            ).fetchall()
+            for (rowid,) in rows:
+                self._conn.execute(
+                    "UPDATE signal_history SET id = ? WHERE rowid = ?",
+                    (uuid.uuid4().hex[:12], rowid),
+                )
+            logger.info(f"[Storage] Backfilled id for {backfill_count} signal_history rows")
 
         # 评分历史表
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS score_history (
                 code VARCHAR,
                 name VARCHAR,
@@ -116,12 +235,12 @@ class DataStorage:
                 UNIQUE(snapshot_date, code)
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_score_date ON score_history(snapshot_date)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_score_code ON score_history(code)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_score_date ON score_history(snapshot_date)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_score_code ON score_history(code)")
 
         # 评分预警表
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS score_alerts_id_seq START 1")
-        self.conn.execute("""
+        self._conn.execute("CREATE SEQUENCE IF NOT EXISTS score_alerts_id_seq START 1")
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS score_alerts (
                 id INTEGER PRIMARY KEY DEFAULT nextval('score_alerts_id_seq'),
                 code VARCHAR,
@@ -135,11 +254,11 @@ class DataStorage:
                 UNIQUE(code, alert_type, threshold, direction)
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_score_alerts_code ON score_alerts(code)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_score_alerts_code ON score_alerts(code)")
 
         # 组合预警表（支持多条件组合）
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS combo_alerts_id_seq START 1")
-        self.conn.execute("""
+        self._conn.execute("CREATE SEQUENCE IF NOT EXISTS combo_alerts_id_seq START 1")
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS combo_alerts (
                 id INTEGER PRIMARY KEY DEFAULT nextval('combo_alerts_id_seq'),
                 name VARCHAR,
@@ -153,8 +272,8 @@ class DataStorage:
         """)
 
         # 预警历史记录表
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS alert_history_id_seq START 1")
-        self.conn.execute("""
+        self._conn.execute("CREATE SEQUENCE IF NOT EXISTS alert_history_id_seq START 1")
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS alert_history (
                 id INTEGER PRIMARY KEY DEFAULT nextval('alert_history_id_seq'),
                 alert_id INTEGER,
@@ -167,12 +286,12 @@ class DataStorage:
                 acknowledged BOOLEAN DEFAULT FALSE
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_ts ON alert_history(triggered_at)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_code ON alert_history(code)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_ts ON alert_history(triggered_at)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_code ON alert_history(code)")
 
         # 回测结果表
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS backtest_results_id_seq START 1")
-        self.conn.execute("""
+        self._conn.execute("CREATE SEQUENCE IF NOT EXISTS backtest_results_id_seq START 1")
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS backtest_results (
                 id INTEGER PRIMARY KEY DEFAULT nextval('backtest_results_id_seq'),
                 run_ts TIMESTAMP,
@@ -186,10 +305,10 @@ class DataStorage:
                 params_json VARCHAR
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_ts ON backtest_results(run_ts)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_ts ON backtest_results(run_ts)")
 
         # 回测详情表
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS backtest_details (
                 backtest_id INTEGER,
                 date VARCHAR,
@@ -202,10 +321,10 @@ class DataStorage:
                 max_drawdown DOUBLE DEFAULT 0
             )
         """)
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_detail_id ON backtest_details(backtest_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_backtest_detail_id ON backtest_details(backtest_id)")
 
         # 通用配置表（键值存储）
-        self.conn.execute("""
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS app_config (
                 key VARCHAR PRIMARY KEY,
                 value VARCHAR,
@@ -213,25 +332,83 @@ class DataStorage:
             )
         """)
 
-    def _rows_to_dicts(self, table: str, rows: list) -> list[dict]:
-        if not rows:
-            return []
-        columns = [desc[0] for desc in self.conn.execute(f"SELECT * FROM {table} WHERE 1=0").description]
-        return [dict(zip(columns, row)) for row in rows]
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS revision_history (
+                code VARCHAR,
+                revision_date VARCHAR,
+                old_price DOUBLE,
+                new_price DOUBLE
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_revision_code ON revision_history (code)")
+
+        # 七维评分快照表
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS seven_dim_history (
+                code VARCHAR,
+                name VARCHAR,
+                total_score DOUBLE,
+                stock_score DOUBLE,
+                bond_score DOUBLE,
+                momentum DOUBLE,
+                sector DOUBLE,
+                technical DOUBLE,
+                chip DOUBLE,
+                volatility DOUBLE,
+                news DOUBLE,
+                fundamental DOUBLE,
+                valuation DOUBLE,
+                clause DOUBLE,
+                liquidity DOUBLE,
+                credit DOUBLE,
+                price DOUBLE,
+                premium_ratio DOUBLE,
+                dual_low DOUBLE,
+                snapshot_date DATE,
+                UNIQUE(snapshot_date, code)
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_seven_dim_date ON seven_dim_history(snapshot_date)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_seven_dim_code ON seven_dim_history(code)")
+
+        # 缓冲带状态持久化表
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS buffer_tracker (
+                code VARCHAR PRIMARY KEY,
+                in_buffer BOOLEAN DEFAULT FALSE,
+                days_in_buffer INTEGER DEFAULT 0,
+                days_above_60 INTEGER DEFAULT 0,
+                days_below_60 INTEGER DEFAULT 0,
+                updated_at TIMESTAMP
+            )
+        """)
+
+    def _query_to_dicts(self, cursor) -> list[dict]:
+        """从 cursor.description 获取列名，兼容别名和 JOIN 查询"""
+        columns = [desc[0] for desc in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def save_quote(self, quote: ConvertibleQuote) -> None:
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT OR REPLACE INTO quotes_history
                 (code, name, price, change_pct, stock_price, stock_change_pct,
                  conversion_price, conversion_value, premium_ratio, dual_low,
-                 ytm, volume, remaining_years, forced_call_days, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ytm, volume, remaining_years, forced_call_days,
+                 is_called, call_status, last_trade_date, maturity_date, redemption_price,
+                 timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?)
             """, (
                 quote.code, quote.name, quote.price, quote.change_pct,
                 quote.stock_price, quote.stock_change_pct, quote.conversion_price,
                 quote.conversion_value, quote.premium_ratio, quote.dual_low,
                 quote.ytm, quote.volume, quote.remaining_years, quote.forced_call_days,
+                bool(getattr(quote, "is_called", False)),
+                str(getattr(quote, "call_status", "") or ""),
+                getattr(quote, "last_trade_date", None),
+                getattr(quote, "maturity_date", None),
+                float(getattr(quote, "redemption_price", 0.0) or 0.0),
                 quote.timestamp
             ))
 
@@ -243,28 +420,42 @@ class DataStorage:
              q.stock_price, q.stock_change_pct, q.conversion_price,
              q.conversion_value, q.premium_ratio, q.dual_low,
              q.ytm, q.volume, q.remaining_years, q.forced_call_days,
+             bool(getattr(q, "is_called", False)),
+             str(getattr(q, "call_status", "") or ""),
+             getattr(q, "last_trade_date", None),
+             getattr(q, "maturity_date", None),
+             float(getattr(q, "redemption_price", 0.0) or 0.0),
              q.timestamp)
             for q in quotes
         ]
         try:
-            with self._write_lock:
-                self.conn.executemany("""
+            with self._write() as conn:
+                conn.executemany("""
                     INSERT INTO quotes_history
                     (code, name, price, change_pct, stock_price, stock_change_pct,
                      conversion_price, conversion_value, premium_ratio, dual_low,
-                     ytm, volume, remaining_years, forced_call_days, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     ytm, volume, remaining_years, forced_call_days,
+                     is_called, call_status, last_trade_date, maturity_date, redemption_price,
+                     timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?)
                     ON CONFLICT DO NOTHING
                 """, rows)
             logger.debug(f"[Storage] Saved {len(quotes)} quotes")
+            try:
+                revision_count = self.detect_and_save_revisions(quotes)
+                if revision_count > 0:
+                    logger.info(f"[Storage] Detected {revision_count} downward revision(s)")
+            except Exception as e:
+                logger.warning(f"[Storage] Revision detection failed: {e}")
         except Exception as e:
             logger.error(f"Batch insert failed: {e}")
 
     def save_daily_snapshot(self, quotes: list[ConvertibleQuote], snapshot_date: Optional[date] = None) -> None:
         snapshot_date = snapshot_date or date.today()
-        with self._write_lock:
+        with self._write() as conn:
             for quote in quotes:
-                self.conn.execute("""
+                conn.execute("""
                     INSERT INTO daily_snapshots
                     (code, name, open_price, high_price, low_price, close_price, volume, snapshot_date)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -280,25 +471,196 @@ class DataStorage:
         logger.info(f"[Storage] Saved daily snapshot for {snapshot_date}, {len(quotes)} bonds")
 
     def get_quote_history(self, code: str, limit: int = 100) -> list[dict]:
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM quotes_history
             WHERE code = ?
             ORDER BY timestamp DESC
             LIMIT ?
-        """, (code, limit)).fetchall()
-        return self._rows_to_dicts("quotes_history", result)
+        """, (code, limit))
+        return self._query_to_dicts(cursor)
+
+    def get_quote_history_batch(self, codes: list[str], limit: int = 30, start_date: str = "", end_date: str = "") -> dict[str, list[dict]]:
+        """Batch query quote history for multiple codes with optional date range."""
+        if not codes:
+            return {}
+        placeholders = ",".join("?" for _ in codes)
+        params: list = list(codes)
+        date_clause = ""
+        if start_date:
+            date_clause += " AND timestamp >= ?"
+            params.append(start_date)
+        if end_date:
+            date_clause += " AND timestamp <= ?"
+            params.append(end_date)
+        cursor = self.conn.execute(f"""
+            SELECT * FROM quotes_history
+            WHERE code IN ({placeholders}){date_clause}
+            ORDER BY code, timestamp DESC
+        """, params)
+        rows = self._query_to_dicts(cursor)
+        result: dict[str, list[dict]] = {c: [] for c in codes}
+        for r in rows:
+            code = r.get("code", "")
+            if code in result and len(result[code]) < limit:
+                result[code].append(r)
+        return result
+
+    def get_revision_history(self, code: str) -> list[dict]:
+        """Query historical downward revision records for a bond."""
+        cursor = self.conn.execute("""
+            SELECT code, revision_date, old_price, new_price
+            FROM revision_history
+            WHERE code = ?
+            ORDER BY revision_date DESC
+        """, (code,))
+        return self._query_to_dicts(cursor)
+
+    def save_revision_history(self, records: list[dict]) -> None:
+        """Batch save revision history records."""
+        if not records:
+            return
+        for r in records:
+            self.conn.execute("""
+                INSERT INTO revision_history (code, revision_date, old_price, new_price)
+                VALUES (?, ?, ?, ?)
+            """, (r.get("code", ""), r.get("revision_date", ""), r.get("old_price", 0), r.get("new_price", 0)))
+
+    def detect_and_save_revisions(self, bonds: list) -> int:
+        """Detect downward revisions by comparing conversion_price with last saved quote.
+
+        Only records when conversion_price decreased (下修). Returns count of new records.
+        """
+        if not bonds:
+            return 0
+        codes = [b.code for b in bonds if b.code]
+        if not codes:
+            return 0
+
+        placeholders = ",".join("?" for _ in codes)
+        cursor = self.conn.execute(f"""
+            SELECT code, conversion_price
+            FROM (
+                SELECT code, conversion_price,
+                       ROW_NUMBER() OVER (PARTITION BY code ORDER BY timestamp DESC) as rn
+                FROM quotes_history
+                WHERE code IN ({placeholders})
+            ) WHERE rn = 1
+        """, codes)
+        last_prices = {row[0]: row[1] for row in cursor.fetchall()}
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        new_records = []
+        for b in bonds:
+            old_price = last_prices.get(b.code)
+            if old_price is None or old_price <= 0:
+                continue
+            if b.conversion_price > 0 and b.conversion_price < old_price:
+                new_records.append({
+                    "code": b.code,
+                    "revision_date": today,
+                    "old_price": old_price,
+                    "new_price": b.conversion_price,
+                })
+
+        if new_records:
+            self.save_revision_history(new_records)
+            if self._on_revision:
+                for rec in new_records:
+                    try:
+                        self._on_revision(rec)
+                    except Exception as e:
+                        logger.warning(f"[Storage] Revision callback error: {e}")
+        return len(new_records)
 
     def get_daily_history(self, code: str, days: int = 30) -> list[dict]:
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM daily_snapshots
             WHERE code = ?
             ORDER BY snapshot_date DESC
             LIMIT ?
-        """, (code, days)).fetchall()
-        return self._rows_to_dicts("daily_snapshots", result)
+        """, (code, days))
+        return self._query_to_dicts(cursor)
+
+    def get_period_changes_batch(
+        self,
+        codes: list[str],
+        periods: list[int] = (1, 3, 5, 10, 30),
+    ) -> dict[str, dict[int, float | None]]:
+        """批量查询多周期涨跌幅。
+
+        对每个 code 返回 {period_days: change_pct}，以 close_price 为基准。
+        周期不足时返回 None。
+        数据来源（按优先级）：
+          1. daily_snapshots（每日收盘价，最准确）
+          2. quotes_history 聚合（取每日最后一笔成交价，作为兜底）
+        使用单条 SQL 一次性取出所有 (code, close_price) 对，按日期偏移计算。
+        """
+        if not codes or not periods:
+            return {}
+        max_period = max(periods)
+        placeholders = ",".join("?" for _ in codes)
+        params: list = list(codes)
+        params.append(max_period + 1)
+        cursor = self.conn.execute(f"""
+            WITH ranked AS (
+                SELECT
+                    code,
+                    close_price,
+                    snapshot_date,
+                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY snapshot_date DESC) AS rn
+                FROM daily_snapshots
+                WHERE code IN ({placeholders})
+            )
+            SELECT code, rn, close_price
+            FROM ranked
+            WHERE rn <= ?
+            ORDER BY code, rn
+        """, params)
+        rows = cursor.fetchall()
+        history: dict[str, list[float]] = {}
+        for code, rn, price in rows:
+            history.setdefault(code, []).append(float(price) if price is not None else 0.0)
+
+        # 兜底：从 quotes_history 按日聚合取最后一笔成交价
+        for code in codes:
+            if len(history.get(code, [])) <= max(periods):
+                try:
+                    fallback = self.conn.execute(f"""
+                        WITH daily AS (
+                            SELECT code, price,
+                                   ROW_NUMBER() OVER (PARTITION BY code, timestamp::DATE ORDER BY timestamp DESC) AS rn_in_day,
+                                   ROW_NUMBER() OVER (PARTITION BY code ORDER BY timestamp::DATE DESC) AS day_rank
+                            FROM quotes_history
+                            WHERE code = ? AND timestamp::DATE >= CURRENT_DATE - INTERVAL '{max_period + 6} days'
+                        )
+                        SELECT day_rank, price FROM daily WHERE rn_in_day = 1 ORDER BY day_rank
+                    """, (code,)).fetchall()
+                    if fallback:
+                        fb_prices = [float(r[1]) for r in fallback if r[1] is not None]
+                        # 合并：fallback 补全 daily_snapshots 缺失的日期
+                        existing = history.get(code, [])
+                        for i, p in enumerate(fb_prices):
+                            if i >= len(existing):
+                                existing.append(p)
+                        history[code] = existing
+                except Exception as e:
+                    logger.debug(f"[Storage] quotes_history fallback for {code} failed: {e}")
+
+        result: dict[str, dict[int, float | None]] = {}
+        for code in codes:
+            prices = history.get(code, [])
+            latest = prices[0] if prices else None
+            changes: dict[int, float | None] = {}
+            for p in periods:
+                if latest is None or len(prices) <= p or prices[p] <= 0:
+                    changes[p] = None
+                else:
+                    changes[p] = round((latest - prices[p]) / prices[p] * 100, 2)
+            result[code] = changes
+        return result
 
     def get_latest_quotes(self) -> list[dict]:
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             WITH latest AS (
                 SELECT code, MAX(timestamp) as max_ts
                 FROM quotes_history
@@ -307,30 +669,30 @@ class DataStorage:
             SELECT q.* FROM quotes_history q
             JOIN latest l ON q.code = l.code AND q.timestamp = l.max_ts
             ORDER BY q.code
-        """).fetchall()
-        return self._rows_to_dicts("quotes_history", result)
+        """)
+        return self._query_to_dicts(cursor)
 
     def cleanup_old_data(self, keep_days: int = 30) -> int:
         cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff = cutoff - timedelta(days=keep_days)
-        with self._write_lock:
-            count_before = self.conn.execute(
+        with self._write() as conn:
+            count_before = conn.execute(
                 "SELECT COUNT(*) FROM quotes_history WHERE timestamp < ?", (cutoff,)
             ).fetchone()[0]
             if count_before > 0:
-                self.conn.execute("DELETE FROM quotes_history WHERE timestamp < ?", (cutoff,))
+                conn.execute("DELETE FROM quotes_history WHERE timestamp < ?", (cutoff,))
         logger.info(f"[Storage] Cleaned up {count_before} old records")
         return count_before
 
     def cleanup_signal_history(self, keep_days: int = 30) -> int:
         cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff = cutoff - timedelta(days=keep_days)
-        with self._write_lock:
-            count_before = self.conn.execute(
+        with self._write() as conn:
+            count_before = conn.execute(
                 "SELECT COUNT(*) FROM signal_history WHERE ts < ?", (cutoff,)
             ).fetchone()[0]
             if count_before > 0:
-                self.conn.execute("DELETE FROM signal_history WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM signal_history WHERE ts < ?", (cutoff,))
         if count_before:
             logger.info(f"[Storage] Cleaned up {count_before} old signal records")
         return count_before
@@ -338,14 +700,14 @@ class DataStorage:
     def save_signals_batch(self, signals: list[dict]) -> None:
         if not signals:
             return
-        with self._write_lock:
-            self.conn.executemany("""
+        with self._write() as conn:
+            conn.executemany("""
                 INSERT INTO signal_history
-                (strategy, code, name, action, price, reason, confidence, executed, ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, strategy, code, name, action, price, reason, confidence, executed, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
             """, [
-                (s.get("strategy", ""), s.get("code", ""), s.get("name", ""),
+                (s.get("id") or str(uuid.uuid4())[:8], s.get("strategy", ""), s.get("code", ""), s.get("name", ""),
                  s.get("action", ""), s.get("price", 0.0), s.get("reason", ""),
                  s.get("confidence", 0.0), s.get("executed", False), s.get("ts", datetime.now()))
                 for s in signals
@@ -364,12 +726,12 @@ class DataStorage:
             params.append(code)
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         total = self.conn.execute(f"SELECT COUNT(*) FROM signal_history {where}", params).fetchone()[0]
-        result = self.conn.execute(f"""
+        cursor = self.conn.execute(f"""
             SELECT * FROM signal_history {where}
             ORDER BY ts DESC
             LIMIT ? OFFSET ?
-        """, (*params, limit, offset)).fetchall()
-        return self._rows_to_dicts("signal_history", result), total
+        """, (*params, limit, offset))
+        return self._query_to_dicts(cursor), total
 
     def get_signal_stats(self) -> dict:
         """获取信号统计信息"""
@@ -389,8 +751,8 @@ class DataStorage:
         }
 
     def save_executed_position(self, pos: dict) -> None:
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO executed_positions (code, name, side, price, volume, ts)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (pos.get('code', ''), pos.get('name', ''), pos.get('side', ''),
@@ -399,8 +761,8 @@ class DataStorage:
     def save_executed_positions_batch(self, positions: list[dict]) -> None:
         if not positions:
             return
-        with self._write_lock:
-            self.conn.executemany(
+        with self._write() as conn:
+            conn.executemany(
                 "INSERT INTO executed_positions (code, name, side, price, volume, ts) VALUES (?, ?, ?, ?, ?, ?)",
                 [(p.get('code', ''), p.get('name', ''), p.get('side', ''),
                   p.get('price', 0.0), p.get('volume', 0), p.get('ts', datetime.now()))
@@ -408,17 +770,17 @@ class DataStorage:
             )
 
     def get_executed_positions(self, limit: int = 100, offset: int = 0) -> list[dict]:
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM executed_positions ORDER BY ts DESC LIMIT ? OFFSET ?
-        """, (limit, offset)).fetchall()
-        return self._rows_to_dicts('executed_positions', result)
+        """, (limit, offset))
+        return self._query_to_dicts(cursor)
 
     def cleanup_executed_positions(self, keep_days: int = 30) -> int:
         cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=keep_days)
-        with self._write_lock:
-            count = self.conn.execute("SELECT COUNT(*) FROM executed_positions WHERE ts < ?", (cutoff,)).fetchone()[0]
+        with self._write() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM executed_positions WHERE ts < ?", (cutoff,)).fetchone()[0]
             if count > 0:
-                self.conn.execute("DELETE FROM executed_positions WHERE ts < ?", (cutoff,))
+                conn.execute("DELETE FROM executed_positions WHERE ts < ?", (cutoff,))
         return count
 
     # ── 评分历史 ──
@@ -428,9 +790,9 @@ class DataStorage:
         snapshot_date = snapshot_date or date.today()
         if not scores:
             return
-        with self._write_lock:
+        with self._write() as conn:
             for s in scores:
-                self.conn.execute("""
+                conn.execute("""
                     INSERT INTO score_history
                     (code, name, score, score_dual_low, score_premium, score_momentum,
                      score_volume, score_price, price, premium_ratio, dual_low, volume, snapshot_date)
@@ -458,45 +820,44 @@ class DataStorage:
 
     def get_score_history(self, code: str, days: int = 30) -> list[dict]:
         """获取某只转债的评分历史"""
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM score_history
             WHERE code = ?
             ORDER BY snapshot_date DESC
             LIMIT ?
-        """, (code, days)).fetchall()
-        return self._rows_to_dicts("score_history", result)
+        """, (code, days))
+        return self._query_to_dicts(cursor)
 
     def get_score_history_batch(self, codes: list[str], days: int = 30) -> dict[str, list[dict]]:
         """批量获取多只转债的评分历史"""
         if not codes:
             return {}
         placeholders = ",".join(["?" for _ in codes])
-        result = self.conn.execute(f"""
+        cursor = self.conn.execute(f"""
             SELECT * FROM score_history
             WHERE code IN ({placeholders})
             ORDER BY code, snapshot_date DESC
-        """, codes).fetchall()
+        """, codes)
+        rows = self._query_to_dicts(cursor)
 
         data = {}
-        for row in result:
-            row_dict = dict(zip([desc[0] for desc in self.conn.execute("SELECT * FROM score_history WHERE 1=0").description], row))
+        for row_dict in rows:
             code = row_dict['code']
             if code not in data:
                 data[code] = []
-            # 只取最近N天的数据
             if len(data[code]) < days:
                 data[code].append(row_dict)
         return data
 
     def get_daily_score_ranking(self, snapshot_date: date, top_n: int = 60) -> list[dict]:
         """获取某日的评分排名"""
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM score_history
             WHERE snapshot_date = ?
             ORDER BY score DESC
             LIMIT ?
-        """, (snapshot_date, top_n)).fetchall()
-        return self._rows_to_dicts("score_history", result)
+        """, (snapshot_date, top_n))
+        return self._query_to_dicts(cursor)
 
     def get_score_dates(self, limit: int = 30) -> list[str]:
         """获取有评分数据的日期列表"""
@@ -507,13 +868,81 @@ class DataStorage:
         """, (limit,)).fetchall()
         return [str(r[0]) for r in result]
 
+    # ── 七维评分快照 ──
+
+    def save_seven_dim_snapshot(self, scores: list[dict], snapshot_date: Optional[date] = None) -> None:
+        """保存七维评分快照"""
+        snapshot_date = snapshot_date or date.today()
+        if not scores:
+            return
+        with self._write() as conn:
+            for s in scores:
+                stock = s.get('stock_details', {})
+                bond = s.get('bond_details', {})
+                conn.execute("""
+                    INSERT INTO seven_dim_history
+                    (code, name, total_score, stock_score, bond_score,
+                     momentum, sector, technical, chip, volatility, news, fundamental,
+                     valuation, clause, liquidity, credit,
+                     price, premium_ratio, dual_low, snapshot_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (snapshot_date, code) DO UPDATE SET
+                        total_score = excluded.total_score,
+                        stock_score = excluded.stock_score,
+                        bond_score = excluded.bond_score,
+                        momentum = excluded.momentum,
+                        sector = excluded.sector,
+                        technical = excluded.technical,
+                        chip = excluded.chip,
+                        volatility = excluded.volatility,
+                        news = excluded.news,
+                        fundamental = excluded.fundamental,
+                        valuation = excluded.valuation,
+                        clause = excluded.clause,
+                        liquidity = excluded.liquidity,
+                        credit = excluded.credit,
+                        price = excluded.price,
+                        premium_ratio = excluded.premium_ratio,
+                        dual_low = excluded.dual_low
+                """, (
+                    s.get('code', ''), s.get('name', ''),
+                    s.get('total', 0), s.get('stock_score', 0), s.get('bond_score', 0),
+                    stock.get('momentum', 0), stock.get('sector', 0), stock.get('technical', 0),
+                    stock.get('chip', 0), stock.get('volatility', 0), stock.get('news', 0),
+                    stock.get('fundamental', 0),
+                    bond.get('valuation', 0), bond.get('clause', 0), bond.get('liquidity', 0),
+                    bond.get('credit', 0),
+                    s.get('price', 0), s.get('premium_ratio', 0), s.get('dual_low', 0),
+                    snapshot_date
+                ))
+        logger.info(f"[Storage] Saved seven-dim snapshot for {snapshot_date}, {len(scores)} bonds")
+
+    def get_seven_dim_history(self, code: str, days: int = 30) -> list[dict]:
+        """获取某只转债的七维评分历史"""
+        cursor = self.conn.execute("""
+            SELECT * FROM seven_dim_history
+            WHERE code = ?
+            ORDER BY snapshot_date DESC
+            LIMIT ?
+        """, (code, days))
+        return self._query_to_dicts(cursor)
+
+    def get_seven_dim_dates(self, limit: int = 30) -> list[str]:
+        """获取有七维评分数据的日期列表"""
+        result = self.conn.execute("""
+            SELECT DISTINCT snapshot_date FROM seven_dim_history
+            ORDER BY snapshot_date DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [str(r[0]) for r in result]
+
     # ── 回测结果持久化 ──
 
     def save_backtest_result(self, summary: dict, details: list[dict], params: dict) -> int:
         """保存回测结果，返回backtest_id"""
         import json
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO backtest_results
                 (run_ts, start_date, end_date, top_n, hold_days,
                  avg_return_pct, win_rate, total_periods, params_json)
@@ -525,7 +954,7 @@ class DataStorage:
                 summary.get("avg_return_pct", 0), summary.get("avg_win_rate", 0),
                 summary.get("total_periods", 0), json.dumps(params),
             ))
-            backtest_id = self.conn.execute("SELECT currval('backtest_results_id_seq')").fetchone()[0]
+            backtest_id = conn.execute("SELECT currval('backtest_results_id_seq')").fetchone()[0]
             if details:
                 # Calculate running max drawdown for each detail row
                 cum = 0.0
@@ -555,7 +984,7 @@ class DataStorage:
                      d.get("_max_drawdown", 0))
                     for d in details
                 ]
-                self.conn.executemany("""
+                conn.executemany("""
                     INSERT INTO backtest_details
                     (backtest_id, date, end_date, top_n, avg_return_pct,
                      win_rate, max_return, min_return, max_drawdown)
@@ -566,34 +995,35 @@ class DataStorage:
     def get_backtest_results(self, limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
         """获取最近的回测结果列表，返回 (results, total_count)"""
         total = self.conn.execute("SELECT COUNT(*) FROM backtest_results").fetchone()[0]
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM backtest_results ORDER BY run_ts DESC LIMIT ? OFFSET ?
-        """, (limit, offset)).fetchall()
-        return self._rows_to_dicts("backtest_results", result), total
+        """, (limit, offset))
+        return self._query_to_dicts(cursor), total
 
     def get_backtest_result(self, backtest_id: int) -> dict | None:
         """按 ID 获取单条回测结果"""
-        result = self.conn.execute("SELECT * FROM backtest_results WHERE id = ?", (backtest_id,)).fetchone()
+        cursor = self.conn.execute("SELECT * FROM backtest_results WHERE id = ?", (backtest_id,))
+        columns = [desc[0] for desc in cursor.description]
+        result = cursor.fetchone()
         if not result:
             return None
-        columns = [desc[0] for desc in self.conn.execute("SELECT * FROM backtest_results WHERE 1=0").description]
         return dict(zip(columns, result))
 
     def get_backtest_details(self, backtest_id: int) -> list[dict]:
         """获取某次回测的详情"""
-        result = self.conn.execute("""
+        cursor = self.conn.execute("""
             SELECT * FROM backtest_details WHERE backtest_id = ? ORDER BY date
-        """, (backtest_id,)).fetchall()
-        return self._rows_to_dicts("backtest_details", result)
+        """, (backtest_id,))
+        return self._query_to_dicts(cursor)
 
     def delete_backtest_result(self, backtest_id: int) -> bool:
         """删除某次回测结果及其详情"""
-        with self._write_lock:
-            count = self.conn.execute("SELECT COUNT(*) FROM backtest_results WHERE id = ?", (backtest_id,)).fetchone()[0]
+        with self._write() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM backtest_results WHERE id = ?", (backtest_id,)).fetchone()[0]
             if count == 0:
                 return False
-            self.conn.execute("DELETE FROM backtest_details WHERE backtest_id = ?", (backtest_id,))
-            self.conn.execute("DELETE FROM backtest_results WHERE id = ?", (backtest_id,))
+            conn.execute("DELETE FROM backtest_details WHERE backtest_id = ?", (backtest_id,))
+            conn.execute("DELETE FROM backtest_results WHERE id = ?", (backtest_id,))
             return True
 
     def cleanup_backtest_results(self, keep_days: int = 90) -> int:
@@ -605,10 +1035,10 @@ class DataStorage:
         if not ids:
             return 0
         id_list = [row[0] for row in ids]
-        with self._write_lock:
+        with self._write() as conn:
             placeholders = ",".join("?" * len(id_list))
-            self.conn.execute(f"DELETE FROM backtest_details WHERE backtest_id IN ({placeholders})", id_list)
-            self.conn.execute(f"DELETE FROM backtest_results WHERE id IN ({placeholders})", id_list)
+            conn.execute(f"DELETE FROM backtest_details WHERE backtest_id IN ({placeholders})", id_list)
+            conn.execute(f"DELETE FROM backtest_results WHERE id IN ({placeholders})", id_list)
         logger.info(f"[Storage] Cleaned up {len(id_list)} old backtest results")
         return len(id_list)
 
@@ -619,17 +1049,29 @@ class DataStorage:
             "SELECT COUNT(*) FROM score_history WHERE snapshot_date < ?", (cutoff,)
         ).fetchone()[0]
         if count > 0:
-            with self._write_lock:
-                self.conn.execute("DELETE FROM score_history WHERE snapshot_date < ?", (cutoff,))
+            with self._write() as conn:
+                conn.execute("DELETE FROM score_history WHERE snapshot_date < ?", (cutoff,))
             logger.info(f"[Storage] Cleaned up {count} old score records")
+        return count
+
+    def cleanup_seven_dim_history(self, keep_days: int = 90) -> int:
+        """清理过期的七维评分历史"""
+        cutoff = date.today() - timedelta(days=keep_days)
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM seven_dim_history WHERE snapshot_date < ?", (cutoff,)
+        ).fetchone()[0]
+        if count > 0:
+            with self._write() as conn:
+                conn.execute("DELETE FROM seven_dim_history WHERE snapshot_date < ?", (cutoff,))
+            logger.info(f"[Storage] Cleaned up {count} old seven-dim records")
         return count
 
     # ── 评分预警 ──
 
     def add_score_alert(self, alert: dict) -> int:
         """添加评分预警"""
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO score_alerts
                 (code, name, alert_type, threshold, direction, enabled, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -641,29 +1083,31 @@ class DataStorage:
                 alert['threshold'], alert.get('direction', 'above'),
                 alert.get('enabled', True), datetime.now()
             ))
-            return self.conn.execute("SELECT currval('score_alerts_id_seq')").fetchone()[0]
+            return conn.execute("SELECT currval('score_alerts_id_seq')").fetchone()[0]
+
+    def remove_score_alert(self, alert_id: int) -> None:
         """删除评分预警"""
-        with self._write_lock:
-            self.conn.execute("DELETE FROM score_alerts WHERE id = ?", (alert_id,))
+        with self._write() as conn:
+            conn.execute("DELETE FROM score_alerts WHERE id = ?", (alert_id,))
 
     def get_score_alerts(self, enabled_only: bool = False) -> list[dict]:
         """获取所有评分预警"""
         where = "WHERE enabled = TRUE" if enabled_only else ""
-        result = self.conn.execute(f"SELECT * FROM score_alerts {where}").fetchall()
-        return self._rows_to_dicts("score_alerts", result)
+        cursor = self.conn.execute(f"SELECT * FROM score_alerts {where}")
+        return self._query_to_dicts(cursor)
 
     def update_alert_triggered(self, alert_id: int) -> None:
         """更新预警触发时间"""
-        with self._write_lock:
-            self.conn.execute(
+        with self._write() as conn:
+            conn.execute(
                 "UPDATE score_alerts SET triggered_at = ? WHERE id = ?",
                 (datetime.now(), alert_id)
             )
 
     def add_alert_history(self, record: dict) -> int:
         """添加预警触发历史记录"""
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO alert_history
                 (alert_id, alert_type, code, name, threshold, current_value, triggered_at, acknowledged)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -673,27 +1117,29 @@ class DataStorage:
                 record.get('threshold', 0), record.get('current_value', 0),
                 record.get('triggered_at', datetime.now()), False
             ))
-            return self.conn.execute("SELECT currval('alert_history_id_seq')").fetchone()[0]
+            return conn.execute("SELECT currval('alert_history_id_seq')").fetchone()[0]
+
+    def get_alert_history(self, days: int = 30, code: str = "") -> list[dict]:
         """获取预警历史记录"""
         cutoff = datetime.now() - timedelta(days=days)
         if code:
-            result = self.conn.execute("""
+            cursor = self.conn.execute("""
                 SELECT * FROM alert_history
                 WHERE triggered_at >= ? AND code = ?
                 ORDER BY triggered_at DESC
-            """, (cutoff, code)).fetchall()
+            """, (cutoff, code))
         else:
-            result = self.conn.execute("""
+            cursor = self.conn.execute("""
                 SELECT * FROM alert_history
                 WHERE triggered_at >= ?
                 ORDER BY triggered_at DESC
-            """, (cutoff,)).fetchall()
-        return self._rows_to_dicts("alert_history", result)
+            """, (cutoff,))
+        return self._query_to_dicts(cursor)
 
     def acknowledge_alert(self, history_id: int) -> None:
         """确认预警记录"""
-        with self._write_lock:
-            self.conn.execute(
+        with self._write() as conn:
+            conn.execute(
                 "UPDATE alert_history SET acknowledged = TRUE WHERE id = ?",
                 (history_id,)
             )
@@ -705,8 +1151,8 @@ class DataStorage:
             "SELECT COUNT(*) FROM alert_history WHERE triggered_at < ?", (cutoff,)
         ).fetchone()[0]
         if count > 0:
-            with self._write_lock:
-                self.conn.execute("DELETE FROM alert_history WHERE triggered_at < ?", (cutoff,))
+            with self._write() as conn:
+                conn.execute("DELETE FROM alert_history WHERE triggered_at < ?", (cutoff,))
             logger.info(f"[Storage] Cleaned up {count} old alert history records")
         return count
 
@@ -715,8 +1161,8 @@ class DataStorage:
     def add_combo_alert(self, alert: dict) -> int:
         """添加组合预警"""
         import json
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO combo_alerts (name, description, conditions, logic, enabled, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (
@@ -724,29 +1170,27 @@ class DataStorage:
                 json.dumps(alert.get('conditions', [])),
                 alert.get('logic', 'AND'), alert.get('enabled', True), datetime.now()
             ))
-            return self.conn.execute("SELECT currval('combo_alerts_id_seq')").fetchone()[0]
+            return conn.execute("SELECT currval('combo_alerts_id_seq')").fetchone()[0]
 
     def remove_combo_alert(self, alert_id: int) -> None:
         """删除组合预警"""
-        with self._write_lock:
-            self.conn.execute("DELETE FROM combo_alerts WHERE id = ?", (alert_id,))
+        with self._write() as conn:
+            conn.execute("DELETE FROM combo_alerts WHERE id = ?", (alert_id,))
 
     def get_combo_alerts(self, enabled_only: bool = False) -> list[dict]:
         """获取所有组合预警"""
         import json
         where = "WHERE enabled = TRUE" if enabled_only else ""
-        result = self.conn.execute(f"SELECT * FROM combo_alerts {where}").fetchall()
-        alerts = []
-        for row in result:
-            d = dict(zip([desc[0] for desc in self.conn.execute("SELECT * FROM combo_alerts WHERE 1=0").description], row))
-            d['conditions'] = json.loads(d['conditions']) if d.get('conditions') else []
-            alerts.append(d)
+        cursor = self.conn.execute(f"SELECT * FROM combo_alerts {where}")
+        alerts = self._query_to_dicts(cursor)
+        for a in alerts:
+            a['conditions'] = json.loads(a['conditions']) if a.get('conditions') else []
         return alerts
 
     def update_combo_alert_triggered(self, alert_id: int) -> None:
         """更新组合预警触发时间"""
-        with self._write_lock:
-            self.conn.execute(
+        with self._write() as conn:
+            conn.execute(
                 "UPDATE combo_alerts SET triggered_at = ? WHERE id = ?",
                 (datetime.now(), alert_id)
             )
@@ -760,6 +1204,7 @@ class DataStorage:
             "signals": self.cleanup_signal_history(keep_days),
             "executed": self.cleanup_executed_positions(keep_days),
             "scores": self.cleanup_score_history(keep_days),
+            "seven_dim": self.cleanup_seven_dim_history(keep_days),
             "alerts": self.cleanup_alert_history(keep_days),
             "backtest": self.cleanup_backtest_results(keep_days),
         }
@@ -776,13 +1221,89 @@ class DataStorage:
 
     def set_config(self, key: str, value: str) -> None:
         """设置配置值"""
-        with self._write_lock:
-            self.conn.execute("""
+        with self._write() as conn:
+            conn.execute("""
                 INSERT INTO app_config (key, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """, (key, value, datetime.now()))
 
+    def load_buffer_tracker(self) -> dict:
+        """从 DuckDB 加载缓冲带状态，返回 {code: {in_buffer, days_in_buffer, ...}}"""
+        try:
+            rows = self.conn.execute(
+                "SELECT code, in_buffer, days_in_buffer, days_above_60, days_below_60 FROM buffer_tracker"
+            ).fetchall()
+            return {row[0]: {
+                'in_buffer': bool(row[1]),
+                'days_in_buffer': int(row[2]),
+                'days_above_60': int(row[3]),
+                'days_below_60': int(row[4]),
+            } for row in rows}
+        except Exception as e:
+            logger.warning(f"[Storage] load_buffer_tracker failed: {e}")
+            return {}
+
+    def save_buffer_tracker(self, tracker: dict) -> None:
+        """持久化缓冲带状态到 DuckDB"""
+        if not tracker:
+            return
+        with self._write() as conn:
+            conn.execute("DELETE FROM buffer_tracker")
+            for code, status in tracker.items():
+                conn.execute(
+                    "INSERT INTO buffer_tracker (code, in_buffer, days_in_buffer, days_above_60, days_below_60, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (code, bool(status.in_buffer) if hasattr(status, 'in_buffer') else bool(status.get('in_buffer', False)),
+                     int(status.days_in_buffer) if hasattr(status, 'days_in_buffer') else int(status.get('days_in_buffer', 0)),
+                     int(status.days_above_60) if hasattr(status, 'days_above_60') else int(status.get('days_above_60', 0)),
+                     int(status.days_below_60) if hasattr(status, 'days_below_60') else int(status.get('days_below_60', 0))))
+            logger.info(f"[Storage] Saved buffer tracker: {len(tracker)} entries")
+
     def close(self):
-        self.conn.close()
-        logger.info("[Storage] Connection closed")
+        """关闭数据库连接，先取消定时器再关闭连接"""
+        if self._checkpoint_timer:
+            self._checkpoint_timer.cancel()
+            self._checkpoint_timer = None
+        try:
+            self._conn.close()
+            logger.info("[Storage] Connection closed")
+        except Exception as e:
+            logger.debug(f"[Storage] Close connection: {e}")
+
+    def ensure_connection(self):
+        """确保数据库连接可用，断连时自动重建"""
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            self._reconnect()
+
+    @contextmanager
+    def _write(self):
+        """获取写锁并确保连接可用"""
+        with self._write_lock:
+            self.ensure_connection()
+            yield self._conn
+
+    def checkpoint(self):
+        """执行 DuckDB WAL checkpoint，将 WAL 数据写入主文件"""
+        if self._read_only:
+            return
+        try:
+            with self._write() as conn:
+                conn.execute("CHECKPOINT")
+            logger.info("[Storage] Checkpoint completed")
+        except Exception as e:
+            logger.error(f"[Storage] Checkpoint failed: {e}")
+
+    def _start_checkpoint_timer(self):
+        """启动定时 checkpoint"""
+        self._checkpoint_timer = threading.Timer(self._checkpoint_interval, self._checkpoint_loop)
+        self._checkpoint_timer.daemon = True
+        self._checkpoint_timer.start()
+
+    def _checkpoint_loop(self):
+        """定时执行 checkpoint"""
+        self.checkpoint()
+        if self._checkpoint_interval > 0:
+            self._start_checkpoint_timer()

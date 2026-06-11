@@ -2,6 +2,8 @@
  * 消息中心服务
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface Message {
   id: string
   type: 'system' | 'trade' | 'signal' | 'alert' | 'update' | 'notification'
@@ -39,7 +41,7 @@ export function getMessages(options?: {
   limit?: number
 }): Message[] {
   const saved = localStorage.getItem(MESSAGES_KEY)
-  let messages: Message[] = saved ? JSON.parse(saved) : []
+  let messages: Message[] = safeJsonParse<Message[]>(saved, [])
 
   if (options) {
     if (options.type) {

@@ -217,7 +217,7 @@ class LogstashHandler(Handler):
                 # 获取日志
                 try:
                     log_entry = self._buffer.get(timeout=1.0)
-                except:
+                except Exception:
                     continue
 
                 # 发送
@@ -241,7 +241,7 @@ class LogstashHandler(Handler):
             if self._socket:
                 try:
                     self._socket.close()
-                except:
+                except Exception:
                     pass
             self._socket = None
             print(f"Logstash connection error: {e}")
@@ -263,7 +263,7 @@ class LogstashHandler(Handler):
         if self._socket:
             try:
                 self._socket.close()
-            except:
+            except Exception:
                 pass
 
         super().close()

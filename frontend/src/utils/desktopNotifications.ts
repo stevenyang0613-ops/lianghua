@@ -59,7 +59,10 @@ const defaultSettings: NotificationSettings = {
 // 获取通知设置
 export function getNotificationSettings(): NotificationSettings {
   const saved = localStorage.getItem(NOTIFICATION_SETTINGS_KEY)
-  return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings
+  if (saved) {
+    try { return { ...defaultSettings, ...JSON.parse(saved) } } catch { /* fall through */ }
+  }
+  return defaultSettings
 }
 
 // 更新通知设置
@@ -174,7 +177,10 @@ function playNotificationSound(category: 'trade' | 'signal' | 'alert' | 'system'
 // 添加到历史记录
 function addToHistory(options: NotificationOptions): void {
   const saved = localStorage.getItem(NOTIFICATION_HISTORY_KEY)
-  const history = saved ? JSON.parse(saved) : []
+  let history: any[] = []
+  if (saved) {
+    try { history = JSON.parse(saved) } catch { history = [] }
+  }
 
   history.unshift({
     ...options,
@@ -192,7 +198,10 @@ function addToHistory(options: NotificationOptions): void {
 // 获取通知历史
 export function getNotificationHistory(): Array<NotificationOptions & { timestamp: number }> {
   const saved = localStorage.getItem(NOTIFICATION_HISTORY_KEY)
-  return saved ? JSON.parse(saved) : []
+  if (saved) {
+    try { return JSON.parse(saved) } catch { /* ignore corrupt data */ }
+  }
+  return []
 }
 
 // 清空通知历史

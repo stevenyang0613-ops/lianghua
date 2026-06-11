@@ -35,6 +35,16 @@ export const useWatchlistStore = create<WatchlistState>()(
     }),
     {
       name: 'lianghua-watchlist',
+      version: 1,
+      migrate: (persistedState: unknown, version: number) => {
+        if (version === 0 && persistedState && typeof persistedState === 'object') {
+          const s = persistedState as { watchlist?: unknown }
+          if (Array.isArray(s.watchlist)) {
+            return { watchlist: s.watchlist.filter((w: unknown) => w && typeof w === 'object' && 'code' in (w as object) && 'name' in (w as object)) }
+          }
+        }
+        return persistedState as WatchlistState
+      },
     }
   )
 )

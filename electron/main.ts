@@ -1,4 +1,7 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, globalShortcut, shell, dialog, NativeImage, safeStorage } from 'electron'
+
+// 抑制开发模式下的Electron安全警告（打包后自动消失）
+process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
 // Dynamic import for electron-updater (optional dependency)
 let autoUpdater: any = null
 try {
@@ -13,6 +16,7 @@ import WebSocket from 'ws'
 import crypto from 'crypto'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 
 let mainWindow: BrowserWindow | null = null
 let pythonProcess: ChildProcess | null = null
@@ -22,32 +26,26 @@ let isQuitting = false
 const isDev = !app.isPackaged
 
 // ---- Resource path helper ----
-function getMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  const mime: Record<string, string> = {
-    '.html': 'text/html',
-    '.js': 'application/javascript',
-    '.css': 'text/css',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-    '.ttf': 'font/ttf',
-    '.map': 'application/json',
-  }
-  return mime[ext] || 'application/octet-stream'
-}
-
 function resourcePath(relativePath: string): string {
   if (isDev) {
     return path.join(__dirname, '..', relativePath)
   }
   return path.join(process.resourcesPath, relativePath)
+}
+
+// ---- Frontend page path (in extraResources, not asar) ----
+function getFrontendIndexPath(): string {
+  if (isDev) {
+    // 开发模式：优先使用dist构建产物，Vite dev server需手动启动
+    // __dirname = electron/dist，需上溯两级到项目根目录
+    const distPath = path.join(__dirname, '..', '..', 'frontend', 'dist', 'index.html')
+    if (require('fs').existsSync(distPath)) {
+      return distPath
+    }
+    return 'http://localhost:5173'
+  }
+  // Frontend dist is in extraResources (process.resourcesPath/frontend/index.html)
+  return path.join(process.resourcesPath, 'frontend', 'index.html')
 }
 
 // App configuration
@@ -56,14 +54,9 @@ const APP_VERSION = '1.0.0'
 const BACKEND_PORT = 8765
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
-const BACKEND_STARTUP_TIMEOUT = 180000
-const HEALTH_CHECK_INTERVAL = 1000
-const FRONTEND_PORT = 8766
-const WS_AUTH_TOKEN = 'lianghua_electron_' + crypto.randomBytes(16).toString('hex')
-const MAX_PORT_FALLBACK = 3
 
 // Forward declaration
-let restartBackend: () => void
+let restartBackend: (isManualRestart?: boolean) => void
 
 // ---- Performance tracking ----
 const perfMetrics = {
@@ -130,26 +123,104 @@ function getResourceHash(filePath: string): string {
 }
 
 // ---- HTTP request handler (IPC proxy) ----
-function httpRequestHandler(
+let cachedAuthToken: { value: string; expiresAt: number } | null = null
+
+function readTokenFile(p: string): string {
+  try {
+    if (fs.existsSync(p)) {
+      const t = fs.readFileSync(p, 'utf-8').trim()
+      if (t) return t
+    }
+  } catch {
+    // ignore
+  }
+  return ''
+}
+
+function fetchTokenFromBackend(): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(`${BACKEND_URL}/health`, { timeout: 3000 }, (res) => {
+        let data = ''
+        res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data)
+            const t = parsed?.ws_auth_token
+            resolve(typeof t === 'string' ? t.trim() : '')
+          } catch {
+            resolve('')
+          }
+        })
+      })
+      req.on('error', () => resolve(''))
+      req.on('timeout', () => { req.destroy(); resolve('') })
+    } catch {
+      resolve('')
+    }
+  })
+}
+
+function getDesktopAuthTokenSync(): string {
+  const candidates = [
+    path.join(os.homedir(), '.lianghua', '.ws_token'),
+    path.join(process.resourcesPath || '', 'backend', 'data', '.ws_token'),
+    path.join(__dirname, '..', '..', 'backend', 'data', '.ws_token'),
+  ]
+  for (const p of candidates) {
+    if (!p) continue
+    const t = readTokenFile(p)
+    if (t) return t
+  }
+  return ''
+}
+
+function getDesktopAuthToken(): string {
+  if (cachedAuthToken && cachedAuthToken.expiresAt > Date.now()) {
+    return cachedAuthToken.value
+  }
+  const t = getDesktopAuthTokenSync()
+  cachedAuthToken = { value: t, expiresAt: Date.now() + 60_000 }
+  return t
+}
+
+async function ensureDesktopAuthToken(): Promise<string> {
+  const t = getDesktopAuthToken()
+  if (t) return t
+  const fetched = await fetchTokenFromBackend()
+  if (fetched) {
+    cachedAuthToken = { value: fetched, expiresAt: Date.now() + 60_000 }
+    return fetched
+  }
+  return ''
+}
+
+async function httpRequestHandler(
   method: string,
   url: string,
   body?: any
 ): Promise<{ ok: boolean; status: number; data: any; error?: string }> {
+  const authToken = await ensureDesktopAuthToken()
   return new Promise((resolve) => {
     const timeout = 30000
     const parsedUrl = new URL(url)
     const isHttps = parsedUrl.protocol === 'https:'
     const httpModule = isHttps ? https : http
 
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    }
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`
+    }
+
     const options: http.RequestOptions = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
       method: method.toUpperCase(),
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
+      headers,
       timeout,
     }
 
@@ -162,9 +233,6 @@ function httpRequestHandler(
           parsed = JSON.parse(data)
         } catch {
           parsed = data
-        }
-        if (typeof parsed === 'object' && parsed !== null && url.includes('/health')) {
-          parsed.ws_auth_token = WS_AUTH_TOKEN
         }
         resolve({
           ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300,
@@ -192,16 +260,12 @@ function httpRequestHandler(
 
 // ---- Backend health check ----
 async function backendHealthcheck(): Promise<boolean> {
-  const urls = [`${BACKEND_URL}/api/v1/health`, `${BACKEND_URL}/health`]
-  for (const url of urls) {
-    try {
-      const result = await httpRequestHandler('GET', url)
-      if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
-        return true
-      }
-    } catch {}
+  try {
+    const result = await httpRequestHandler('GET', `${BACKEND_URL}/health`)
+    return result.ok && result.data?.status === 'ok'
+  } catch {
+    return false
   }
-  return false
 }
 
 // ---- Wait for backend to be ready ----
@@ -217,32 +281,11 @@ async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boo
   return false
 }
 
-async function waitForBackendWithPort(port: number, maxWaitMs = BACKEND_STARTUP_TIMEOUT, intervalMs = HEALTH_CHECK_INTERVAL): Promise<boolean> {
-  const start = Date.now()
-  const urls = [
-    `http://${BACKEND_HOST}:${port}/api/v1/health`,
-    `http://${BACKEND_HOST}:${port}/health`
-  ]
-  while (Date.now() - start < maxWaitMs) {
-    for (const url of urls) {
-      try {
-        const result = await httpRequestHandler('GET', url)
-        if (result.ok && ['ok', 'healthy'].includes(result.data?.status)) {
-          perfMetrics.backendReadyTime = Date.now()
-          return true
-        }
-      } catch {}
-    }
-    await new Promise((r) => setTimeout(r, intervalMs))
-  }
-  return false
-}
-
 // ---- Health monitoring loop ----
 let healthMonitorInterval: NodeJS.Timeout | null = null
 let healthFailCount = 0
 const HEALTH_MAX_FAILS = 3
-const HEALTH_MONITOR_INTERVAL = 10000
+const HEALTH_CHECK_INTERVAL = 10000
 
 function startHealthMonitor() {
   if (healthMonitorInterval) return
@@ -262,90 +305,7 @@ function startHealthMonitor() {
     } else {
       healthFailCount = 0
     }
-  }, HEALTH_MONITOR_INTERVAL)
-}
-
-let frontendServer: http.Server | null = null
-
-function startFrontendServer(frontendDir: string) {
-  if (frontendServer) {
-    frontendServer.close()
-    frontendServer = null
-  }
-  frontendServer = http.createServer((req, res) => {
-    const url = req.url || '/'
-
-    if (url.startsWith('/api/')) {
-      const proxyReq = http.request(
-        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: url, method: req.method, headers: req.headers },
-        (proxyRes) => {
-          if (url.includes('/health')) {
-            let body = ''
-            proxyRes.on('data', (chunk: Buffer) => { body += chunk.toString() })
-            proxyRes.on('end', () => {
-              try {
-                const data = JSON.parse(body)
-                data.ws_auth_token = WS_AUTH_TOKEN
-                res.writeHead(200, { 'Content-Type': 'application/json' })
-                res.end(JSON.stringify(data))
-              } catch {
-                res.writeHead(proxyRes.statusCode || 500)
-                res.end(body)
-              }
-            })
-          } else {
-            res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
-            proxyRes.pipe(res)
-          }
-        }
-      )
-      proxyReq.on('error', () => { res.writeHead(502); res.end('Backend unavailable') })
-      req.pipe(proxyReq)
-      return
-    }
-
-    let filePath = url
-    if (filePath === '/') filePath = '/index.html'
-    const fullPath = path.join(frontendDir, filePath)
-    try {
-      let content = fs.readFileSync(fullPath, 'utf-8')
-      if (filePath.endsWith('.html')) {
-        content = content.replace(/\bcrossorigin(="")?\b/g, '')
-      }
-      res.writeHead(200, { 'Content-Type': getMimeType(fullPath) })
-      res.end(content)
-    } catch {
-      res.writeHead(404)
-      res.end('Not Found')
-    }
-  })
-
-  frontendServer.on('upgrade', (req, socket, head) => {
-    const reqUrl = req.url || ''
-    if (reqUrl.includes('/ws')) {
-      const proxyHeaders = { ...req.headers, host: `${BACKEND_HOST}:${BACKEND_PORT}` }
-      const proxyReq = http.request(
-        { hostname: BACKEND_HOST, port: BACKEND_PORT, path: reqUrl, method: 'GET', headers: proxyHeaders },
-        (proxyRes) => { proxyRes.pipe(socket) }
-      )
-      proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-        const headers = Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')
-        socket.write(`HTTP/1.1 101 Switching Protocols\r\n${headers}\r\n\r\n`)
-        if (proxyHead && proxyHead.length > 0) socket.write(proxyHead)
-        proxySocket.pipe(socket)
-        socket.pipe(proxySocket)
-      })
-      proxyReq.on('error', (err) => {
-        console.error('[FrontendWS] Proxy error:', err.message)
-        socket.end()
-      })
-      proxyReq.end()
-    }
-  })
-
-  frontendServer.listen(FRONTEND_PORT, '127.0.0.1', () => {
-    console.log(`[Frontend] Server running on http://127.0.0.1:${FRONTEND_PORT} (proxy /api/* -> :${BACKEND_PORT})`)
-  })
+  }, HEALTH_CHECK_INTERVAL)
 }
 
 function stopHealthMonitor() {
@@ -529,7 +489,7 @@ function createApplicationMenu() {
         {
           label: '重启后端服务',
           click: () => {
-            restartBackend()
+            restartBackend(true)
           },
         },
       ],
@@ -605,71 +565,84 @@ F11: 全屏`,
 
 // ---- Backend process management ----
 let pythonRestartCount = 0
+let pythonRestartTimer: ReturnType<typeof setTimeout> | null = null
 const MAX_PYTHON_RESTARTS = 5
 const PYTHON_RESTART_RESET_INTERVAL = 60000
 
 function getBackendDir(): string {
-  return resourcePath('backend')
+  // Production: use process.resourcesPath directly (backend is in extraResources, NOT in asar)
+  // This avoids Electron's asar interception which breaks spawn()
+  if (!isDev) {
+    return path.join(process.resourcesPath, 'backend')
+  }
+  return path.join(__dirname, '..', 'backend')
 }
 
 function getPythonCmd(backendDir: string): string {
-  // 优先使用 PyInstaller 编译的二进制（根目录）
+  // PyInstaller 编译的二进制优先于系统 python3（系统 python3 可能缺少依赖包）
   const pyinstallerBin = path.join(backendDir, 'lianghua-backend')
   if (fs.existsSync(pyinstallerBin)) return pyinstallerBin
-  // 再查 dist 子目录
-  const pyinstallerBinDist = path.join(backendDir, 'dist', 'lianghua-backend')
-  if (fs.existsSync(pyinstallerBinDist)) return pyinstallerBinDist
-  // 开发环境回退到 .venv
-  const venvPython = path.join(backendDir, '.venv', 'bin', 'python')
-  if (fs.existsSync(venvPython)) return venvPython
-  // 最后回退到系统 python3
+  // 开发模式优先使用 .venv 中的 python（源码模式，最可靠）
+  // 生产环境跳过 .venv：如果 .venv 意外存在但损坏会导致启动失败
+  if (isDev) {
+    const venvPython = path.join(backendDir, '.venv', 'bin', 'python')
+    if (fs.existsSync(venvPython)) return venvPython
+  }
+  // 仅在没有打包二进制时才回退到系统 python3
+  const runAppPy = path.join(backendDir, 'run_app.py')
+  if (fs.existsSync(runAppPy)) return 'python3'
   return 'python3'
 }
 
-async function startPythonBackendWithArgs(pythonCmd: string, args: string[], backendDir: string) {
-  const port = parseInt(args[args.indexOf('--port') + 1])
-  const available = await isPortAvailable(port)
-  if (!available) {
-    console.log(`[Electron] Port ${port} is not available, trying next port`)
-    if (port < BACKEND_PORT + MAX_PORT_FALLBACK) {
-      const nextPort = port + 1
-      const newArgs = [...args]
-      newArgs[args.indexOf('--port') + 1] = String(nextPort)
-      startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
-      return
-    } else {
-      console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + MAX_PORT_FALLBACK} are in use`)
-      const attemptedPorts = Array.from({ length: MAX_PORT_FALLBACK }, (_, i) => BACKEND_PORT + i)
-      mainWindow?.webContents.send('backend-error', {
-        code: 'EADDRINUSE',
-        title: '后端启动失败',
-        message: `端口 ${BACKEND_PORT}-${BACKEND_PORT + MAX_PORT_FALLBACK} 全部被占用`,
-        details: `请检查是否有其他应用占用了这些端口。\n\n诊断命令：\nmacOS: lsof -i :${BACKEND_PORT} -i :${BACKEND_PORT + 1} -i :${BACKEND_PORT + 2}\nWindows: netstat -ano | findstr "${BACKEND_PORT}"\n\n或尝试关闭其他占用端口的应用后重新启动。`,
-        portsAttempted: attemptedPorts
-      })
-      return
+function getSSLCertEnv(): Record<string, string> {
+  // PyInstaller 打包的后端找不到系统 SSL 证书，需要显式传入
+  const certPaths = [
+    '/opt/homebrew/etc/openssl@3/cert.pem',
+    '/etc/ssl/cert.pem',
+    '/usr/local/etc/openssl@3/cert.pem',
+    '/usr/local/etc/openssl/cert.pem',
+  ]
+  for (const certPath of certPaths) {
+    if (fs.existsSync(certPath)) {
+      return { SSL_CERT_FILE: certPath, REQUESTS_CA_BUNDLE: certPath }
     }
   }
+  return {}
+}
 
-  if (pythonProcess) {
-    pythonProcess.kill()
-    pythonProcess = null
-  }
+function startPythonBackend() {
+  const backendDir = getBackendDir()
+  const pythonCmd = getPythonCmd(backendDir)
 
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
-  console.log(`[Electron] Starting Python backend: ${pythonCmd} ${args.join(' ')}`)
-  console.log(`[Electron] Backend directory: ${backendDir}`)
+  const args = isPyinstaller
+    ? ['--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
+    : [path.join(backendDir, 'run_app.py'), '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
+
+  const sslEnv = getSSLCertEnv()
+
   pythonProcess = spawn(pythonCmd, args, {
     cwd: backendDir,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, LH_WS_AUTH_TOKEN: WS_AUTH_TOKEN },
+    env: { ...process.env, ...sslEnv },
   })
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
     console.log('[Python] ' + data.toString().trim())
   })
   pythonProcess.stderr?.on('data', (data: Buffer) => {
-    console.log('[Python] ' + data.toString().trim())
+    const stderrText = data.toString()
+    console.log('[Python] ' + stderrText.trim())
+    // 检测端口占用（EADDRINUSE 由 Python 进程内部输出，不是 spawn error）
+    if (stderrText.includes('EADDRINUSE') || stderrText.includes('Address already in use')) {
+      console.error(`[Electron] Port ${BACKEND_PORT} is already in use by another process`)
+      mainWindow?.webContents.send('backend-error', {
+        code: 'EADDRINUSE',
+        title: '端口占用',
+        message: `端口 ${BACKEND_PORT} 已被其他进程占用`,
+        details: '请关闭占用该端口的程序，或在设置中更换端口'
+      })
+    }
   })
 
   pythonProcess.on('exit', (code: number | null) => {
@@ -696,34 +669,18 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
   pythonProcess.on('error', (err: Error) => {
     console.error('[Electron] Failed to start Python:', err.message)
     recordCrash('backend', `Failed to start Python: ${err.message}`)
+    // Fallback EADDRINUSE detection — primary detection is in stderr handler above
     if ((err as any).code === 'EADDRINUSE') {
-      const currentPort = parseInt(args[args.indexOf('--port') + 1] || String(BACKEND_PORT))
-      if (currentPort < BACKEND_PORT + 3) {
-        const nextPort = currentPort + 1
-        console.log(`[Electron] Port ${currentPort} in use, trying ${nextPort}`)
-        const newArgs = [...args]
-        newArgs[args.indexOf('--port') + 1] = String(nextPort)
-        startPythonBackendWithArgs(pythonCmd, newArgs, backendDir)
-      } else {
-        console.error(`[Electron] All ports from ${BACKEND_PORT} to ${BACKEND_PORT + MAX_PORT_FALLBACK} are in use`)
-        const attemptedPorts = Array.from({ length: MAX_PORT_FALLBACK }, (_, i) => BACKEND_PORT + i)
-        mainWindow?.webContents.send('backend-error', {
-          code: 'EADDRINUSE',
-          title: '后端启动失败',
-          message: `端口 ${BACKEND_PORT}-${BACKEND_PORT + MAX_PORT_FALLBACK} 全部被占用`,
-          details: `请检查是否有其他应用占用了这些端口。\n\n诊断命令：\nmacOS: lsof -i :${BACKEND_PORT} -i :${BACKEND_PORT + 1} -i :${BACKEND_PORT + 2}\nWindows: netstat -ano | findstr "${BACKEND_PORT}"\n\n或尝试关闭其他占用端口的应用后重新启动。`,
-          portsAttempted: attemptedPorts
-        })
-      }
+      console.error(`[Electron] Port ${BACKEND_PORT} is already in use by another process (fallback detection)`)
+      mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Port ${BACKEND_PORT} is in use` })
     }
   })
 
-  waitForBackendWithPort(parseInt(args[args.indexOf('--port') + 1])).then((ready) => {
+  // Wait for backend and signal readiness
+  waitForBackend().then((ready) => {
     if (ready) {
       console.log('[Electron] Backend is ready, notifying renderer')
-      const actualPort = parseInt(args[args.indexOf('--port') + 1])
-      savePreferredPort(actualPort)
-      mainWindow?.webContents.send('backend-ready', { port: actualPort, ws_auth_token: WS_AUTH_TOKEN })
+      mainWindow?.webContents.send('backend-ready')
       startHealthMonitor()
     } else {
       console.error('[Electron] Backend did not become ready in time')
@@ -735,50 +692,8 @@ async function startPythonBackendWithArgs(pythonCmd: string, args: string[], bac
     }
   })
 
-  setTimeout(() => { pythonRestartCount = 0 }, PYTHON_RESTART_RESET_INTERVAL)
-}
-
-function getPreferredPort(): number {
-  try {
-    const portFile = path.join(app.getPath('userData'), 'last-port.txt')
-    if (fs.existsSync(portFile)) {
-      const port = parseInt(fs.readFileSync(portFile, 'utf-8').trim())
-      if (!isNaN(port) && port >= 8765 && port <= 8768) {
-        console.log(`[Electron] Using preferred port from last session: ${port}`)
-        return port
-      }
-    }
-  } catch {}
-  return BACKEND_PORT
-}
-
-function savePreferredPort(port: number): void {
-  try {
-    const portFile = path.join(app.getPath('userData'), 'last-port.txt')
-    fs.writeFileSync(portFile, String(port))
-    console.log(`[Electron] Saved preferred port: ${port}`)
-  } catch {}
-}
-
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = http.createServer()
-    server.once('error', () => { resolve(false) })
-    server.once('listening', () => { try { server.close() } catch {} resolve(true) })
-    server.listen(port, BACKEND_HOST)
-    setTimeout(() => { try { server.close() } catch {} resolve(true) }, 1000)
-  })
-}
-
-function startPythonBackend() {
-  const backendDir = getBackendDir()
-  const pythonCmd = getPythonCmd(backendDir)
-  const preferredPort = getPreferredPort()
-  const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
-  const args = isPyinstaller
-    ? ['--host', BACKEND_HOST, '--port', String(preferredPort)]
-    : ['-m', 'uvicorn', 'app.main:app', '--host', BACKEND_HOST, '--port', String(preferredPort)]
-  startPythonBackendWithArgs(pythonCmd, args, backendDir)
+  if (pythonRestartTimer) clearTimeout(pythonRestartTimer)
+  pythonRestartTimer = setTimeout(() => { pythonRestartCount = 0 }, PYTHON_RESTART_RESET_INTERVAL)
 }
 
 // ---- Tray ----
@@ -831,7 +746,7 @@ function createTrayIcon() {
     { type: 'separator' },
     {
       label: '重启后端',
-      click: () => restartBackend(),
+      click: () => restartBackend(true),
     },
     { type: 'separator' },
     {
@@ -915,8 +830,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: !isDev,
-      allowRunningInsecureContent: isDev,
+      // file:// 协议加载时需要禁用webSecurity以允许跨域请求（http:// + ws://127.0.0.1）
+      webSecurity: false,
     },
   })
 
@@ -935,10 +850,11 @@ function createWindow() {
 
   mainWindow.setBackgroundColor('#1a1a2e')
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173')
+  const frontendPath = getFrontendIndexPath()
+  if (frontendPath.startsWith('http')) {
+    mainWindow.loadURL(frontendPath)
   } else {
-    mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`)
+    mainWindow.loadFile(frontendPath)
   }
 
   // Handle frontend loading errors
@@ -947,18 +863,6 @@ function createWindow() {
     if (!isDev) {
       mainWindow?.loadURL(`data:text/html,<html><body style="background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif"><h1 style="color:#ff4d4f">页面加载失败</h1><p style="color:#aaa">无法加载应用页面 (错误码: ${errorCode})</p><p style="margin-top:20px"><button onclick="window.location.reload()" style="padding:10px 24px;background:#1890ff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">重新加载</button></p></body></html>`)
     }
-  })
-
-  mainWindow.webContents.on('console-message', (_event, level, message, _line, sourceId) => {
-    if (level >= 2) { // warning=2, error=3
-      console.error(`[Renderer] ${sourceId}:${_line} ${message}`)
-    }
-  })
-
-  // Capture unhandled renderer errors
-  mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[Renderer] Process gone: ${details.reason} (exitCode: ${details.exitCode})`)
-    recordCrash('renderer', `Renderer process gone: ${details.reason}`)
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1050,31 +954,36 @@ ipcMain.handle('http-post', async (_event, url: string, body: any) => {
 ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
   try {
     // Close existing connection for this wsId
+    // 静默关闭：移除所有监听器避免触发 ws-state:disconnected 事件
+    // 这是内部清理，不应让renderer感知（否则会导致重连循环）
     const existing = wsConnections.get(wsId)
     if (existing) {
+      existing.removeAllListeners()
       existing.close()
       wsConnections.delete(wsId)
     }
 
-    // Inject WS_AUTH_TOKEN into the URL to ensure token matches backend
-    const parsedUrl = new URL(url)
-    parsedUrl.searchParams.set('token', WS_AUTH_TOKEN)
-    const correctedUrl = parsedUrl.toString()
-    console.log(`[WS ${wsId}] Connecting: ${parsedUrl.origin}${parsedUrl.pathname}?token=***`)
+    const ws = new WebSocket(url)
 
-    const ws = new WebSocket(correctedUrl)
-
+    // 状态值必须与 shared/types.ts WsIpcState 保持一致
+    // 注意：ws.on('open') 必须在 IPC Promise 的 openHandler 之后注册
+    // 这样 IPC Promise 先 resolve，renderer 端先处理结果，再收到 ws-state 事件
+    let ipcResolved = false
     ws.on('open', () => {
-      mainWindow?.webContents.send('ws-state', wsId, 'open')
+      if (ipcResolved) {
+        mainWindow?.webContents.send('ws-state', wsId, 'connected')
+      }
+      // 如果 IPC Promise 尚未 resolve，由 openHandler 触发后发送
     })
 
     ws.on('message', (data: WebSocket.Data, isBinary: boolean) => {
-      mainWindow?.webContents.send('ws-message', wsId, data.toString(), isBinary)
+      const payload = isBinary ? (data as Buffer).toString('base64') : data.toString()
+      mainWindow?.webContents.send('ws-message', wsId, payload, isBinary)
     })
 
     ws.on('close', (code: number, reason: Buffer) => {
       wsConnections.delete(wsId)
-      mainWindow?.webContents.send('ws-state', wsId, 'closed', code, reason.toString())
+      mainWindow?.webContents.send('ws-state', wsId, 'disconnected', code, reason.toString())
     })
 
     ws.on('error', (err: Error) => {
@@ -1088,7 +997,10 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
     return new Promise((resolve) => {
       const openHandler = () => {
         cleanup()
-        resolve({ ok: true, state: 'open' })
+        ipcResolved = true
+        resolve({ ok: true, state: 'connected' })
+        // IPC Promise resolve 后再发送 ws-state 事件，确保 renderer 端先处理 IPC 结果
+        mainWindow?.webContents.send('ws-state', wsId, 'connected')
       }
       const errorHandler = (err: Error) => {
         cleanup()
@@ -1097,7 +1009,7 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
       const timeoutId = setTimeout(() => {
         cleanup()
         resolve({ ok: false, state: 'timeout', error: 'Connection timeout' })
-      }, 10000)
+      }, 5000)
 
       const cleanup = () => {
         ws.removeListener('open', openHandler)
@@ -1140,19 +1052,11 @@ ipcMain.handle('ws-state', async (_event, wsId: string) => {
   if (!ws) return { state: 'disconnected' }
   const stateMap: Record<number, string> = {
     [WebSocket.CONNECTING]: 'connecting',
-    [WebSocket.OPEN]: 'open',
+    [WebSocket.OPEN]: 'connected',
     [WebSocket.CLOSING]: 'closing',
-    [WebSocket.CLOSED]: 'closed',
+    [WebSocket.CLOSED]: 'disconnected',
   }
   return { state: stateMap[ws.readyState] || 'unknown' }
-})
-
-// ---- Error reporting from renderer ----
-ipcMain.on('renderer-error', (_event, errorInfo: { message: string; stack?: string; componentStack?: string; url?: string }) => {
-  console.error(`[Renderer Error] ${errorInfo.message}`)
-  if (errorInfo.stack) console.error(`[Renderer Error] Stack: ${errorInfo.stack}`)
-  if (errorInfo.componentStack) console.error(`[Renderer Error] Component: ${errorInfo.componentStack}`)
-  recordCrash('renderer', errorInfo.message, errorInfo.stack)
 })
 
 // ---- Notifications ----
@@ -1179,6 +1083,23 @@ ipcMain.handle('get-app-info', () => ({
   isDev,
 }))
 
+// ---- WebSocket auth token ----
+ipcMain.handle('get-ws-token', () => {
+  const tokenPaths = [
+    path.join(app.getPath('home'), '.lianghua', '.ws_token'),
+    path.join(process.resourcesPath, 'backend', 'data', '.ws_token'),
+  ]
+  for (const p of tokenPaths) {
+    try {
+      if (fs.existsSync(p)) {
+        const token = fs.readFileSync(p, 'utf-8').trim()
+        if (token) return token
+      }
+    } catch { /* ignore */ }
+  }
+  return ''
+})
+
 // ---- Safe storage (encryption) ----
 ipcMain.handle('encrypt-string', (_event, plainText: string) => {
   if (!safeStorage.isEncryptionAvailable()) {
@@ -1195,24 +1116,35 @@ ipcMain.handle('decrypt-string', (_event, cipherText: string) => {
 })
 
 // ---- Restart backend ----
-restartBackend = () => {
+restartBackend = (isManualRestart = false) => {
   stopHealthMonitor()
   healthFailCount = 0
-  pythonRestartCount = 0
+  if (isManualRestart) pythonRestartCount = 0
   if (pythonProcess) {
-    pythonProcess.kill()
+    const oldProcess = pythonProcess
     pythonProcess = null
+    oldProcess.kill()
+    for (const [wsId, ws] of wsConnections) {
+      ws.close()
+      wsConnections.delete(wsId)
+    }
+    oldProcess.on('exit', () => {
+      startPythonBackend()
+    })
+    setTimeout(() => {
+      startPythonBackend()
+    }, 3000)
+  } else {
+    for (const [wsId, ws] of wsConnections) {
+      ws.close()
+      wsConnections.delete(wsId)
+    }
+    startPythonBackend()
   }
-  // Close all WebSocket connections
-  for (const [wsId, ws] of wsConnections) {
-    ws.close()
-    wsConnections.delete(wsId)
-  }
-  startPythonBackend()
 }
 
 ipcMain.handle('restart-backend', async () => {
-  restartBackend()
+  restartBackend(true)
 })
 
 // ---- Performance metrics ----
@@ -1349,9 +1281,16 @@ ipcMain.handle('create-chart-window', (_event, bondCode: string, bondName: strin
   childWindows.set(id, win)
 
   if (isDev) {
-    win.loadURL(`http://localhost:5173#/chart/${bondCode}`)
+    const fp = getFrontendIndexPath()
+    if (fp.startsWith('http')) {
+      win.loadURL(`${fp}#/chart/${bondCode}`)
+    } else {
+      win.loadFile(fp, { hash: `/chart/${bondCode}` })
+    }
   } else {
-    win.loadURL(`http://127.0.0.1:${FRONTEND_PORT}#/chart/${bondCode}`)
+    win.loadFile(getFrontendIndexPath(), {
+      hash: `/chart/${bondCode}`,
+    })
   }
 
   win.on('closed', () => { childWindows.delete(id) })
@@ -1376,9 +1315,16 @@ ipcMain.handle('create-detail-window', (_event, bondCode: string, bondName: stri
   childWindows.set(id, win)
 
   if (isDev) {
-    win.loadURL(`http://localhost:5173#/detail/${bondCode}`)
+    const fp = getFrontendIndexPath()
+    if (fp.startsWith('http')) {
+      win.loadURL(`${fp}#/detail/${bondCode}`)
+    } else {
+      win.loadFile(fp, { hash: `/detail/${bondCode}` })
+    }
   } else {
-    win.loadURL(`http://127.0.0.1:${FRONTEND_PORT}#/detail/${bondCode}`)
+    win.loadFile(getFrontendIndexPath(), {
+      hash: `/detail/${bondCode}`,
+    })
   }
 
   win.on('closed', () => { childWindows.delete(id) })
@@ -1454,8 +1400,8 @@ function setupAutoUpdater() {
         detail: '是否立即下载更新？',
         buttons: ['下载', '稍后'],
         defaultId: 0,
-      }).then((result) => {
-        if (result.response === 0) {
+      }, (response) => {
+        if (response === 0) {
           autoUpdater.downloadUpdate()
         }
       })
@@ -1494,8 +1440,8 @@ function setupAutoUpdater() {
         detail: '是否立即安装更新？应用将重新启动。',
         buttons: ['立即安装', '稍后安装'],
         defaultId: 0,
-      }).then((result) => {
-        if (result.response === 0) {
+      }, (response) => {
+        if (response === 0) {
           autoUpdater.quitAndInstall()
         }
       })
@@ -1537,7 +1483,7 @@ ipcMain.handle('check-for-updates', async () => {
   try {
     const result = await autoUpdater.checkForUpdates()
     return {
-      available: result.updateInfo?.version !== app.getVersion(),
+      available: !!(result?.updateInfo && result.updateInfo.version !== app.getVersion()),
       version: result.updateInfo?.version,
     }
   } catch (err: any) {
@@ -1575,12 +1521,6 @@ process.on('unhandledRejection', (reason: any) => {
 // ============================================================
 
 app.whenReady().then(() => {
-  if (!isDev) {
-    const frontendDir = isDev
-        ? path.join(__dirname, '..', 'frontend', 'dist')
-        : path.join(process.resourcesPath, 'frontend')
-    startFrontendServer(frontendDir)
-  }
   startPythonBackend()
   createApplicationMenu()
   createTrayIcon()
@@ -1628,9 +1568,5 @@ app.on('before-quit', () => {
   if (pythonProcess) {
     pythonProcess.kill()
     pythonProcess = null
-  }
-  if (frontendServer) {
-    frontendServer.close()
-    frontendServer = null
   }
 })

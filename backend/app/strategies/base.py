@@ -14,20 +14,19 @@ class Strategy(ABC):
 
     def __init__(self, **kwargs):
         self._params = {}
+        self._param_type_map: dict[str, str] = {}
         for p in self.params:
             self._params[p.name] = kwargs.get(p.name, p.default)
+            self._param_type_map[p.name] = p.type
         self._prev_selected: set[str] = set()
 
     def get_param(self, name: str):
         val = self._params.get(name)
-        # Cast to correct type based on param definition
-        for p in self.params:
-            if p.name == name:
-                if p.type == "int":
-                    return int(val)
-                if p.type == "float":
-                    return float(val)
-                return val
+        ptype = self._param_type_map.get(name)
+        if ptype == "int":
+            return int(val)
+        if ptype == "float":
+            return float(val)
         return val
 
     @abstractmethod

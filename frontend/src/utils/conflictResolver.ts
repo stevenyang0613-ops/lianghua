@@ -3,6 +3,8 @@
  * 处理离线编辑与在线数据的合并
  */
 
+import { safeJsonParse } from './safeJson'
+
 interface ConflictItem<T> {
   key: string
   local: T
@@ -152,7 +154,7 @@ export function addToSyncQueue(key: string, data: unknown, operation: 'create' |
 
 export function getSyncQueue(): SyncQueueItem[] {
   const saved = localStorage.getItem(SYNC_QUEUE_KEY)
-  return saved ? JSON.parse(saved) : []
+  return savedJsonParse<SyncQueueItem[]>(saved, [])
 }
 
 export function clearSyncQueue(): void {
@@ -193,7 +195,7 @@ export async function processSyncQueue(
 // 冲突日志
 export function logConflict(conflict: ConflictItem<unknown>, resolution: ConflictResolution<unknown>): void {
   const logKey = 'conflict_log'
-  const log = JSON.parse(localStorage.getItem(logKey) || '[]')
+  const log = safeJsonParse<unknown[]>(localStorage.getItem(logKey), [])
 
   log.push({
     timestamp: Date.now(),

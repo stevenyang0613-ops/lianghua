@@ -1,6 +1,6 @@
-"""松岗量化可转债策略 V3.0 四因子择时模型
+"""松岗量化可转债策略 V3.0 多因子择时引擎（Legacy V3）
 
-四因子维度:
+旧版四因子维度（已由 V4 多维度综合模型替代，见 enhanced_timing_model.py）:
 - 全市场转债估值 (40%): 转股溢价率中位数
 - 市场情绪 (25%): 转债日均成交额
 - 市场流动性 (20%): 10年期国债收益率
@@ -11,6 +11,8 @@
 - 50-69分: 55%
 - 30-49分: 30%
 - <30分: ≤10% + 启动对冲
+
+新版模型（9大类40+子因子）: app.strategies.enhanced_timing_model.EnhancedTimingModel
 """
 from dataclasses import dataclass
 from datetime import date
@@ -42,7 +44,7 @@ class MarketData:
 
 
 class TimingEngine:
-    """四因子择时引擎"""
+    """多因子择时引擎 (Legacy V3 — 已由 EnhancedTimingEngine 替代)"""
 
     def __init__(self):
         """初始化"""

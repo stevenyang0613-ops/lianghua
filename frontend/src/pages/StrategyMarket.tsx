@@ -73,6 +73,7 @@ export default function StrategyMarket() {
 
   const renderStrategyCard = (strategy: SharedStrategy, isMyStrategy: boolean = false) => (
     <Card
+      key={strategy.id || strategy.name}
       hoverable
       style={{ marginBottom: 16 }}
       onClick={() => handleViewDetail(strategy)}

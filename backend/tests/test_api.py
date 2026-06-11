@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
-def client():
-    """创建测试客户端，使用临时数据库且跳过 lifespan 避免网络请求"""
+def client(test_token):
+    """创建测试客户端，使用临时数据库且跳过 lifespan 避免网络请求，自动带上认证头"""
     import tempfile, os, shutil
     from contextlib import contextmanager
     from fastapi import FastAPI
@@ -45,8 +45,38 @@ def client():
 
     app.router.lifespan_context = noop_lifespan
 
+    _auth_headers = {"Authorization": f"Bearer {test_token}"}
+
+    class AuthedClient:
+        """包装 TestClient，所有请求自动带上认证头"""
+
+        def __init__(self, tc: TestClient):
+            self._tc = tc
+            self.app = tc.app
+
+        def _inject_headers(self, kwargs):
+            headers = kwargs.pop("headers", {}) or {}
+            headers.update(_auth_headers)
+            kwargs["headers"] = headers
+            return kwargs
+
+        def get(self, url, **kwargs):
+            return self._tc.get(url, **self._inject_headers(kwargs))
+
+        def post(self, url, **kwargs):
+            return self._tc.post(url, **self._inject_headers(kwargs))
+
+        def put(self, url, **kwargs):
+            return self._tc.put(url, **self._inject_headers(kwargs))
+
+        def delete(self, url, **kwargs):
+            return self._tc.delete(url, **self._inject_headers(kwargs))
+
+        def patch(self, url, **kwargs):
+            return self._tc.patch(url, **self._inject_headers(kwargs))
+
     with TestClient(app, raise_server_exceptions=True) as c:
-        yield c
+        yield AuthedClient(c)
 
     shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -64,17 +94,17 @@ class TestSignalAPI:
         assert 'signals' in data
         assert 'active_strategies' in data
 
-    def test_get_available_strategies(self, client):
+    def test_get_available_strategies(self, client, auth_headers):
         """测试获取可用策略"""
-        response = client.get('/api/v1/signals/available-strategies')
+        response = client.get('/api/v1/signals/available-strategies', headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert 'strategies' in data
 
-    def test_set_strategy_params(self, client):
+    def test_set_strategy_params(self, client, auth_headers):
         """测试设置策略参数"""
         with patch("app.api.signals.list_strategies", return_value=[{"id": "dual_low"}]):
-            response = client.put('/api/v1/signals/strategy-params', json={
+            response = client.put('/api/v1/signals/strategy-params', headers=auth_headers, json={
                 "strategy": "dual_low",
                 "params": {"threshold": 130},
             })

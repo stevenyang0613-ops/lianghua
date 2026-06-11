@@ -5,8 +5,12 @@
 import { useMemo } from 'react'
 import { Card, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { fmt } from '../utils/format'
 
 const { Text } = Typography
+
+
+
 
 interface TechIndicatorsProps {
   data: {
@@ -40,7 +44,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
         name: '均线趋势',
         value: maTrend ? '多头排列' : '空头排列',
         signal: maTrend ? 'buy' : 'sell',
-        description: `MA5=${data.ma5.toFixed(2)}, MA10=${data.ma10.toFixed(2)}, MA20=${data.ma20.toFixed(2)}`,
+        description: `MA5=${fmt(data.ma5)}, MA10=${fmt(data.ma10)}, MA20=${fmt(data.ma20)}`,
       })
 
       // 金叉死叉
@@ -66,7 +70,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
       const { dif, dea, macd } = data.macd
       list.push({
         name: 'MACD',
-        value: `DIF:${dif.toFixed(2)} DEA:${dea.toFixed(2)} MACD:${macd.toFixed(2)}`,
+        value: `DIF:${fmt(dif)} DEA:${fmt(dea)} MACD:${fmt(macd)}`,
         signal: macd > 0 ? 'buy' : 'sell',
         description: macd > 0 ? 'MACD柱状图为正，多头动能' : 'MACD柱状图为负，空头动能',
       })
@@ -110,7 +114,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
 
       list.push({
         name: 'RSI',
-        value: `RSI(6):${rsi6.toFixed(1)} RSI(12):${rsi12.toFixed(1)} RSI(24):${rsi24.toFixed(1)}`,
+        value: `RSI(6):${fmt(rsi6, 1)} RSI(12):${fmt(rsi12, 1)} RSI(24):${fmt(rsi24, 1)}`,
         signal: rsiSignal,
         description: rsiDesc || 'RSI处于正常区间',
       })
@@ -138,7 +142,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
 
       list.push({
         name: 'KDJ',
-        value: `K:${k.toFixed(1)} D:${d.toFixed(1)} J:${j.toFixed(1)}`,
+        value: `K:${fmt(k, 1)} D:${fmt(d, 1)} J:${fmt(j, 1)}`,
         signal: kdjSignal,
         description: kdjDesc || 'KDJ正常波动',
       })
@@ -157,7 +161,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
 
       list.push({
         name: '布林带',
-        value: `上轨:${upper.toFixed(2)} 中轨:${middle.toFixed(2)} 下轨:${lower.toFixed(2)}`,
+        value: `上轨:${fmt(upper)} 中轨:${fmt(middle)} 下轨:${fmt(lower)}`,
         signal: bollSignal,
         description: data.price <= lower
           ? '价格触及下轨，可能反弹'
@@ -179,7 +183,7 @@ export default function TechIndicators({ data }: TechIndicatorsProps) {
 
       list.push({
         name: '量比',
-        value: data.volumeRatio.toFixed(2),
+        value: fmt(data.volumeRatio),
         signal: volumeSignal,
         description: data.volumeRatio > 2 ? '放量明显' : data.volumeRatio < 0.5 ? '缩量明显' : '量能正常',
       })

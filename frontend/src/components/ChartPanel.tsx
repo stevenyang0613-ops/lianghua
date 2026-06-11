@@ -81,9 +81,9 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
   const getCurrentValue = (): number => {
     if (!bond) return 0
     switch (chartType) {
-      case 'price': return bond.price
-      case 'premium_ratio': return bond.premium_ratio
-      case 'dual_low': return bond.dual_low
+      case 'price': return bond.price ?? 0
+      case 'premium_ratio': return bond.premium_ratio ?? 0
+      case 'dual_low': return bond.dual_low ?? 0
     }
   }
 
@@ -116,7 +116,7 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
         trigger: 'axis' as const,
         formatter: (params: { name: string; value: number }[]) => {
           const p = params[0]
-          return `${p.name}<br/>${getChartLabel()}: ${p.value.toFixed(2)}`
+          return `${p.name}<br/>${getChartLabel()}: ${(p.value ?? 0).toFixed(2)}`
         },
       },
       grid: {
@@ -190,11 +190,11 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
       </div>
 
       <div style={{ marginBottom: 8, textAlign: 'center' }}>
-        <Text style={{ fontSize: 24, fontWeight: 600, color: changeValue >= 0 ? '#cf1322' : '#389e0d' }}>
-          {getCurrentValue().toFixed(2)}
+        <Text style={{ fontSize: 24, fontWeight: 600, color: (changeValue ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>
+          {(getCurrentValue() ?? 0).toFixed(2)}
         </Text>
         <Text type="secondary" style={{ marginLeft: 8 }}>
-          {changeValue >= 0 ? '+' : ''}{changeValue.toFixed(2)}%
+          {(changeValue ?? 0) >= 0 ? '+' : ''}{(changeValue ?? 0).toFixed(2)}%
         </Text>
       </div>
 

@@ -206,10 +206,23 @@ export const useAccountStore = create<AccountState>()(
     }),
     {
       name: 'broker-accounts',
+      version: 1,
       partialize: (state) => ({
         accounts: state.accounts.map(({ apiKey, apiSecret, ...rest }) => rest),
         currentAccountId: state.currentAccountId,
       }),
+      migrate: (persistedState: unknown, _version: number) => {
+        if (persistedState && typeof persistedState === 'object') {
+          const s = persistedState as { accounts?: unknown; currentAccountId?: unknown }
+          if (Array.isArray(s.accounts)) {
+            return {
+              accounts: s.accounts.filter((a: unknown) => a && typeof a === 'object' && 'id' in (a as object)),
+              currentAccountId: typeof s.currentAccountId === 'string' ? s.currentAccountId : null,
+            }
+          }
+        }
+        return persistedState as { accounts: []; currentAccountId: null }
+      },
     }
   )
 )

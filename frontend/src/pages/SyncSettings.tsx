@@ -324,13 +324,13 @@ export default function SyncSettings() {
           <Card title="数据统计">
             <Row gutter={[0, 16]}>
               <Col span={24}>
-                <Statistic title="自选股数量" value={JSON.parse(localStorage.getItem('watchlist') || '[]').length} />
+                <Statistic title="自选股数量" value={(() => { try { return JSON.parse(localStorage.getItem('watchlist') || '[]').length } catch { return 0 } })()} />
               </Col>
               <Col span={24}>
                 <Statistic title="通知历史" value={notificationHistory.length} suffix="条" />
               </Col>
               <Col span={24}>
-                <Statistic title="自定义主题" value={JSON.parse(localStorage.getItem('lianghua_custom_themes') || '[]').length} suffix="个" />
+                <Statistic title="自定义主题" value={(() => { try { return JSON.parse(localStorage.getItem('lianghua_custom_themes') || '[]').length } catch { return 0 } })()} suffix="个" />
               </Col>
             </Row>
           </Card>

@@ -99,9 +99,8 @@ const DEFAULT_RULES: RiskRule[] = [
 export function getRiskRules(): RiskRule[] {
   const saved = localStorage.getItem(RISK_RULES_KEY)
   if (saved) {
-    return JSON.parse(saved)
+    try { return JSON.parse(saved) } catch { /* fall through */ }
   }
-  // 初始化默认规则
   localStorage.setItem(RISK_RULES_KEY, JSON.stringify(DEFAULT_RULES))
   return DEFAULT_RULES
 }
@@ -208,7 +207,10 @@ function addRiskHistory(item: RiskHistoryItem): void {
 
 export function getRiskHistory(): RiskHistoryItem[] {
   const saved = localStorage.getItem(RISK_HISTORY_KEY)
-  return saved ? JSON.parse(saved) : []
+  if (saved) {
+    try { return JSON.parse(saved) } catch { /* ignore corrupt data */ }
+  }
+  return []
 }
 
 // 计算组合风险指标

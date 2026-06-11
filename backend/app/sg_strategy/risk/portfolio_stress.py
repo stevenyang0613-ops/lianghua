@@ -650,7 +650,7 @@ class RiskBudgetAllocator:
             weights = inv_cov @ ones
             weights = weights / weights.sum()
             return weights
-        except:
+        except Exception:
             return np.ones(len(cov_matrix)) / len(cov_matrix)
 
 

@@ -62,6 +62,8 @@ class Scheduler:
 
     async def _run_periodic(self, name: str):
         """运行定时任务"""
+        retry_count = 0
+        max_periodic_retries = 10
         while self._running:
             try:
                 callback = self._callbacks.get(name)
@@ -82,8 +84,12 @@ class Scheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"[Scheduler] Task '{name}' error: {e}")
-                await asyncio.sleep(60)  # 出错后等待1分钟再重试
+                retry_count += 1
+                if retry_count >= max_periodic_retries:
+                    logger.error(f"[Scheduler] Task '{name}' exceeded max retries ({max_periodic_retries}), stopping")
+                    break
+                logger.error(f"[Scheduler] Task '{name}' error: {e}, retry {retry_count}/{max_periodic_retries}")
+                await asyncio.sleep(60)
 
     async def _run_daily(self, name: str, callback: Callable[[], Awaitable[None]], run_time: time):
         """运行每日任务"""

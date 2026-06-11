@@ -9,6 +9,7 @@ import { dataPlayer, generateMockFrames, type MarketFrame, type PlayerState, typ
 import dayjs from 'dayjs'
 import echarts from '../utils/echarts'
 import { useRef } from 'react'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
@@ -147,7 +148,7 @@ export default function DataPlayer() {
   }
 
   const bidAskColumns = [
-    { title: '买价', dataIndex: 'price', width: 80, render: (v: number) => v.toFixed(2) },
+    { title: '买价', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
     { title: '买量', dataIndex: 'volume', width: 80 },
   ]
 
@@ -316,7 +317,7 @@ export default function DataPlayer() {
                 <Text>当前帧: {state.currentIndex + 1} / {state.totalFrames}</Text>
               </Col>
               <Col span={8}>
-                <Text>进度: {state.progress.toFixed(1)}%</Text>
+                <Text>进度: {fmt(state.progress, 1)}%</Text>
               </Col>
               <Col span={8}>
                 <Text>状态: {state.isPlaying ? '播放中' : state.isPaused ? '已暂停' : '已停止'}</Text>

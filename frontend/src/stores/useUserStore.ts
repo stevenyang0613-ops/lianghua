@@ -89,7 +89,7 @@ export function initDefaultUser(): void {
   const state = useUserStore.getState()
   if (state.users.length === 0) {
     state.createUser('默认用户')
-  } else if (!state.currentUserId) {
+  } else if (!state.currentUserId && state.users[0]?.id) {
     state.switchUser(state.users[0].id)
   }
 }

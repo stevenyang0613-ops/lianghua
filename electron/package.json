@@ -15,8 +15,8 @@
     "test:coverage": "jest --coverage"
   },
   "build": {
-    "appId": "com.lianghua.app",
-    "productName": "可转债策略",
+    "appId": "com.lianghua.quant",
+    "productName": "LiangHua",
     "directories": {
       "output": "release"
     },
@@ -25,22 +25,37 @@
       "node_modules/electron-updater/**",
       "node_modules/ws/**"
     ],
+    "files": [
+      "dist/main.js",
+      "dist/preload.js",
+      "dist/splash-preload.js",
+      "package.json",
+      "node_modules/**"
+    ],
     "extraResources": [
       {
         "from": "../frontend/dist",
-        "to": "frontend"
+        "to": "frontend",
+        "filter": [
+          "**/*",
+          "!lianghua-backend",
+          "!lianghua-backend.exe"
+        ]
       },
       {
         "from": "../backend",
         "to": "backend",
         "filter": [
-          "**/*",
+          "lianghua-backend",
+          "lianghua-backend.exe",
+          "app/**/*.py",
           "!.venv/**",
           "!__pycache__/**",
           "!.git/**",
-          "!data/**.db",
+          "!data/**",
           "!build/**",
           "!wheels/**",
+          "!dist/**",
           "!.dockerignore",
           "!.env.example",
           "!.github/**",
@@ -60,7 +75,8 @@
           "!deploy/**",
           "!grafana/**",
           "!tests/**",
-          "!alembic/**"
+          "!alembic/**",
+          "!*.pyc"
         ]
       }
     ],
@@ -74,13 +90,18 @@
         }
       ],
       "artifactName": "${productName}-${version}.${ext}",
-      "icon": "resources/icons/icon.icns"
+      "icon": "resources/icons/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "category": "public.app-category.finance",
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "lianghua",
-        "repo": "electron"
+        "repo": "lianghua-app"
       }
     ],
     "dmg": {
@@ -88,10 +109,11 @@
     }
   },
   "devDependencies": {
+    "@types/electron": "^1.4.38",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "electron": "^42.0.1",
+    "electron": "^42.3.3",
     "electron-builder": "^26.8.1",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.9",

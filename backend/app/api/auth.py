@@ -88,3 +88,64 @@ async def read_users_me(token: str = Depends(oauth2_scheme)):
 @router.post("/logout")
 async def logout():
     return {"message": "Successfully logged out"}
+
+
+# ---------------------------------------------------------------------------
+# 全局认证依赖（供 router.py 使用）
+# ---------------------------------------------------------------------------
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    """从 JWT token 中解码并返回当前用户。"""
+    from app.config import settings
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
+        username: str | None = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = fake_users_db.get(username)
+    if user is None:
+        raise credentials_exception
+    return User(username=user["username"], email=user["email"])
+
+
+async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+    """验证用户是否被禁用。"""
+    if current_user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
+
+
+async def verify_token(token: str = Depends(oauth2_scheme)) -> str:
+    """轻量级认证依赖 —— 仅校验 token 合法性并返回 username，不查数据库。
+
+    用于 router.py 的全局 Depends，避免在每个业务路由中重复注入。
+    支持两种 token：JWT（Web 登录）或 ws_auth_token（桌面应用 IPC 代理）。
+    """
+    from app.config import settings
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if token and token == settings.ws_auth_token:
+        return "desktop"
+    try:
+        payload = jwt.decode(
+            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
+        username: str | None = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        return username
+    except JWTError:
+        raise credentials_exception

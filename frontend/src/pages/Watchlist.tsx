@@ -5,8 +5,12 @@ import { useWatchlistStore } from '../stores/useWatchlistStore'
 import { useMarketStore } from '../stores/useMarketStore'
 import { useAppStore } from '../stores/useAppStore'
 import type { ConvertibleQuote } from '../types'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
+
+
+
 
 export default function Watchlist() {
   const watchlist = useWatchlistStore((s) => s.watchlist)
@@ -43,8 +47,8 @@ export default function Watchlist() {
       key: 'price',
       width: 90,
       render: (v: number, r: ConvertibleQuote) => (
-        <span style={{ color: r.change_pct > 0 ? '#cf1322' : r.change_pct < 0 ? '#389e0d' : undefined, fontWeight: 600 }}>
-          {v.toFixed(2)}
+        <span style={{ color: (r.change_pct ?? 0) > 0 ? '#cf1322' : (r.change_pct ?? 0) < 0 ? '#389e0d' : undefined, fontWeight: 600 }}>
+          {fmt(v)}
         </span>
       ),
     },
@@ -54,8 +58,8 @@ export default function Watchlist() {
       key: 'change_pct',
       width: 90,
       render: (v: number) => (
-        <Tag color={v > 0 ? 'red' : v < 0 ? 'green' : undefined}>
-          {v > 0 ? '+' : ''}{v.toFixed(2)}%
+        <Tag color={(v ?? 0) > 0 ? 'red' : (v ?? 0) < 0 ? 'green' : undefined}>
+          {(v ?? 0) > 0 ? '+' : ''}{fmt(v)}%
         </Tag>
       ),
     },
@@ -64,7 +68,7 @@ export default function Watchlist() {
       dataIndex: 'premium_ratio',
       key: 'premium_ratio',
       width: 90,
-      render: (v: number) => <span>{v.toFixed(2)}%</span>,
+      render: (v: number) => <span>{fmt(v)}%</span>,
     },
     {
       title: '双低',
@@ -72,10 +76,28 @@ export default function Watchlist() {
       key: 'dual_low',
       width: 80,
       render: (v: number) => (
-        <Tag color={v < 130 ? 'green' : v > 180 ? 'red' : 'orange'}>
-          {v.toFixed(2)}
+        <Tag color={(v ?? 0) < 130 ? 'green' : (v ?? 0) > 180 ? 'red' : 'orange'}>
+          {fmt(v)}
         </Tag>
       ),
+    },
+    {
+      title: '强赎状态',
+      dataIndex: 'call_status',
+      key: 'call_status',
+      width: 90,
+      render: (v: string, r: ConvertibleQuote) => {
+        if (r.is_called) return <Tag color="red">已公告强赎</Tag>
+        if (v) return <Tag color="orange">{v}</Tag>
+        return <span style={{ color: '#bbb' }}>-</span>
+      },
+    },
+    {
+      title: '最后交易日',
+      dataIndex: 'last_trade_date',
+      key: 'last_trade_date',
+      width: 110,
+      render: (v: string) => v ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span> : <span style={{ color: '#bbb' }}>-</span>,
     },
     {
       title: '操作',

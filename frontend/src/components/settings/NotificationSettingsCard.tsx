@@ -8,7 +8,10 @@ export const NotificationSettingsCard = React.memo(function NotificationSettings
   const [notificationEnabled, setNotificationEnabled] = useState(getNotificationPermission() === 'granted')
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useState(() => {
     const saved = localStorage.getItem('notification_settings')
-    return saved ? JSON.parse(saved).audioEnabled ?? true : true
+    if (saved) {
+      try { return JSON.parse(saved).audioEnabled ?? true } catch { /* fall through */ }
+    }
+    return true
   })
 
   const handleEnableNotification = async () => {

@@ -355,7 +355,12 @@ class PluginManager {
   // 私有方法
   private loadInstalledPlugins(): void {
     const saved = localStorage.getItem(PLUGINS_KEY)
-    this.installedPlugins = saved ? JSON.parse(saved) : []
+    try {
+      this.installedPlugins = saved ? JSON.parse(saved) : []
+    } catch {
+      console.warn('[PluginSystem] Corrupted plugin data, resetting')
+      this.installedPlugins = []
+    }
   }
 
   private saveInstalledPlugins(): void {
@@ -364,7 +369,12 @@ class PluginManager {
 
   private loadSettings(): void {
     const saved = localStorage.getItem(PLUGIN_SETTINGS_KEY)
-    this.settings = saved ? JSON.parse(saved) : {}
+    try {
+      this.settings = saved ? JSON.parse(saved) : {}
+    } catch {
+      console.warn('[PluginSystem] Corrupted settings data, resetting')
+      this.settings = {}
+    }
   }
 
   private saveSettings(): void {

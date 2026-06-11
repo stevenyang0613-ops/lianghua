@@ -116,7 +116,8 @@ export interface CrashReport {
   uptime: number
 }
 
-// Event listeners storage for cleanup
+// Event listeners storage for cleanup — each registration gets a unique key
+let listenerCounter = 0
 const listeners: Map<string, (...args: any[]) => void> = new Map()
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -139,6 +140,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App info
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
 
+  // WebSocket auth token
+  getWsToken: () => ipcRenderer.invoke('get-ws-token'),
+
   // Backend
   restartBackend: () => ipcRenderer.invoke('restart-backend'),
 
@@ -148,13 +152,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   httpRequest: (method: string, url: string, body?: any) => ipcRenderer.invoke('http-request', method, url, body),
 
   // Backend ready event
-  onBackendReady: (callback: (port: number) => void) => {
-    const listener = (_event: any, data: { port: number }) => callback(data.port)
+  onBackendReady: (callback: () => void) => {
+    const key = `backend-ready-${listenerCounter++}`
+    const listener = () => callback()
     ipcRenderer.on('backend-ready', listener)
-    listeners.set('backend-ready', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('backend-ready', listener)
-      listeners.delete('backend-ready')
+      listeners.delete(key)
     }
   },
 
@@ -168,12 +173,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Resource updates
   onResourceUpdated: (callback: (info: { file: string; oldHash: string; newHash: string; timestamp: number }) => void) => {
+    const key = `resource-updated-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, info: { file: string; oldHash: string; newHash: string; timestamp: number }) => callback(info)
     ipcRenderer.on('resource-updated', listener)
-    listeners.set('resource-updated', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('resource-updated', listener)
-      listeners.delete('resource-updated')
+      listeners.delete(key)
     }
   },
 
@@ -185,42 +191,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Navigation events
   onNavigate: (callback: (route: string) => void) => {
+    const key = `navigate-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, route: string) => callback(route)
     ipcRenderer.on('navigate', listener)
-    listeners.set('navigate', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('navigate', listener)
-      listeners.delete('navigate')
+      listeners.delete(key)
     }
   },
 
   onRefreshData: (callback: () => void) => {
+    const key = `refresh-data-${listenerCounter++}`
     const listener = () => callback()
     ipcRenderer.on('refresh-data', listener)
-    listeners.set('refresh-data', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('refresh-data', listener)
-      listeners.delete('refresh-data')
+      listeners.delete(key)
     }
   },
 
   onExportReport: (callback: () => void) => {
+    const key = `export-report-${listenerCounter++}`
     const listener = () => callback()
     ipcRenderer.on('export-report', listener)
-    listeners.set('export-report', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('export-report', listener)
-      listeners.delete('export-report')
+      listeners.delete(key)
     }
   },
 
   onWindowFocus: (callback: (focused: boolean) => void) => {
+    const key = `window-focus-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, focused: boolean) => callback(focused)
     ipcRenderer.on('window-focus', listener)
-    listeners.set('window-focus', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('window-focus', listener)
-      listeners.delete('window-focus')
+      listeners.delete(key)
     }
   },
 
@@ -228,12 +238,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
 
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => {
+    const key = `update-status-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, status: UpdateStatus) => callback(status)
     ipcRenderer.on('update-status', listener)
-    listeners.set('update-status', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('update-status', listener)
-      listeners.delete('update-status')
+      listeners.delete(key)
     }
   },
 
@@ -249,12 +260,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendToWindow: (windowId: number, channel: string, data: unknown) => ipcRenderer.invoke('send-to-window', windowId, channel, data),
   broadcast: (channel: string, data: unknown) => ipcRenderer.send('broadcast', channel, data),
   onBroadcast: (callback: (channel: string, data: unknown) => void) => {
+    const key = `broadcast-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, channel: string, data: unknown) => callback(channel, data)
     ipcRenderer.on('broadcast', listener)
-    listeners.set('broadcast', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('broadcast', listener)
-      listeners.delete('broadcast')
+      listeners.delete(key)
     }
   },
 
@@ -264,21 +276,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   wsClose: (wsId: string) => ipcRenderer.invoke('ws-close', wsId),
   wsState: (wsId: string) => ipcRenderer.invoke('ws-state', wsId),
   onWsState: (callback: (wsId: string, state: string, code?: number, reason?: string) => void) => {
+    const key = `ws-state-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, wsId: string, state: string, code?: number, reason?: string) => callback(wsId, state, code, reason)
     ipcRenderer.on('ws-state', listener)
-    listeners.set('ws-state', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('ws-state', listener)
-      listeners.delete('ws-state')
+      listeners.delete(key)
     }
   },
   onWsMessage: (callback: (wsId: string, data: string, isBinary: boolean) => void) => {
+    const key = `ws-message-${listenerCounter++}`
     const listener = (_event: IpcRendererEvent, wsId: string, data: string, isBinary: boolean) => callback(wsId, data, isBinary)
     ipcRenderer.on('ws-message', listener)
-    listeners.set('ws-message', listener)
+    listeners.set(key, listener)
     return () => {
       ipcRenderer.removeListener('ws-message', listener)
-      listeners.delete('ws-message')
+      listeners.delete(key)
     }
   },
 } as ElectronAPI)

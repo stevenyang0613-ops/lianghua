@@ -3,8 +3,12 @@ import { Card, Table, Tag, Typography, Spin, Empty, message, Row, Col, Descripti
 import { DeploymentUnitOutlined, InfoCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { fetchStrategies, fetchSignalHistory, fetchSignalStats } from '../services/api'
 import type { StrategyInfo, SignalHistoryItem, SignalStats } from '../services/api'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
+
+
+
 
 export default function Strategies() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
@@ -125,11 +129,11 @@ export default function Strategies() {
                   { title: '代码', dataIndex: 'code', width: 80, render: (v: string) => <Text code>{v}</Text> },
                   { title: '名称', dataIndex: 'name', width: 120 },
                   { title: '方向', dataIndex: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v]}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
-                  { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v.toFixed(3) },
-                  { title: '置信度', dataIndex: 'confidence', width: 70, render: (v: number) => `${(v * 100).toFixed(0)}%` },
+                  { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v, 3) },
+                  { title: '置信度', dataIndex: 'confidence', width: 70, render: (v: number) => `${fmt((v ?? 0) * 100, 0)}%` },
                   { title: '已执行', dataIndex: 'executed', width: 60, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
                   { title: '原因', dataIndex: 'reason', ellipsis: true },
-                  { title: '时间', dataIndex: 'ts', width: 160, render: (v: string) => new Date(v).toLocaleString('zh-CN') },
+                  { title: '时间', dataIndex: 'ts', width: 160, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
                 ]}
               />
             </Card>

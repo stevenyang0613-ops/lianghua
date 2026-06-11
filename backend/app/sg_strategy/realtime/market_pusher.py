@@ -233,7 +233,7 @@ class MultiLevelCache:
         if self.l2_client:
             try:
                 self.l2_client.delete(key)
-            except:
+            except Exception:
                 pass
 
     def get_stats(self) -> Dict:
@@ -625,7 +625,7 @@ class WebSocketPusher:
                 if session.is_active:
                     try:
                         await session.websocket.send(message)
-                    except:
+                    except Exception:
                         pass
 
     def push_order_update(self, client_id: str, order: Dict):
@@ -658,7 +658,7 @@ class WebSocketPusher:
                 if session.is_active:
                     try:
                         await session.websocket.send(message)
-                    except:
+                    except Exception:
                         pass
 
     def _generate_client_id(self) -> str:

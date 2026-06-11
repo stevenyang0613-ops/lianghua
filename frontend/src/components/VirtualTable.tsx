@@ -1,17 +1,25 @@
 /**
  * 高性能虚拟滚动表格
- * 支持 10万+ 行数据
+ * 支持 10万+ 行数据 + 列头点击排序
  */
 
-import { useEffect, useRef, useState, useCallback, memo, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, memo, type ReactNode } from 'react'
 import { Spin } from 'antd'
 
-interface VirtualColumn<T> {
+export type SortOrder = 'asc' | 'desc' | null
+
+export interface VirtualColumn<T> {
   key?: string | number
   title?: ReactNode
   dataIndex?: string
   width?: number | string
   render?: (value: unknown, record: T, index: number) => ReactNode
+  /** 启用列头点击排序。设置为 true 时,点击列头会通过 onSort 回调通知父组件 */
+  sortable?: boolean
+  /** 当前列的排序方向(由父组件控制),与 sorter 配合使用 */
+  sortOrder?: SortOrder
+  /** 自定义排序比较函数;省略时按 dataIndex 取值做数值/字符串比较 */
+  sorter?: (a: T, b: T) => number
 }
 
 interface VirtualTableProps<T> {
@@ -23,6 +31,9 @@ interface VirtualTableProps<T> {
   onScroll?: (scrollTop: number) => void
   loading?: boolean
   rowKey?: string | ((record: T) => string | number)
+  onRowClick?: (record: T, index: number) => void
+  /** 列头排序事件(仅对 sortable=true 的列触发),dataIndex 可能为 undefined */
+  onSort?: (dataIndex: string | number | undefined, column: VirtualColumn<T>) => void
 }
 
 function VirtualTableInner<T>({
@@ -33,10 +44,18 @@ function VirtualTableInner<T>({
   loading,
   onScroll,
   rowKey,
+  onRowClick,
+  onSort,
 }: VirtualTableProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(600)
+
+  // 计算所有列总宽度，用于水平滚动
+  const totalWidth = useMemo(() =>
+    columns?.reduce((sum, col) => sum + (typeof col.width === 'number' ? col.width : 100), 0) || 800,
+    [columns]
+  )
 
   // 计算可见范围
   const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
@@ -86,7 +105,9 @@ function VirtualTableInner<T>({
           alignItems: 'center',
           borderBottom: '1px solid #f0f0f0',
           boxSizing: 'border-box',
+          cursor: onRowClick ? 'pointer' : undefined,
         }}
+        onClick={() => onRowClick?.(record, actualIndex)}
       >
         {columns?.map((col, colIndex) => {
           const value = col.dataIndex ? (record as Record<string, unknown>)[col.dataIndex] : undefined
@@ -110,18 +131,47 @@ function VirtualTableInner<T>({
     )
   }
 
+  const handleHeaderClick = (col: VirtualColumn<T>) => {
+    if (!col.sortable) return
+    onSort?.(col.dataIndex, col)
+  }
+
+  const renderSortIndicator = (col: VirtualColumn<T>) => {
+    if (!col.sortable) return null
+    const order = col.sortOrder
+    const isActive = order === 'asc' || order === 'desc'
+    const arrow = order === 'asc' ? '▲' : order === 'desc' ? '▼' : '⇅'
+    return (
+      <span
+        aria-hidden
+        style={{
+          marginLeft: 4,
+          fontSize: 10,
+          color: isActive ? '#1677ff' : '#bbb',
+          userSelect: 'none',
+          transition: 'color 0.15s',
+        }}
+      >
+        {arrow}
+      </span>
+    )
+  }
+
   return (
     <div
       ref={containerRef}
+      className="virtual-table"
       style={{
         height: '100%',
         overflow: 'auto',
         position: 'relative',
+        fontSize: 'var(--table-cell-font-size, 13px)',
       }}
       onScroll={handleScroll}
     >
-      {/* 表头 */}
+      {/* 表头 - 与内容区同宽实现水平滚动同步 */}
       <div
+        className="vt-header"
         style={{
           position: 'sticky',
           top: 0,
@@ -129,11 +179,15 @@ function VirtualTableInner<T>({
           background: '#fafafa',
           display: 'flex',
           borderBottom: '2px solid #f0f0f0',
+          minWidth: totalWidth,
+          fontSize: 'var(--table-header-font-size, 13px)',
         }}
       >
         {columns?.map((col, index) => (
           <div
             key={col.key || col.dataIndex || index}
+            onClick={() => handleHeaderClick(col)}
+            className={col.sortable ? 'vt-header-cell sortable' : 'vt-header-cell'}
             style={{
               width: col.width || 100,
               minWidth: col.width || 100,
@@ -142,15 +196,29 @@ function VirtualTableInner<T>({
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              cursor: col.sortable ? 'pointer' : 'default',
+              userSelect: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
             }}
+            data-testid={col.sortable ? `vt-sort-${col.dataIndex}` : undefined}
+            role={col.sortable ? 'button' : undefined}
+            aria-sort={
+              col.sortOrder === 'asc' ? 'ascending' :
+              col.sortOrder === 'desc' ? 'descending' :
+              'none'
+            }
+            title={col.title}
           >
-            {col.title}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.title}</span>
+            {renderSortIndicator(col)}
           </div>
         ))}
       </div>
 
-      {/* 虚拟内容区 */}
-      <div style={{ height: totalHeight, position: 'relative' }}>
+      {/* 虚拟内容区 - minWidth 保证水平滚动时列不收缩 */}
+      <div style={{ height: totalHeight, position: 'relative', minWidth: totalWidth }}>
         {loading ? (
           <div
             style={{

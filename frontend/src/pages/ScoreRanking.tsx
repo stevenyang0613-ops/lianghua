@@ -21,6 +21,7 @@ import {
   AlertManageModal, ComboAlertModal, AlertHistoryModal, FactorConfigModal,
   ScoreHistoryModal, PredictionModal, BacktestPanel, SignalStrategyTab, BacktestHistoryTab,
 } from '../components/score-ranking'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
@@ -63,6 +64,10 @@ function saveCustomFactors(factors: Record<string, { name: string; weights: Reco
 }
 
 export default function ScoreRanking() {
+  const [filteredPage, setFilteredPage] = useState(1)
+  const [filteredPageSize, setFilteredPageSize] = useState(30)
+  const [fullPage, setFullPage] = useState(1)
+  const [fullPageSize, setFullPageSize] = useState(50)
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<{ total: number; returned: number; items: ScoreRankingItem[] } | null>(null)
   const [fullData, setFullData] = useState<{ total: number; items: ScoreRankingItem[] } | null>(null)
@@ -164,7 +169,13 @@ export default function ScoreRanking() {
     try { const result = await fetchAlertHistory(30); setAlertHistory(result.history) } catch (e) { console.error('加载预警历史失败', e) }
   }, [])
 
-  useEffect(() => { loadData(); loadFullData(); loadAlerts(); loadScoreDates(); loadComboAlerts() }, [])
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([loadData(), loadFullData(), loadAlerts(), loadScoreDates(), loadComboAlerts()])
+      .catch(() => {})
+      .finally(() => { if (cancelled) return })
+    return () => { cancelled = true }
+  }, [])
 
   const handleSaveConfig = useCallback(() => {
     saveConfig({ topN, maxPremium, minPrice }); saveWeights(weights); message.success('配置已保存')
@@ -313,27 +324,27 @@ export default function ScoreRanking() {
     { title: '排名', dataIndex: 'rank', width: 60, render: (v: number) => <Text strong style={{ color: v <= 10 ? '#faad14' : v <= 30 ? '#1677ff' : undefined }}>#{v}</Text> },
     { title: '代码', dataIndex: 'code', width: 90, render: (v: string) => <Text code>{v}</Text> },
     { title: '名称', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v?.toFixed(2) },
-    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, render: (v: number) => <Tag color={v < 20 ? 'green' : v < 40 ? 'blue' : 'orange'}>{v.toFixed(1)}%</Tag> },
-    { title: '双低值', dataIndex: 'dual_low', width: 80, render: (v: number) => <Tag color={v < 130 ? 'green' : v < 150 ? 'blue' : 'orange'}>{v.toFixed(1)}</Tag> },
-    { title: '涨跌幅', dataIndex: 'change_pct', width: 90, render: (v: number) => <span style={{ color: v >= 0 ? '#cf1322' : '#389e0d' }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span> },
+    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
+    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, ellipsis: { showTitle: true }, render: (v: number) => <Tag color={v < 20 ? 'green' : v < 40 ? 'blue' : 'orange'}>{fmt(v, 1)}%</Tag> },
+    { title: '双低值', dataIndex: 'dual_low', width: 80, ellipsis: { showTitle: true }, render: (v: number) => <Tag color={v < 130 ? 'green' : v < 150 ? 'blue' : 'orange'}>{fmt(v, 1)}</Tag> },
+    { title: '涨跌幅', dataIndex: 'change_pct', width: 90, render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
     {
-      title: '综合评分', dataIndex: 'score', width: 140, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => a.score - b.score,
+      title: '综合评分', dataIndex: 'score', width: 140, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.score ?? 0) - (b.score ?? 0),
       render: (v: number) => (
-        <Space><Progress percent={Math.round(v * 100)} size="small" style={{ width: 60 }} strokeColor={scoreColor(v)} /><Text strong style={{ color: scoreColor(v) }}>{v.toFixed(3)}</Text></Space>
+        <Space><Progress percent={Math.round((v ?? 0) * 100)} size="small" style={{ width: 60 }} strokeColor={scoreColor(v ?? 0)} /><Text strong style={{ color: scoreColor(v ?? 0) }}>{fmt(v, 3)}</Text></Space>
       ),
     },
     {
       title: '因子得分', key: 'factor_scores', width: 200,
       render: (_: unknown, record: ScoreRankingItem) => (
-        <Tooltip title={<div><div>双低因子: {record.score_dual_low.toFixed(3)}</div><div>溢价因子: {record.score_premium.toFixed(3)}</div><div>动量因子: {record.score_momentum.toFixed(3)}</div><div>成交量因子: {record.score_volume.toFixed(3)}</div><div>价格因子: {record.score_price.toFixed(3)}</div></div>}>
-          <Space size={2}><Tag color="blue" style={{ fontSize: 10 }}>双低 {record.score_dual_low.toFixed(2)}</Tag><Tag color="green" style={{ fontSize: 10 }}>溢价 {record.score_premium.toFixed(2)}</Tag><Tag color="orange" style={{ fontSize: 10 }}>动量 {record.score_momentum.toFixed(2)}</Tag></Space>
+        <Tooltip title={<div><div>双低因子: {fmt(record.score_dual_low, 3)}</div><div>溢价因子: {fmt(record.score_premium, 3)}</div><div>动量因子: {fmt(record.score_momentum, 3)}</div><div>成交量因子: {fmt(record.score_volume, 3)}</div><div>价格因子: {fmt(record.score_price, 3)}</div></div>}>
+          <Space size={2}><Tag color="blue" style={{ fontSize: 10 }}>双低 {fmt(record.score_dual_low, 2)}</Tag><Tag color="green" style={{ fontSize: 10 }}>溢价 {fmt(record.score_premium, 2)}</Tag><Tag color="orange" style={{ fontSize: 10 }}>动量 {fmt(record.score_momentum, 2)}</Tag></Space>
         </Tooltip>
       ),
     },
-    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => v?.toLocaleString() },
-    { title: '剩余年限', dataIndex: 'remaining_years', width: 80, render: (v: number) => v != null ? `${v.toFixed(1)}年` : '-' },
-    { title: '转股价值', dataIndex: 'conversion_value', width: 90, render: (v: number) => v?.toFixed(2) ?? '-' },
+    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
+    { title: '剩余年限', dataIndex: 'remaining_years', width: 80, ellipsis: { showTitle: true }, render: (v: number) => Number.isFinite(v) ? `${fmt(v, 1)}年` : '-' },
+    { title: '转股价值', dataIndex: 'conversion_value', width: 90, ellipsis: { showTitle: true }, render: (v: number) => fmt(v) },
     {
       title: '操作', key: 'actions', width: 130, fixed: 'right' as const,
       render: (_: unknown, record: ScoreRankingItem) => (
@@ -350,12 +361,12 @@ export default function ScoreRanking() {
     { title: '排名', dataIndex: 'rank', width: 60, render: (v: number) => <Text strong>#{v}</Text> },
     { title: '代码', dataIndex: 'code', width: 90 },
     { title: '名称', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v?.toFixed(2) },
-    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, render: (v: number) => `${v.toFixed(1)}%` },
-    { title: '双低值', dataIndex: 'dual_low', width: 80, render: (v: number) => v?.toFixed(1) },
-    { title: '涨跌幅', dataIndex: 'change_pct', width: 80, render: (v: number) => <span style={{ color: v >= 0 ? '#cf1322' : '#389e0d' }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span> },
-    { title: '综合评分', dataIndex: 'score', width: 120, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => a.score - b.score, render: (v: number) => <Text strong style={{ color: scoreColor(v) }}>{v.toFixed(3)}</Text> },
-    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => v?.toLocaleString() },
+    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
+    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, render: (v: number) => `${fmt(v, 1)}%` },
+    { title: '双低值', dataIndex: 'dual_low', width: 80, render: (v: number) => fmt(v, 1) },
+    { title: '涨跌幅', dataIndex: 'change_pct', width: 80, render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
+    { title: '综合评分', dataIndex: 'score', width: 120, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.score ?? 0) - (b.score ?? 0), render: (v: number) => <Text strong style={{ color: scoreColor(v ?? 0) }}>{fmt(v, 3)}</Text> },
+    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
   ], [])
 
   const exportCsv = useCallback(() => {
@@ -420,7 +431,7 @@ export default function ScoreRanking() {
             key: 'filtered', label: `筛选排名 (Top ${topN})`,
             children: loading ? <Spin /> : data && data.items.length > 0 ? (
               <Table dataSource={data.items} columns={columns} rowKey="rank" size="small"
-                pagination={{ pageSize: 30, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+                pagination={{ current: filteredPage, pageSize: filteredPageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setFilteredPage(p); setFilteredPageSize(ps) } }}
                 scroll={{ x: 1400, y: 500 }} virtual />
             ) : <Empty description="暂无数据" />,
           },
@@ -428,7 +439,7 @@ export default function ScoreRanking() {
             key: 'full', label: `完整排名 (共 ${fullData?.total || 0} 只)`,
             children: !fullData ? <Spin /> : fullData.items.length > 0 ? (
               <Table dataSource={fullData.items} columns={fullColumns} rowKey="rank" size="small"
-                pagination={{ pageSize: 50, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+                pagination={{ current: fullPage, pageSize: fullPageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setFullPage(p); setFullPageSize(ps) } }}
                 scroll={{ x: 900, y: 500 }} virtual />
             ) : <Empty description="暂无数据" />,
           },

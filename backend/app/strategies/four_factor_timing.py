@@ -1,5 +1,9 @@
 """
-四因子动态择时模型 V3.0
+四因子动态择时模型 V3.0 (Legacy)
+
+保留用于历史回测对比和向后兼容。
+新系统请使用：app.strategies.enhanced_timing_model.EnhancedTimingModel
+（多维度综合择时模型 V4.0：9 大类 40+ 子因子）
 
 用于确定组合仓位上限：
 - 全市场转债估值（40%）
@@ -33,7 +37,7 @@ class TimingSignal:
 
 
 class FourFactorTiming:
-    """四因子动态择时模型"""
+    """四因子动态择时模型 V3 (Legacy) — 已由 EnhancedTimingModel 替代"""
 
     # 因子权重
     WEIGHTS = {

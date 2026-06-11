@@ -454,7 +454,7 @@ def check_database_connection() -> bool:
     try:
         # 简化实现
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -464,7 +464,7 @@ def check_redis_connection() -> bool:
         from app.sg_strategy.core.cache import get_cache_manager
         cache = get_cache_manager()
         return cache.l2_cache.is_connected
-    except:
+    except Exception:
         return False
 
 
@@ -474,7 +474,7 @@ def check_storage_connection() -> bool:
         from app.sg_strategy.core.storage import get_storage_manager
         storage = get_storage_manager()
         return storage.health_check()
-    except:
+    except Exception:
         return False
 
 

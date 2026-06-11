@@ -76,16 +76,16 @@ export default function AccountManager() {
     { title: '名称', dataIndex: 'name', width: 100 },
     { title: '持仓', dataIndex: 'volume', width: 80 },
     { title: '可用', dataIndex: 'available', width: 80 },
-    { title: '成本', dataIndex: 'costPrice', width: 80, render: (v) => v.toFixed(2) },
-    { title: '现价', dataIndex: 'currentPrice', width: 80, render: (v) => v.toFixed(2) },
-    { title: '市值', dataIndex: 'marketValue', width: 100, render: (v) => v.toLocaleString() },
+    { title: '成本', dataIndex: 'costPrice', width: 80, render: (v: number) => v != null ? v.toFixed(2) : '-' },
+    { title: '现价', dataIndex: 'currentPrice', width: 80, render: (v: number) => v != null ? v.toFixed(2) : '-' },
+    { title: '市值', dataIndex: 'marketValue', width: 100, render: (v: number) => v != null ? v.toLocaleString() : '-' },
     {
       title: '盈亏',
       dataIndex: 'profitPct',
       width: 80,
       render: (v: number) => (
         <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f' }}>
-          {v >= 0 ? '+' : ''}{v.toFixed(2)}%
+          {v != null ? (v >= 0 ? '+' : '') + v.toFixed(2) : '-'}%
         </Text>
       ),
     },
@@ -124,27 +124,27 @@ export default function AccountManager() {
       title: '总资产',
       dataIndex: 'balance',
       width: 120,
-      render: (v: number, record) => `¥${(v + record.marketValue).toLocaleString()}`,
+      render: (v: number, record) => `¥${((v ?? 0) + (record.marketValue ?? 0)).toLocaleString()}`,
     },
     {
       title: '可用资金',
       dataIndex: 'available',
       width: 120,
-      render: (v: number) => `¥${v.toLocaleString()}`,
+      render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
     },
     {
       title: '市值',
       dataIndex: 'marketValue',
       width: 120,
-      render: (v: number) => `¥${v.toLocaleString()}`,
+      render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
     },
     {
       title: '今日盈亏',
       dataIndex: 'todayProfit',
       width: 100,
       render: (v: number) => (
-        <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f' }}>
-          {v >= 0 ? '+' : ''}¥{v.toLocaleString()}
+        <Text style={{ color: (v ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
+          {(v ?? 0) >= 0 ? '+' : ''}¥{(v ?? 0).toLocaleString()}
         </Text>
       ),
     },

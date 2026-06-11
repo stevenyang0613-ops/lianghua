@@ -13,15 +13,22 @@ const mockSignalStore = {
   loading: false,
   error: null,
   wsConnected: false,
-  loadSignals: vi.fn(),
-  loadAvailableStrategies: vi.fn(),
-  loadHistory: vi.fn(),
-  loadStats: vi.fn(),
-  setStrategies: vi.fn(),
-  execute: vi.fn(),
-  batchExecute: vi.fn(),
+  loadSignals: vi.fn(() => Promise.resolve()),
+  loadAvailableStrategies: vi.fn(() => Promise.resolve()),
+  loadHistory: vi.fn(() => Promise.resolve()),
+  loadStats: vi.fn(() => Promise.resolve()),
+  setStrategies: vi.fn(() => Promise.resolve()),
+  execute: vi.fn(() => Promise.resolve()),
+  batchExecute: vi.fn(() => Promise.resolve()),
   connectWs: vi.fn(() => vi.fn()),
   disconnectWs: vi.fn(),
+  subscribeWs: vi.fn(() => vi.fn()),
+}
+
+const mockAppStore = {
+  signalWsConnected: false,
+  marketWsConnected: false,
+  backendConnected: false,
 }
 
 vi.mock('../../stores/useSignalStore', () => ({
@@ -29,6 +36,28 @@ vi.mock('../../stores/useSignalStore', () => ({
     if (selector) return selector(mockSignalStore)
     return mockSignalStore
   }),
+}))
+
+vi.mock('../../stores/useAppStore', () => ({
+  useAppStore: vi.fn((selector?: (state: any) => any) => {
+    if (selector) return selector(mockAppStore)
+    return mockAppStore
+  }),
+}))
+
+vi.mock('../../utils/wsInstances', () => ({
+  signalsWs: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    onStateChange: vi.fn(() => () => {}),
+    getLastError: vi.fn(() => null),
+  },
+  marketWs: {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    onStateChange: vi.fn(() => () => {}),
+  },
+  refreshWsToken: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('../../services/api', () => ({
@@ -46,6 +75,8 @@ vi.mock('@ant-design/icons', () => ({
   WifiOutlined: () => <span>Wifi</span>,
   CloudDownloadOutlined: () => <span>Cloud</span>,
   DeleteOutlined: () => <span>Delete</span>,
+  ReloadOutlined: () => <span>Reload</span>,
+  DisconnectOutlined: () => <span>Disconnect</span>,
 }))
 
 describe('Signals page', () => {
@@ -64,13 +95,15 @@ describe('Signals page', () => {
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
-  it('should render title', () => {
+  it('should render title', async () => {
     const { container } = render(
       <BrowserRouter>
         <Signals />
       </BrowserRouter>
     )
-    expect(container.textContent).toContain('交易信号')
+    await waitFor(() => {
+      expect(container.textContent).toContain('交易信号')
+    })
   })
 
   it('should show signal table with data', async () => {
@@ -89,12 +122,14 @@ describe('Signals page', () => {
     })
   })
 
-  it('should show empty state when no signals', () => {
+  it('should show empty state when no signals', async () => {
     const { container } = render(
       <BrowserRouter>
         <Signals />
       </BrowserRouter>
     )
-    expect(container.textContent).toContain('交易信号')
+    await waitFor(() => {
+      expect(container.textContent).toContain('交易信号')
+    })
   })
 })

@@ -100,7 +100,8 @@ class Portfolio:
 def _calculate_metrics(equity: list[float], risk_free_rate: float = 0.02) -> PerformanceMetrics:
     """计算绩效指标，支持可配置无风险利率"""
     arr = np.array(equity)
-    returns = np.diff(arr) / arr[:-1]
+    returns = np.diff(arr) / np.where(arr[:-1] != 0, arr[:-1], np.nan)
+    returns = returns[~np.isnan(returns)]
 
     if len(returns) == 0:
         return PerformanceMetrics()
@@ -197,6 +198,17 @@ class BacktestEngine:
 
         # 排序 & 预构建日期索引
         data = data.sort_values(['code', 'date']).reset_index(drop=True)
+
+        # [Fix] 防御性校验：date 列必须为 date 对象，不能是价格等数值
+        sample = data['date'].iloc[0] if len(data) > 0 else None
+        if sample is not None and not isinstance(sample, date):
+            raise ValueError(
+                f"回测数据 'date' 列类型错误：期望 datetime.date，实际为 "
+                f"{type(sample).__name__}（示例值: {sample!r}）。"
+                f"通常是上游 DataFrame 列顺序与 SQL 别名不一致导致错位，"
+                f"请检查 historical.py / 数据加载链路的列名映射。"
+            )
+
         dates = sorted(data['date'].unique())
         start_date = dates[0] if isinstance(dates[0], date) else date.fromisoformat(str(dates[0]))
         end_date = dates[-1] if isinstance(dates[-1], date) else date.fromisoformat(str(dates[-1]))
@@ -230,18 +242,21 @@ class BacktestEngine:
                 )
 
             buy_signals = [s for s in signals if s['action'] == 'buy']
-            n_to_buy = len(buy_signals)
+            # 预先计算实际需要买入的数量（排除已持有的），避免循环中递减导致分配偏大
+            n_to_buy = sum(1 for s in buy_signals if s['code'] not in portfolio.holdings)
             for sig in buy_signals:
                 if sig['code'] in portfolio.holdings:
-                    n_to_buy -= 1
                     continue
+                if n_to_buy <= 0:
+                    break
                 alloc = portfolio.cash / n_to_buy
-                portfolio.buy(
+                bought = portfolio.buy(
                     sig['code'], sig['price'],
                     self.slippage_pct, self.commission_pct, self.min_commission,
                     current_date, alloc,
                 )
-                n_to_buy -= 1
+                if bought:
+                    n_to_buy -= 1
 
             # 4. 记录净值
             equity.append(portfolio.market_value(code_row_map))
@@ -564,9 +579,9 @@ class WalkForwardValidator:
         # 过拟合比率
         overfit_ratio = 0.0
         if avg_out_return != 0:
-            overfit_ratio = round(avg_in_return / avg_out_return, 3)
+            overfit_ratio = min(round(avg_in_return / avg_out_return, 3), 999.0)
         elif avg_in_return > 0:
-            overfit_ratio = float('inf')  # 样本内有收益但样本外为0
+            overfit_ratio = 999.0
 
         # 参数稳定性得分（基于最优参数的变化程度）
         stability_score = self._calculate_stability(all_best_params)

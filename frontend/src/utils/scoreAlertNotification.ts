@@ -90,13 +90,13 @@ class ScoreAlertNotificationService {
       const alert = newAlerts[0]
       notificationService.show({
         title: `${titles[alert.alert_type]}: ${alert.code}`,
-        body: `${alert.name} ${alert.alert_type} ${alert.current_value.toFixed(2)} ${directions[alert.direction]} 阈值 ${alert.threshold}`,
+        body: `${alert.name} ${alert.alert_type} ${Number.isFinite(alert.current_value) ? alert.current_value.toFixed(2) : '-'} ${directions[alert.direction]} 阈值 ${alert.threshold}`,
         tag: `score-alert-${alert.code}`,
       })
     } else {
       notificationService.show({
         title: `评分预警: ${newAlerts.length}个预警触发`,
-        body: newAlerts.slice(0, 3).map(a => `${a.code}: ${a.alert_type}=${a.current_value.toFixed(2)}`).join('\n') +
+        body: newAlerts.slice(0, 3).map(a => `${a.code}: ${a.alert_type}=${Number.isFinite(a.current_value) ? a.current_value.toFixed(2) : '-'}`).join('\n') +
           (newAlerts.length > 3 ? `\n... 还有 ${newAlerts.length - 3} 个` : ''),
         tag: 'score-alerts-batch',
       })

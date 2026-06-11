@@ -26,8 +26,10 @@ export const PerformanceMonitorCard = React.memo(function PerformanceMonitorCard
   useEffect(() => {
     const saved = localStorage.getItem('perf_metrics')
     if (saved) {
-      const metrics: PerformanceMetrics = JSON.parse(saved)
-      if (metrics.startupTime) setStartupTime(metrics.startupTime)
+      try {
+        const metrics: PerformanceMetrics = JSON.parse(saved)
+        if (metrics.startupTime) setStartupTime(metrics.startupTime)
+      } catch { /* ignore corrupt data */ }
     }
   }, [])
 

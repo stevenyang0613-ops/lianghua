@@ -24,6 +24,7 @@ class MessageType(Enum):
     PORTFOLIO = 'portfolio'   # 组合更新
     SYSTEM = 'system'         # 系统消息
     HEARTBEAT = 'heartbeat'   # 心跳
+    REVISION = 'revision'     # 下修事件
 
 
 @dataclass
@@ -133,7 +134,10 @@ class ConnectionManager:
         sent_count = 0
         dead_clients = []
 
-        for client_id, client in self._clients.items():
+        async with self._lock:
+            clients_snapshot = dict(self._clients)
+
+        for client_id, client in clients_snapshot.items():
             if not client.is_active:
                 continue
 

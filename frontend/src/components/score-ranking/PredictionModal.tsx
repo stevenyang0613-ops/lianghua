@@ -64,7 +64,7 @@ export default React.memo(function PredictionModal({
                 <Col span={4.8} key={i} style={{ textAlign: 'center' }}>
                   <div style={{ fontWeight: 'bold' }}>第{p.day}天</div>
                   <Progress type="circle" percent={Math.round(p.predicted_score * 100)} size={60} strokeColor={scoreColor(p.predicted_score)} />
-                  <div style={{ color: scoreColor(p.predicted_score) }}>{p.predicted_score.toFixed(3)}</div>
+                  <div style={{ color: scoreColor(p.predicted_score) }}>{(p.predicted_score ?? 0).toFixed(3)}</div>
                 </Col>
               ))}
             </Row>

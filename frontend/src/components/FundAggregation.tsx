@@ -92,7 +92,7 @@ export default function FundAggregation({ onTransfer }: Props) {
     // 获取每个账户的资金状态
     const fundStatuses = allAccounts.map(account => {
       const balance = multiAccountManager.getBalance(account.id)
-      const utilization = balance ? (balance.marketValue / balance.totalAsset) * 100 : 0
+      const utilization = balance ? (balance.totalAsset > 0 ? (balance.marketValue / balance.totalAsset) * 100 : 0) : 0
       const efficiency = calculateEfficiency(balance ?? null)
 
       return {
@@ -117,7 +117,7 @@ export default function FundAggregation({ onTransfer }: Props) {
     if (!balance) return 0
 
     // 效率 = (可用资金 / 总资产) * 收益率因子
-    const liquidityRatio = balance.availableCash / balance.totalAsset
+    const liquidityRatio = balance.totalAsset > 0 ? balance.availableCash / balance.totalAsset : 0
     const profitFactor = balance.profitTotal > 0 ? 1.2 : balance.profitTotal < 0 ? 0.8 : 1.0
 
     return Math.min(100, liquidityRatio * 100 * profitFactor)
@@ -143,7 +143,7 @@ export default function FundAggregation({ onTransfer }: Props) {
 
     // 方案1: 集中闲置资金
     const idleAccounts = fundStatuses.filter(s =>
-      s.balance && s.balance.availableCash / s.balance.totalAsset > 0.5
+      s.balance && s.balance.totalAsset > 0 && s.balance.availableCash / s.balance.totalAsset > 0.5
     )
 
     if (idleAccounts.length > 1) {
@@ -363,7 +363,7 @@ export default function FundAggregation({ onTransfer }: Props) {
       width: 80,
       render: (_, record) => (
         <Tag color={record.efficiency > 70 ? 'green' : record.efficiency > 50 ? 'orange' : 'red'}>
-          {record.efficiency.toFixed(0)}
+          {(record.efficiency ?? 0).toFixed(0)}
         </Tag>
       ),
     },
@@ -598,7 +598,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                         {plan.transfers.length} 笔
                       </Descriptions.Item>
                       <Descriptions.Item label="调拨金额">
-                        ¥{plan.totalAmount.toLocaleString()}
+                        ¥{(plan.totalAmount ?? 0).toLocaleString()}
                       </Descriptions.Item>
                       <Descriptions.Item label="预计耗时">
                         {plan.estimatedTime} 分钟
@@ -640,7 +640,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                   title: '金额',
                   dataIndex: 'amount',
                   key: 'amount',
-                  render: (v: number) => `¥${v.toLocaleString()}`,
+                  render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
                 },
                 {
                   title: '状态',
@@ -683,7 +683,7 @@ export default function FundAggregation({ onTransfer }: Props) {
           <>
             <Alert
               message={`即将执行 "${selectedPlan.name}" 方案`}
-              description={`共 ${selectedPlan.transfers.length} 笔调拨，总金额 ¥${selectedPlan.totalAmount.toLocaleString()}`}
+              description={`共 ${selectedPlan.transfers.length} 笔调拨，总金额 ¥${(selectedPlan.totalAmount ?? 0).toLocaleString()}`}
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
@@ -699,7 +699,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                 {
                   title: '金额',
                   dataIndex: 'amount',
-                  render: (v: number) => `¥${v.toLocaleString()}`,
+                  render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
                 },
                 { title: '原因', dataIndex: 'reason' },
               ]}

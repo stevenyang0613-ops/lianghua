@@ -7,8 +7,12 @@ import { Card, Table, Switch, Button, Space, Typography, Row, Col, Statistic, Ta
 import { SafetyOutlined, SettingOutlined, ReloadOutlined, HistoryOutlined } from '@ant-design/icons'
 import { getRiskRules, updateRiskRule, resetRiskRules, getRiskHistory, type RiskRule } from '../utils/riskManager'
 import type { ColumnsType } from 'antd/es/table'
+import { fmt } from '../utils/format'
 
 const { Title, Text, Paragraph } = Typography
+
+
+
 
 export default function RiskControl() {
   const [rules, setRules] = useState<RiskRule[]>([])
@@ -101,7 +105,7 @@ export default function RiskControl() {
           : v > record.threshold
         return (
           <Text style={{ color: exceeded ? '#ff4d4f' : '#52c41a' }}>
-            {v.toFixed(1)}%
+            {fmt(v, 1)}%
           </Text>
         )
       },
@@ -336,7 +340,7 @@ export default function RiskControl() {
                   </Tag>
                 ),
               },
-              { title: '触发规则', dataIndex: 'rules', render: (v: string[]) => v.join(', ') || '-' },
+              { title: '触发规则', dataIndex: 'rules', render: (v: string[]) => (v ?? []).join(', ') || '-' },
             ]}
             rowKey="timestamp"
             pagination={false}

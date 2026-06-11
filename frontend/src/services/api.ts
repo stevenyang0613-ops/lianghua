@@ -55,10 +55,16 @@ async function requestAPI<T>(
     return result.data as T
   }
 
-  // Web 环境使用 fetch
+  // Web 环境使用 fetch —— 注入 ws_auth_token 作为 Bearer 以通过后端鉴权
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const wsToken = localStorage.getItem('ws_auth_token')
+  if (wsToken) {
+    headers['Authorization'] = `Bearer ${wsToken}`
+  }
+
   const resp = await fetch(url, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!resp.ok) {
@@ -150,6 +156,10 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
 
 export async function fetchAllQuotes(): Promise<{ total: number; bonds: ConvertibleQuote[]; updated_at: string }> {
   return fetchJSON(`${BASE}/market/quotes`, 'market_quotes', 5 * 60 * 1000) // 5分钟缓存
+}
+
+export async function fetchExchangeableBonds(): Promise<{ total: number; bonds: ConvertibleQuote[]; updated_at: string }> {
+  return fetchJSON(`${BASE}/market/exchangeable`, 'market_exchangeable', 5 * 60 * 1000)
 }
 
 export async function fetchQuote(code: string): Promise<ConvertibleQuote> {
@@ -342,7 +352,7 @@ export async function placeOrder(req: PlaceOrderRequest): Promise<TradeOrder> {
 }
 
 export async function cancelOrder(orderId: string): Promise<{ status: string }> {
-  return fetchJSON(`${BASE}/trade/order/${orderId}/cancel`)
+  return postJSON<{ status: string }>(`${BASE}/trade/orders/${orderId}/cancel`, {})
 }
 
 export async function resetAccount(): Promise<{ status: string }> {
@@ -367,6 +377,7 @@ export interface ForcedRedemptionItem {
   forced_call_days: number
   risk_level: string
   remaining_years: number
+  put_back_pressure: boolean
 }
 
 export interface DualLowItem {
@@ -390,6 +401,7 @@ export interface PulseItem {
   change_pct: number
   price: number
   volume: number
+  volume_ratio?: number
   premium_ratio: number
   dual_low: number
   severity: string
@@ -418,6 +430,8 @@ export interface StockCorrelationItem {
   bond_change: number
   stock_change: number
   elasticity: number
+  correlation: string
+  pearson_correlation: number | null
   premium_ratio: number
   conversion_value: number
   price: number
@@ -425,29 +439,53 @@ export interface StockCorrelationItem {
   dual_low: number
 }
 
-export async function fetchForcedRedemption(): Promise<{ total: number; high_risk_count: number; items: ForcedRedemptionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/forced-redemption`)
+export interface AnalysisQueryOpts {
+  min_volume?: number
+  sort_by?: string
+  sort_order?: string
+  start_date?: string
+  end_date?: string
 }
 
-export async function fetchDualLowRanking(): Promise<{ total: number; items: DualLowItem[] }> {
-  return fetchJSON(`${BASE}/analysis/dual-low-ranking`)
+function _buildParams(opts?: AnalysisQueryOpts): string {
+  if (!opts) return ''
+  const parts: string[] = []
+  if (opts.min_volume && opts.min_volume > 0) parts.push(`min_volume=${opts.min_volume}`)
+  if (opts.sort_by) parts.push(`sort_by=${opts.sort_by}`)
+  if (opts.sort_order) parts.push(`sort_order=${opts.sort_order}`)
+  if (opts.start_date) parts.push(`start_date=${opts.start_date}`)
+  if (opts.end_date) parts.push(`end_date=${opts.end_date}`)
+  return parts.length ? `?${parts.join('&')}` : ''
 }
 
-export async function fetchPulseScan(): Promise<{ total: number; high_severity_count: number; items: PulseItem[] }> {
-  return fetchJSON(`${BASE}/analysis/pulse-scan`)
+export async function fetchForcedRedemption(opts?: AnalysisQueryOpts): Promise<{ total: number; high_risk_count: number; items: ForcedRedemptionItem[] }> {
+  return fetchJSON(`${BASE}/analysis/forced-redemption${_buildParams(opts)}`)
 }
 
-export async function fetchRevisionProbability(): Promise<{ total: number; high_probability_count: number; items: RevisionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/revision-probability`)
+export async function fetchDualLowRanking(opts?: AnalysisQueryOpts): Promise<{ total: number; items: DualLowItem[] }> {
+  return fetchJSON(`${BASE}/analysis/dual-low-ranking${_buildParams(opts)}`)
 }
 
-export async function fetchStockCorrelation(): Promise<{ total: number; items: StockCorrelationItem[] }> {
-  return fetchJSON(`${BASE}/analysis/stock-correlation`)
+export async function fetchPulseScan(opts?: AnalysisQueryOpts): Promise<{ total: number; high_severity_count: number; items: PulseItem[] }> {
+  return fetchJSON(`${BASE}/analysis/pulse-scan${_buildParams(opts)}`)
+}
+
+export async function fetchRevisionProbability(opts?: AnalysisQueryOpts): Promise<{ total: number; high_probability_count: number; items: RevisionItem[] }> {
+  return fetchJSON(`${BASE}/analysis/revision-probability${_buildParams(opts)}`)
+}
+
+export async function fetchStockCorrelation(opts?: AnalysisQueryOpts): Promise<{ total: number; strong_correlation_count: number; items: StockCorrelationItem[] }> {
+  return fetchJSON(`${BASE}/analysis/stock-correlation${_buildParams(opts)}`)
+}
+
+export function getAnalysisExportUrl(tabKey: string, opts?: AnalysisQueryOpts): string {
+  return `${BASE}/analysis/${tabKey}/export${_buildParams(opts)}`
 }
 
 // ── 信号 API ──
 
 export interface TradeSignal {
+  id?: string
   strategy: string
   code: string
   name: string
@@ -569,7 +607,7 @@ export async function verifyStrategy(strategy: string, startDate?: string, endDa
 }
 
 export async function cleanupSignalHistory(keepDays: number = 30): Promise<{ status: string; keep_days: number }> {
-  return deleteJSON<{ status: string; keep_days: number }>(`${BASE}/signals/cleanup?keep_days=${keepDays}`)
+  return postJSON<{ status: string; keep_days: number }>(`${BASE}/signals/cleanup?keep_days=${keepDays}`, {})
 }
 
 export async function setStrategyParams(strategy: string, params: Record<string, unknown>): Promise<{ strategy: string; params: Record<string, unknown> }> {
@@ -917,6 +955,11 @@ export interface SonggangScoreItem {
   bond_score: number
   score_details: Record<string, number>
   bond_details: Record<string, number>
+  change_1d?: number
+  change_3d?: number | null
+  change_5d?: number | null
+  change_10d?: number | null
+  change_30d?: number | null
 }
 
 export interface SonggangVetoedItem {
@@ -937,6 +980,25 @@ export interface BufferStatusItem {
   days_below_60: number
 }
 
+export interface MarketChangeStats {
+  /** 全市场可转债总数 */
+  total: number
+  /** 上涨只数 (change_pct > 0) */
+  up: number
+  /** 下跌只数 (change_pct < 0) */
+  down: number
+  /** 持平只数 (change_pct == 0) */
+  flat: number
+  /** 上涨占比 % */
+  up_ratio: number
+  /** 下跌占比 % */
+  down_ratio: number
+  /** 全市场平均涨跌幅 % */
+  avg_change: number
+  /** 全市场中位数涨跌幅 % */
+  median_change: number
+}
+
 export interface SonggangRankingResponse {
   total: number
   returned: number
@@ -951,6 +1013,7 @@ export interface SonggangRankingResponse {
   vetoed: SonggangVetoedItem[]
   vetoed_count: number
   buffer_status: BufferStatusItem[]
+  market_stats?: MarketChangeStats
   cached: boolean
 }
 
@@ -999,7 +1062,7 @@ export async function fetchSonggangRanking(
 ): Promise<SonggangRankingResponse> {
   return fetchJSON(
     `${BASE}/analysis/songgang-ranking?top_n=${topN}&aum_level=${aumLevel}&market_env=${marketEnv}`,
-    `songgang_ranking_${topN}_${aumLevel}_${marketEnv}`,
+    `songgang_ranking_v2_${topN}_${aumLevel}_${marketEnv}`,
     5 * 60 * 1000
   )
 }
@@ -1021,6 +1084,104 @@ export async function fetchSonggangVetoCheck(code: string): Promise<SonggangVeto
     `songgang_veto_${code}`,
     5 * 60 * 1000
   )
+}
+
+export async function saveSonggangSnapshot(): Promise<{ status: string; saved: number }> {
+  return postJSON<{ status: string; saved: number }>(`${BASE}/analysis/songgang-ranking/save-snapshot`, {})
+}
+
+export interface SevenDimHistoryItem {
+  snapshot_date: string
+  code: string
+  name: string
+  total_score: number
+  stock_score: number
+  bond_score: number
+  momentum: number
+  sector: number
+  technical: number
+  chip: number
+  volatility: number
+  news: number
+  fundamental: number
+  valuation: number
+  clause: number
+  liquidity: number
+  credit: number
+  price: number
+  premium_ratio: number
+  dual_low: number
+}
+
+export async function fetchSonggangHistory(code: string, days: number = 30): Promise<{ code: string; days: number; items: SevenDimHistoryItem[] }> {
+  return fetchJSON(
+    `${BASE}/analysis/songgang-ranking/history/${code}?days=${days}`,
+    `songgang_history_${code}_${days}`,
+    60 * 1000
+  )
+}
+
+/**
+ * SSE流式获取七维排名，实时推送计算进度和中间结果
+ */
+export function streamSonggangRanking(
+  params: { topN: number; aumLevel: string; marketEnv: string },
+  onProgress: (data: { progress: number; computed: number; items: SonggangScoreItem[] }) => void,
+  onDone: (data: any) => void,
+  onError: (err: string) => void,
+  timeout = 30000,
+): EventSource {
+  const url = `${BASE}/analysis/songgang-ranking/stream?top_n=${params.topN}&aum_level=${params.aumLevel}&market_env=${params.marketEnv}`
+  const es = new EventSource(url)
+  let settled = false
+  let timer = setTimeout(() => {
+    if (settled) return
+    settled = true
+    es.close()
+    onError('SSE timeout, falling back to REST')
+  }, timeout)
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      if (data.type === 'progress') {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          if (settled) return
+          settled = true
+          es.close()
+          onError('SSE timeout, falling back to REST')
+        }, timeout)
+        onProgress(data)
+      } else if (data.type === 'done') {
+        settled = true
+        clearTimeout(timer)
+        onDone(data)
+        es.close()
+      } else if (data.type === 'error') {
+        settled = true
+        clearTimeout(timer)
+        onError(data.message || 'Unknown error')
+        es.close()
+      }
+    } catch (parseErr) {
+        console.error('[SSE] JSON parse error:', parseErr, 'raw:', e.data?.slice(0, 200))
+        // 仅当非 settled 时报错，避免已完成后还触发 onError
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          onError(`SSE 数据解析失败: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`)
+          es.close()
+        }
+      }
+  }
+  es.onerror = () => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    onError('SSE connection error')
+    es.close()
+  }
+  return es
 }
 
 
@@ -1104,14 +1265,15 @@ export async function cleanupData(keepDays: number = 90): Promise<{ status: stri
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface CacheStats {
-  total_entries: number
-  valid_entries: number
-  expired_entries: number
-  cache_keys: string[]
+  hits: number
+  misses: number
+  size: number
+  ttl: number
+  hit_rate: number
 }
 
 export async function fetchCacheStats(): Promise<CacheStats> {
-  return fetchJSON(`${BASE}/analysis/cache/stats`, 'cache_stats', 10 * 1000)
+  return fetchJSON(`${BASE}/analysis/cache-stats`, 'cache_stats', 10 * 1000)
 }
 
 export async function clearCache(): Promise<{ status: string; cleared_entries: number }> {
@@ -1246,7 +1408,7 @@ export async function removeNotificationChannel(channelId: number): Promise<{ st
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 四因子择时信号 API
+// 多因子择时信号 API (V3 Legacy) + 增强择时信号 API (V4)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface TimingFactor {
@@ -1256,19 +1418,57 @@ export interface TimingFactor {
   weight: number
   status: 'good' | 'warning' | 'danger'
   description: string
+  icon?: string
+  subFactors?: TimingSubFactor[]
+}
+
+export interface TimingSubFactor {
+  name: string
+  score: number
+  weight: number
+  signal: 'bullish' | 'bearish' | 'neutral'
+  description: string
 }
 
 export interface TimingSignal {
   totalScore: number
   positionLimit: number
-  marketEnv: 'bull' | 'bear' | 'neutral'
+  marketEnv: 'bull' | 'bear' | 'neutral' | 'strong_bull' | 'strong_bear' | 'unknown'
   factors: TimingFactor[]
   recommendation: string
   timestamp: string
+  // V4 增强字段
+  modelVersion?: string
+  quality?: string
+  confidence?: number
+  consensusScore?: number
+  riskAlerts?: string[]
+  hedgeRecommended?: boolean
+  crossValidation?: {
+    bullishCount: number
+    bearishCount: number
+    totalCount: number
+  }
+  // 集成学习额外字段
+  stability?: {
+    stable: boolean
+    volatility: number
+    trend: string
+    avg_score: number
+    min_score: number
+    max_score: number
+    samples: number
+  }
+  riskScore?: number
+  factorContributions?: Record<string, number>
 }
 
 export async function fetchTimingSignal(): Promise<TimingSignal> {
-  return fetchJSON(`${BASE}/analysis/timing-signal`, 'timing_signal', 60 * 1000)
+  return fetchJSON(`${BASE}/sg-strategy/timing-signal`, 'timing_signal', 60 * 1000)
+}
+
+export async function fetchEnhancedTimingSignal(): Promise<TimingSignal> {
+  return fetchJSON(`${BASE}/sg-strategy/timing-signal/enhanced`, 'enhanced_timing_signal', 60 * 1000)
 }
 
 export interface TimingHistoryItem {
@@ -1279,7 +1479,7 @@ export interface TimingHistoryItem {
 }
 
 export async function fetchTimingHistory(days: number = 30): Promise<{ items: TimingHistoryItem[] }> {
-  return fetchJSON(`${BASE}/analysis/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
+  return fetchJSON(`${BASE}/sg-strategy/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
 }
 
 export interface WsStats {

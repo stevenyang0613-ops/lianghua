@@ -3,6 +3,8 @@
  * 支持指数退避和自定义重试规则
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface RetryConfig {
   maxRetries: number
   baseDelay: number
@@ -155,12 +157,12 @@ const RETRY_STATS_KEY = 'retry_stats'
 
 export function getRetryStats(): RetryStats {
   const saved = localStorage.getItem(RETRY_STATS_KEY)
-  return saved ? JSON.parse(saved) : {
+  return safeJsonParse<RetryStats>(saved, {
     totalAttempts: 0,
     successfulRetries: 0,
     failedRetries: 0,
     lastRetryTime: null,
-  }
+  })
 }
 
 export function recordRetryAttempt(success: boolean): void {

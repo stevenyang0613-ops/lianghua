@@ -63,7 +63,7 @@ export default {
     plugins: '插件管理',
     scoreRanking: '积分排行',
     sync: '同步设置',
-    songgangScore: '松岗评分',
+    songgangScore: '七维详情分析',
   },
 
   // 市场

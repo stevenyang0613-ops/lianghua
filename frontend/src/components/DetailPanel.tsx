@@ -7,8 +7,12 @@ import { useWatchlistStore } from '../stores/useWatchlistStore'
 import { useResponsive } from '../hooks/useResponsive'
 import ChartPanel from './ChartPanel'
 import AlertPanel from './AlertPanel'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
+
+
+
 
 export default function DetailPanel() {
   const selectedBond = useAppStore((s) => s.selectedBond)
@@ -39,9 +43,9 @@ export default function DetailPanel() {
     )
   }
 
-  const priceColor = bond.change_pct > 0 ? '#cf1322' : bond.change_pct < 0 ? '#389e0d' : undefined
-  const premiumColor = bond.premium_ratio < 0 ? '#52c41a' : bond.premium_ratio > 50 ? '#faad14' : undefined
-  const dualLowColor = bond.dual_low < 130 ? '#52c41a' : bond.dual_low > 180 ? '#f5222d' : '#faad14'
+  const priceColor = (bond.change_pct ?? 0) > 0 ? '#cf1322' : (bond.change_pct ?? 0) < 0 ? '#389e0d' : undefined
+  const premiumColor = (bond.premium_ratio ?? 0) < 0 ? '#52c41a' : (bond.premium_ratio ?? 0) > 50 ? '#faad14' : undefined
+  const dualLowColor = (bond.dual_low ?? 0) < 130 ? '#52c41a' : (bond.dual_low ?? 0) > 180 ? '#f5222d' : '#faad14'
 
   const handleToggleWatch = () => {
     if (isWatched) {
@@ -59,16 +63,16 @@ export default function DetailPanel() {
         <>
           <Card size="small" title="转股信息" style={{ margin: '0 16px 16px' }}>
             <Descriptions column={1} size="small">
-              <Descriptions.Item label="正股价">{bond.stock_price.toFixed(2)} 元</Descriptions.Item>
+              <Descriptions.Item label="正股价">{fmt(bond.stock_price)} 元</Descriptions.Item>
               <Descriptions.Item label="正股涨跌">
-                <Tag color={bond.stock_change_pct > 0 ? 'red' : bond.stock_change_pct < 0 ? 'green' : undefined}>
-                  {bond.stock_change_pct > 0 ? '+' : ''}{bond.stock_change_pct.toFixed(2)}%
+                <Tag color={(bond.stock_change_pct ?? 0) > 0 ? 'red' : (bond.stock_change_pct ?? 0) < 0 ? 'green' : undefined}>
+                  {(bond.stock_change_pct ?? 0) > 0 ? '+' : ''}{fmt(bond.stock_change_pct)}%
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="转股价">{bond.conversion_price.toFixed(2)} 元</Descriptions.Item>
-              <Descriptions.Item label="转股价值">{bond.conversion_value.toFixed(2)} 元</Descriptions.Item>
+              <Descriptions.Item label="转股价">{fmt(bond.conversion_price)} 元</Descriptions.Item>
+              <Descriptions.Item label="转股价值">{fmt(bond.conversion_value)} 元</Descriptions.Item>
               <Descriptions.Item label="溢价率">
-                <Text style={{ color: premiumColor, fontWeight: 600 }}>{bond.premium_ratio.toFixed(2)}%</Text>
+                <Text style={{ color: premiumColor, fontWeight: 600 }}>{fmt(bond.premium_ratio)}%</Text>
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -76,21 +80,38 @@ export default function DetailPanel() {
           <Card size="small" title="估值指标" style={{ margin: '0 16px 16px' }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="双低值">
-                <Tag color={dualLowColor}>{bond.dual_low.toFixed(2)}</Tag>
+                <Tag color={dualLowColor}>{fmt(bond.dual_low)}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="到期收益率">
-                <Text type={bond.ytm > 0 ? 'success' : 'danger'}>{bond.ytm.toFixed(2)}%</Text>
+                <Text type={(bond.ytm ?? 0) > 0 ? 'success' : 'danger'}>{fmt(bond.ytm)}%</Text>
               </Descriptions.Item>
-              <Descriptions.Item label="剩余年限">{bond.remaining_years.toFixed(1)} 年</Descriptions.Item>
+              <Descriptions.Item label="剩余年限">{fmt(bond.remaining_years, 1)} 年</Descriptions.Item>
               <Descriptions.Item label="强赎倒计时">
-                {bond.forced_call_days > 0 ? `${bond.forced_call_days} 天` : '未触发'}
+                {(bond.forced_call_days ?? 0) > 0 ? `${bond.forced_call_days} 天` : '未触发'}
               </Descriptions.Item>
+              {bond.is_called && (
+                <Descriptions.Item label="强赎公告">
+                  <Tag color="red">已公告强赎</Tag>
+                </Descriptions.Item>
+              )}
+              {bond.call_status && (
+                <Descriptions.Item label="强赎状态">{bond.call_status}</Descriptions.Item>
+              )}
+              {bond.last_trade_date && (
+                <Descriptions.Item label="最后交易日">{bond.last_trade_date}</Descriptions.Item>
+              )}
+              {bond.maturity_date && (
+                <Descriptions.Item label="到期日">{bond.maturity_date}</Descriptions.Item>
+              )}
+              {(bond.redemption_price ?? 0) > 0 && (
+                <Descriptions.Item label="强赎价格">{fmt(bond.redemption_price)} 元</Descriptions.Item>
+              )}
             </Descriptions>
           </Card>
 
           <Card size="small" title="交易数据" style={{ margin: '0 16px 16px' }}>
             <Descriptions column={1} size="small">
-              <Descriptions.Item label="成交额">{bond.volume.toFixed(2)} 亿元</Descriptions.Item>
+              <Descriptions.Item label="成交额">{fmt(bond.volume)} 亿元</Descriptions.Item>
             </Descriptions>
           </Card>
         </>
@@ -117,7 +138,7 @@ export default function DetailPanel() {
               value={bond.price}
               precision={2}
               valueStyle={{ color: priceColor, fontWeight: 600 }}
-              prefix={bond.change_pct > 0 ? <ArrowUpOutlined /> : bond.change_pct < 0 ? <ArrowDownOutlined /> : null}
+              prefix={(bond.change_pct ?? 0) > 0 ? <ArrowUpOutlined /> : (bond.change_pct ?? 0) < 0 ? <ArrowDownOutlined /> : null}
               suffix="元"
             />
           </Col>

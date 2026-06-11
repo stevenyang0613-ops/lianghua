@@ -9,6 +9,32 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# SSL 证书修复：PyInstaller 打包后 Python 找不到系统证书
+# 必须在所有网络库 import 之前设置
+def _fix_ssl_certs():
+    # 1. certifi 提供的证书（最可靠）
+    try:
+        import certifi
+        cert_path = certifi.where()
+        os.environ.setdefault('SSL_CERT_FILE', cert_path)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', cert_path)
+        return
+    except ImportError:
+        pass
+    # 2. macOS 系统证书
+    macos_cert = '/etc/ssl/cert.pem'
+    if os.path.isfile(macos_cert):
+        os.environ.setdefault('SSL_CERT_FILE', macos_cert)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', macos_cert)
+        return
+    # 3. Homebrew OpenSSL 证书
+    brew_cert = '/opt/homebrew/etc/openssl@3/cert.pem'
+    if os.path.isfile(brew_cert):
+        os.environ.setdefault('SSL_CERT_FILE', brew_cert)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', brew_cert)
+
+_fix_ssl_certs()
+
 # 关键：确保 app/ 目录在 Python path 中
 sys.path.insert(0, BASE_DIR)
 

@@ -14,9 +14,6 @@ router = APIRouter()
 active_market_connections = 0
 active_signal_connections = 0
 
-# 行情增量推送：缓存上次发送的数据
-_last_tick_snapshot: dict[str, dict] = {}
-
 # 消息统计
 _STATS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "ws_stats.json")
 
@@ -68,6 +65,47 @@ def _save_stats():
 
 _load_stats()
 
+# WebSocket 管理器 - 用于跨模块广播
+class WSManager:
+    """简单的 WebSocket 管理器，用于从非请求上下文广播消息"""
+    def __init__(self):
+        self._subscribers: list = []
+
+    def subscribe(self, callback):
+        self._subscribers.append(callback)
+
+    def unsubscribe(self, callback):
+        try:
+            self._subscribers.remove(callback)
+        except ValueError:
+            pass
+
+    async def broadcast(self, message):
+        for callback in self._subscribers:
+            try:
+                await callback(message)
+            except Exception as e:
+                logger.warning(f"[WSManager] broadcast error: {e}")
+
+ws_manager = WSManager()
+
+
+def broadcast_revision(record: dict):
+    """从同步上下文广播转股价下修事件到 WebSocket 客户端"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(
+                    ws_manager.broadcast({"type": "revision", "data": record})
+                )
+            )
+        else:
+            # loop 存在但不在运行（shutdown中），安全丢弃
+            logger.debug("[WS] Skipping revision broadcast: event loop not running")
+    except RuntimeError:
+        logger.debug("[WS] No event loop available for revision broadcast")
+
 
 async def _stats_persistence_loop():
     """每60秒保存一次统计到文件"""
@@ -102,16 +140,20 @@ async def get_ws_stats(request: Request):
 async def verify_ws_auth(websocket: WebSocket) -> bool:
     """Verify WebSocket authentication token and connection limits."""
     token = websocket.query_params.get("token", "")
-    if not token or token != settings.ws_auth_token:
-        logger.warning(f"[WS] Auth failed: token_present={bool(token)}, expected_set={bool(settings.ws_auth_token)}, token_len={len(token)}, expected_len={len(settings.ws_auth_token)}")
+    if not token:
+        logger.warning("[WS] Auth rejected: empty token from %s", websocket.client.host if websocket.client else "unknown")
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
-        await websocket.close(code=4001, reason="Unauthorized")
+        await websocket.close(code=4001, reason="Unauthorized: empty token")
         return False
-
-    logger.info("[WS] Auth successful")
+    if token != settings.ws_auth_token:
+        logger.warning("[WS] Auth rejected: token mismatch from %s (got %s...)", websocket.client.host if websocket.client else "unknown", token[:8])
+        _ws_stats["disconnect_reasons"]["auth_failed"] += 1
+        await websocket.close(code=4001, reason="Unauthorized: invalid token")
+        return False
 
     total = active_market_connections + active_signal_connections
     if total >= 50:
+        logger.warning("[WS] Connection limit reached: %d active", total)
         _ws_stats["disconnect_reasons"]["connection_limit"] += 1
         await websocket.close(code=1013, reason="Too many connections")
         return False
@@ -119,9 +161,8 @@ async def verify_ws_auth(websocket: WebSocket) -> bool:
     return True
 
 
-def _build_tick_delta(bonds) -> list[dict]:
-    """构建增量行情数据，只发送变化的字段"""
-    global _last_tick_snapshot
+def _build_tick_delta(bonds, last_snapshot: dict[str, dict]) -> tuple[list[dict], dict[str, dict]]:
+    """构建增量行情数据，只发送变化的字段。返回 (delta_list, new_snapshot)。"""
     delta_list = []
     new_snapshot = {}
 
@@ -130,7 +171,7 @@ def _build_tick_delta(bonds) -> list[dict]:
         code = current["code"]
         new_snapshot[code] = current
 
-        prev = _last_tick_snapshot.get(code)
+        prev = last_snapshot.get(code)
         if prev is None:
             # 新增品种，发送完整数据
             delta_list.append(current)
@@ -149,8 +190,7 @@ def _build_tick_delta(bonds) -> list[dict]:
         if has_change:
             delta_list.append(changed)
 
-    _last_tick_snapshot = new_snapshot
-    return delta_list
+    return delta_list, new_snapshot
 
 
 _COMPRESS_THRESHOLD = 1024  # 超过1KB时压缩
@@ -176,7 +216,7 @@ async def market_websocket(websocket: WebSocket):
     engine = getattr(websocket.app.state, "engine", None)
     if not engine:
         _ws_stats["disconnect_reasons"]["engine_unavailable"] += 1
-        await websocket.close(code=1011, reason="Market engine not available")
+        await websocket.close(code=5030, reason="Market engine not available (503)")
         return
 
     if not await verify_ws_auth(websocket):
@@ -189,9 +229,11 @@ async def market_websocket(websocket: WebSocket):
 
     # 首次推送：发送当前全量数据
     is_first_push = True
+    # Per-connection snapshot for delta computation (not shared across connections)
+    conn_snapshot: dict[str, dict] = {}
 
     async def on_market_update(bonds):
-        nonlocal is_first_push
+        nonlocal is_first_push, conn_snapshot
         try:
             if is_first_push:
                 # 首次推送全量数据
@@ -205,10 +247,12 @@ async def market_websocket(websocket: WebSocket):
                 _ws_stats["market_messages_sent"] += 1
                 _ws_stats["market_bytes_sent"] += sent_bytes
                 _ws_stats["market_full_messages"] += 1
+                # Store full snapshot for future delta computation
+                conn_snapshot = {b.code: b.model_dump(mode="json") for b in bonds}
                 is_first_push = False
                 return
 
-            delta = _build_tick_delta(bonds)
+            delta, conn_snapshot = _build_tick_delta(bonds, conn_snapshot)
             if delta:
                 msg = {
                     "type": "tick",
@@ -228,6 +272,19 @@ async def market_websocket(websocket: WebSocket):
 
     engine.subscribe(on_market_update)
 
+    # Push current cached data immediately
+    try:
+        current_bonds = list(engine._quotes.values()) if engine._quotes else []
+        if current_bonds:
+            data = [b.model_dump(mode="json") for b in current_bonds]
+            msg = {"type": "tick", "data": data, "ts": engine.last_update.isoformat() if engine.last_update else None}
+            sent_bytes = await _send_compressed(websocket, msg, "market")
+            _ws_stats["market_messages_sent"] += 1
+            _ws_stats["market_bytes_sent"] += sent_bytes
+            _ws_stats["market_full_messages"] += 1
+    except Exception:
+        pass
+
     heartbeat_task = None
 
     async def heartbeat():
@@ -235,6 +292,8 @@ async def market_websocket(websocket: WebSocket):
             try:
                 await asyncio.sleep(settings.ws_ping_interval)
                 await websocket.send_json({"type": "ping"})
+            except asyncio.CancelledError:
+                break
             except Exception:
                 _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
                 break
@@ -259,7 +318,10 @@ async def market_websocket(websocket: WebSocket):
         if heartbeat_task:
             heartbeat_task.cancel()
         engine.unsubscribe(on_market_update)
-        active_market_connections -= 1
+        try:
+            active_market_connections -= 1
+        except Exception:
+            pass
 
 
 @router.websocket("/signals")
@@ -269,7 +331,7 @@ async def signals_websocket(websocket: WebSocket):
     signal_engine = getattr(websocket.app.state, "signal_engine", None)
     if not signal_engine:
         _ws_stats["disconnect_reasons"]["engine_unavailable"] += 1
-        await websocket.close(code=1011, reason="Signal engine not available")
+        await websocket.close(code=5030, reason="Signal engine not available (503)")
         return
 
     if not await verify_ws_auth(websocket):
@@ -285,7 +347,7 @@ async def signals_websocket(websocket: WebSocket):
             ts = signals[0].ts.isoformat() if signals else None
             msg = {
                 "type": "signals",
-                "signals": [s.to_dict() for s in signals],
+                "data": [s.to_dict() for s in signals],
                 "ts": ts,
             }
             sent_bytes = await _send_compressed(websocket, msg, "signal")
@@ -301,6 +363,8 @@ async def signals_websocket(websocket: WebSocket):
             try:
                 await asyncio.sleep(settings.ws_ping_interval)
                 await websocket.send_json({"type": "ping"})
+            except asyncio.CancelledError:
+                break
             except Exception:
                 _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
                 break
@@ -325,4 +389,7 @@ async def signals_websocket(websocket: WebSocket):
         if heartbeat_task:
             heartbeat_task.cancel()
         signal_engine.unsubscribe(on_signal_update)
-        active_signal_connections -= 1
+        try:
+            active_signal_connections -= 1
+        except Exception:
+            pass

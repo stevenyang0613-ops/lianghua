@@ -263,7 +263,12 @@ export function getAllThemes(): Theme[] {
 // 获取自定义主题
 export function getCustomThemes(): Theme[] {
   const saved = localStorage.getItem(CUSTOM_THEMES_KEY)
-  return saved ? JSON.parse(saved) : []
+  try {
+    return saved ? JSON.parse(saved) : []
+  } catch {
+    console.warn('[themes] Corrupted custom themes data, resetting')
+    return []
+  }
 }
 
 // 添加自定义主题

@@ -7,7 +7,7 @@ import { placeOrder } from '../../services/api'
 const { Text } = Typography
 
 interface TradePanelProps {
-  allBonds: { code: string; name: string; price: number }[]
+  allBonds: { code: string; name: string; price: number | undefined }[]
   account: Account | null
   loading: boolean
   setLoading: (v: boolean) => void
@@ -17,7 +17,7 @@ interface TradePanelProps {
 interface BondOption {
   code: string
   name: string
-  price: number
+  price: number | undefined
 }
 
 export default function TradePanel({ allBonds, account, loading, setLoading, onOrderPlaced }: TradePanelProps) {
@@ -29,7 +29,7 @@ export default function TradePanel({ allBonds, account, loading, setLoading, onO
   const handleBondSelect = (code: string) => {
     setSelectedCode(code)
     const bond = allBonds.find((b: BondOption) => b.code === code)
-    if (bond) setPrice(bond.price)
+    if (bond && bond.price != null) setPrice(bond.price)
   }
 
   const handlePlaceOrder = async () => {
@@ -96,8 +96,8 @@ export default function TradePanel({ allBonds, account, loading, setLoading, onO
       </Row>
       {selectedCode && (
         <Row gutter={16} style={{ marginBottom: 12 }}>
-          <Col span={12}><Text type="secondary">估算金额: <Text strong>¥{(price * volume).toFixed(2)}</Text></Text></Col>
-          <Col span={12}><Text type="secondary">可用资金: <Text strong>¥{account?.cash.toFixed(2) || '0.00'}</Text></Text></Col>
+          <Col span={12}><Text type="secondary">估算金额: <Text strong>¥{((price ?? 0) * (volume ?? 0)).toFixed(2)}</Text></Text></Col>
+          <Col span={12}><Text type="secondary">可用资金: <Text strong>¥{(account?.cash ?? 0).toFixed(2)}</Text></Text></Col>
         </Row>
       )}
       <Button

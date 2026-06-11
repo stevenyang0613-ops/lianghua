@@ -273,25 +273,30 @@ class TaskScheduler:
                 # 重试逻辑
                 if execution.retry_count < config.max_retries:
                     execution.status = TaskStatus.RETRYING
-                    execution.retry_count += 1
-                    logger.warning(f"[TaskScheduler] 任务重试: {config.task_id}, 第{execution.retry_count}次")
+                    while execution.retry_count < config.max_retries:
+                        execution.retry_count += 1
+                        logger.warning(f"[TaskScheduler] 任务重试: {config.task_id}, 第{execution.retry_count}次")
 
-                    # 延迟重试
-                    await asyncio.sleep(config.retry_interval)
+                        await asyncio.sleep(config.retry_interval)
 
-                    try:
-                        result = await asyncio.wait_for(
-                            self._execute_task(config),
-                            timeout=config.timeout,
-                        )
-                        execution.status = TaskStatus.SUCCESS
-                        execution.result = result
-                        logger.info(f"[TaskScheduler] 任务重试成功: {config.task_id}")
+                        try:
+                            result = await asyncio.wait_for(
+                                self._execute_task(config),
+                                timeout=config.timeout,
+                            )
+                            execution.status = TaskStatus.SUCCESS
+                            execution.result = result
+                            logger.info(f"[TaskScheduler] 任务重试成功: {config.task_id}")
+                            break
 
-                    except Exception as retry_error:
-                        execution.status = TaskStatus.FAILED
-                        execution.error = str(retry_error)
-                        logger.error(f"[TaskScheduler] 任务重试失败: {config.task_id}")
+                        except Exception as retry_error:
+                            execution.error = str(retry_error)
+                            execution.traceback = traceback.format_exc()
+                            if execution.retry_count >= config.max_retries:
+                                execution.status = TaskStatus.FAILED
+                                logger.error(f"[TaskScheduler] 任务重试失败: {config.task_id}")
+                            else:
+                                logger.warning(f"[TaskScheduler] 任务重试失败，将继续重试: {config.task_id}")
                 else:
                     execution.status = TaskStatus.FAILED
                     logger.error(f"[TaskScheduler] 任务执行失败: {config.task_id}, {e}")

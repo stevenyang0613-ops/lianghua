@@ -120,8 +120,8 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     setError(null)
     setProgress(0)
     setStep(0)
-    setBackendConnected(false)
-  }, [setBackendConnected])
+    // Don't flip backendConnected — it will re-trigger the useEffect and retry naturally
+  }, [])
 
   const handleOfflineMode = useCallback(() => {
     enableOfflineMode()
@@ -161,6 +161,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
             if (result.ok) {
               disableOfflineMode()
               const token = result.data?.ws_auth_token
+                || (await (window.electronAPI as any).getWsToken?.())
               if (token) {
                 setWsAuthToken(token)
                 // token 更新后，刷新 WebSocket URL 确保使用最新 token

@@ -6,17 +6,23 @@
   "main": "electron/dist/main.js",
   "private": true,
   "scripts": {
+    "start": "./start-lianghua.sh --prod",
+    "start:dev": "./start-lianghua.sh --dev",
+    "stop": "./stop-lianghua.sh",
+    "dev": "chmod +x scripts/dev.sh && ./scripts/dev.sh",
     "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
+    "dev:backend": "cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8765",
     "dev:electron": "npm run build:electron-ts && concurrently \"cd frontend && npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build:frontend": "cd frontend && npm run build",
     "build:electron-ts": "cd electron && npx tsc",
+    "build:backend": "cd backend && pyinstaller lianghua-backend.spec",
     "validate": "bash scripts/validate-build.sh",
     "build:electron": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder",
     "build:mac": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --mac",
     "build:win": "npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --win",
     "build:linux": "npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --linux",
     "pack": "npm run build:electron-ts && npx electron-builder --dir",
+    "clean": "rm -rf release electron/dist/mac-arm64 electron/release",
     "postinstall": "cd electron && npm install",
     "generate-icons": "node scripts/generate-icons.js",
     "electron": "electron ."
@@ -29,34 +35,51 @@
       "buildResources": "resources",
       "output": "release"
     },
-    "files": [
-      "electron/dist/**/*",
-      "frontend/dist/**/*",
-      "resources/**/*"
-    ],
     "extraResources": [
-      {
-        "from": "frontend/dist",
-        "to": "frontend"
-      },
       {
         "from": "backend",
         "to": "backend",
         "filter": [
-          "**/*.py",
-          "**/pyproject.toml",
-          "**/requirements.txt",
-          "wheels/**/*",
-          "dist/**/*",
           "lianghua-backend",
           "lianghua-backend.exe",
+          "app/**/*.py",
+          "app/pyproject.toml",
           "!__pycache__/**",
           "!.pytest_cache/**",
           "!tests/**",
           "!*.pyc",
           "!.venv/**",
+          "!dist/**",
           "!build/**",
-          "!*.spec"
+          "!wheels/**",
+          "!data/**",
+          "!.dockerignore",
+          "!.env.example",
+          "!.github/**",
+          "!*.spec",
+          "!sdk/**",
+          "!deploy/**",
+          "!grafana/**",
+          "!notebooks/**",
+          "!performance/**",
+          "!prometheus.yml",
+          "!alembic.ini",
+          "!alembic/**",
+          "!lianghua_backend.egg-info/**",
+          "!Dockerfile",
+          "!docker-compose.yml",
+          "!pyproject.toml",
+          "!requirements.txt",
+          "!run_app.py"
+        ]
+      },
+      {
+        "from": "frontend/dist",
+        "to": "frontend",
+        "filter": [
+          "**/*",
+          "!lianghua-backend",
+          "!lianghua-backend.exe"
         ]
       }
     ],

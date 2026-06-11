@@ -688,7 +688,7 @@ class FactorCombiner:
             residuals = Y - model.predict(X)
 
             return {code: res for code, res in zip(common_codes, residuals)}
-        except:
+        except Exception:
             return target
 
 

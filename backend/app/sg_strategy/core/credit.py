@@ -17,7 +17,7 @@
 """
 from dataclasses import dataclass
 from datetime import date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import logging
 
 from app.sg_strategy.core.types import ConvertibleBondData, StockData, CreditScore

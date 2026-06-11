@@ -290,12 +290,20 @@ async def verify_strategy(req: StrategyVerifyRequest, request: Request):
 
     try:
         strategy_cls = get_strategy(req.strategy)
-        validator = WalkForwardValidator(
-            strategy_class=strategy_cls,
-            start_date=req.start_date or None,
-            end_date=req.end_date or None,
-        )
-        validator.run_validation()
+        import pandas as pd
+        from datetime import date
+        start_dt = req.start_date or "2020-01-01"
+        end_dt = req.end_date or date.today().isoformat()
+        start_d = date.fromisoformat(start_dt)
+        end_d = date.fromisoformat(end_dt)
+        from app.engine.historical import HistoricalDataLoader
+        loader = HistoricalDataLoader(storage)
+        df = loader.get_cached_history(start_d, end_d)
+        if df.empty:
+            raise HTTPException(status_code=400, detail="No cached historical data available for the given date range")
+        strategy = strategy_cls()
+        validator = WalkForwardValidator(df, lambda d: strategy.on_data(d, 0) or [])
+        validator.run_validation(start_date=start_dt, end_date=end_dt)
         summary = validator.get_summary()
         yearly = validator.get_yearly_performance()
         return {"strategy": req.strategy, "summary": summary, "yearly": yearly}

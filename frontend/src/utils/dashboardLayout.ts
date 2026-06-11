@@ -132,12 +132,19 @@ const DEFAULT_LAYOUT: DashboardLayout = {
 export function getLayouts(): DashboardLayout[] {
   const saved = localStorage.getItem(LAYOUTS_KEY)
   if (saved) {
-    const layouts = JSON.parse(saved)
-    // 确保有默认布局
-    if (!layouts.find((l: DashboardLayout) => l.isDefault)) {
-      layouts.unshift(DEFAULT_LAYOUT)
+    try {
+      const layouts = JSON.parse(saved)
+      if (!Array.isArray(layouts)) throw new Error('not array')
+      // 确保有默认布局
+      if (!layouts.find((l: DashboardLayout) => l.isDefault)) {
+        layouts.unshift(DEFAULT_LAYOUT)
+      }
+      return layouts
+    } catch {
+      // localStorage 数据损坏，重置为默认
+      console.warn('[dashboardLayout] Corrupted layout data, resetting to default')
+      localStorage.setItem(LAYOUTS_KEY, JSON.stringify([DEFAULT_LAYOUT]))
     }
-    return layouts
   }
   return [DEFAULT_LAYOUT]
 }

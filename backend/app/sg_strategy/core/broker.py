@@ -634,7 +634,8 @@ class HuataiBroker(BrokerInterface):
         try:
             self._api.cancel_order(order_id)
             return True
-        except:
+        except Exception as e:
+            logger.warning("[Broker] cancel_order failed: %s", e)
             return False
 
     def query_order(self, order_id: str) -> Optional[Order]:
@@ -655,7 +656,8 @@ class HuataiBroker(BrokerInterface):
                 filled_quantity=result.get('filled_quantity', 0),
                 filled_price=result.get('filled_price', 0),
             )
-        except:
+        except Exception as e:
+            logger.warning("[Broker] query_order failed: %s", e)
             return None
 
     def query_orders(self, status: Optional[OrderStatus] = None) -> List[Order]:
@@ -682,7 +684,8 @@ class HuataiBroker(BrokerInterface):
                 )
                 for p in result
             ]
-        except:
+        except Exception as e:
+            logger.warning("[Broker] query_positions failed: %s", e)
             return []
 
     def query_account(self) -> Account:
@@ -699,7 +702,8 @@ class HuataiBroker(BrokerInterface):
                 profit=result.get('profit', 0),
                 profit_pct=result.get('profit_pct', 0),
             )
-        except:
+        except Exception as e:
+            logger.warning("[Broker] query_account failed: %s", e)
             return Account(0, 0, 0, 0, 0, 0)
 
     def query_trades(self, order_id: Optional[str] = None) -> List[Trade]:

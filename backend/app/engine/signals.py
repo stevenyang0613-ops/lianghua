@@ -1,5 +1,6 @@
 import asyncio
 import time as time_mod
+import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
@@ -37,6 +38,7 @@ class TradeSignal:
     def __init__(self, strategy: str, code: str, name: str,
                  action: str, price: float, reason: str,
                  confidence: float = 0.0):
+        self.id = uuid.uuid4().hex[:12]
         self.strategy = strategy
         self.code = code
         self.name = name
@@ -49,6 +51,7 @@ class TradeSignal:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "strategy": self.strategy,
             "code": self.code,
             "name": self.name,
@@ -154,6 +157,13 @@ class SignalEngine:
             entry = self._strategy_cache.pop(s, None)
             if entry:
                 entry[0].on_destroy()
+        # 清除刚被重新激活的策略的去重记录
+        # 这样重新激活的策略的信号会立即显示,不会被旧的去重窗口抑制
+        added = set(strategies) - set(self._active_strategies)
+        if added:
+            keys_to_remove = [k for k in self._recent_signals if k[1] in added]
+            for k in keys_to_remove:
+                del self._recent_signals[k]
         self._active_strategies = strategies
         # 持久化到存储
         if self._storage:
@@ -228,13 +238,26 @@ class SignalEngine:
 
         return signals
 
+    @staticmethod
+    def _is_valid_for_signal(b: ConvertibleQuote) -> bool:
+        """过滤不适合生成交易信号的债券
+
+        包括:退市整理期、可交换债、价格异常、已公告强赎、
+        强赎/到期最后交易日前 3 天(用户要求:即将赎回/退市前 3 天不能交易)。
+        """
+        from app.engine.filters import is_tradeable_bond
+        return is_tradeable_bond(b)
+
     async def process_quotes(self, bonds: list[ConvertibleQuote]) -> list[TradeSignal]:
         """处理行情数据，生成交易信号"""
         signals: list[TradeSignal] = []
 
+        # 过滤不适合交易的债券
+        valid_bonds = [b for b in bonds if self._is_valid_for_signal(b)]
+
         # Build a simple DataFrame from current quotes
         rows = []
-        for b in bonds:
+        for b in valid_bonds:
             rows.append({
                 "code": b.code,
                 "name": b.name,
@@ -262,9 +285,14 @@ class SignalEngine:
                     seen[key] = s
             signals = list(seen.values())
 
+            # Track which (code, strategy) the strategy wants to keep in the UI.
+            # This is used to preserve existing signals that are still in the strategy output
+            # even when the cross-call dedup suppresses their notification.
+            strategy_keys = {(s.code, s.strategy) for s in signals}
+
             # Cross-call dedup: suppress signals already sent recently with same action & similar price
             now_ts = time_mod.monotonic()
-            deduped = []
+            new_signals: list[TradeSignal] = []
             for s in signals:
                 dedup_key = (s.code, s.strategy, s.action)
                 prev = self._recent_signals.get(dedup_key)
@@ -272,24 +300,43 @@ class SignalEngine:
                     prev_ts, prev_price = prev
                     price_close = abs(s.price - prev_price) / max(prev_price, 0.01) < self._dedup_price_threshold
                     if now_ts - prev_ts < self._dedup_window_seconds and price_close:
-                        continue  # Skip duplicate
+                        continue  # Skip notification, but keep the signal in self._signals
                 self._recent_signals[dedup_key] = (now_ts, s.price)
-                deduped.append(s)
+                new_signals.append(s)
 
             # Clean up expired dedup entries
             expired = [k for k, (ts, _) in self._recent_signals.items() if now_ts - ts > self._dedup_window_seconds]
             for k in expired:
                 del self._recent_signals[k]
 
-            signals = deduped
+            # Merge: preserve existing signals that the strategy still wants to keep
+            # (and aren't executed) + add the new (non-deduped) signals.
+            # This fixes the bug where repeated calls with the same data would clear
+            # self._signals because all signals were deduped.
+            # We exclude signals that are already in new_signals to avoid double-counting
+            # the same (code, strategy) pair.
+            new_keys = {(s.code, s.strategy) for s in new_signals}
+            preserved = [
+                s for s in self._signals
+                if (s.code, s.strategy) in strategy_keys
+                and (s.code, s.strategy) not in new_keys
+                and not s.executed
+            ]
+            # Sort preserved by timestamp descending so newer ones come first
+            preserved.sort(key=lambda s: s.ts, reverse=True)
+            self._signals = new_signals + preserved
 
-            self._signals = signals
-            # Save to DuckDB history
-            if self._storage:
-                self._storage.save_signals_batch([s.to_dict() for s in signals])
-            # Auto-execute high-confidence buy signals
-            self._auto_execute(signals)
-            await self._notify(signals)
+            # Only save/notify/auto-execute the truly new signals (not deduped)
+            if new_signals:
+                if self._storage:
+                    self._storage.save_signals_batch([s.to_dict() for s in new_signals])
+                self._auto_execute(new_signals)
+                await self._notify(new_signals)
+
+            # Return only the new (non-deduped) signals, matching the original
+            # contract of process_quotes (returns signals that were newly
+            # emitted to subscribers).
+            return new_signals
 
         return signals
 
@@ -402,8 +449,12 @@ class SignalEngine:
         self._subscribers.discard(callback)
 
     async def _notify(self, signals: list[TradeSignal]) -> None:
+        dead = []
         for cb in list(self._subscribers):
             try:
                 await cb(signals)
             except Exception as e:
-                logger.warning(f"[Signal] Subscriber error: {e}")
+                logger.warning(f"[Signal] Subscriber error (removing): {e}")
+                dead.append(cb)
+        for cb in dead:
+            self._subscribers.discard(cb)

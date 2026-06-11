@@ -2,12 +2,38 @@
 LiangHua Backend - FastAPI Application
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
+# SSL 证书修复：必须在所有网络库 import 之前设置
+# PyInstaller 打包后 Python 找不到系统 CA 证书
+def _fix_ssl_certs():
+    try:
+        import certifi
+        cert_path = certifi.where()
+        os.environ.setdefault('SSL_CERT_FILE', cert_path)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', cert_path)
+        return
+    except ImportError:
+        pass
+    macos_cert = '/etc/ssl/cert.pem'
+    if os.path.isfile(macos_cert):
+        os.environ.setdefault('SSL_CERT_FILE', macos_cert)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', macos_cert)
+        return
+    brew_cert = '/opt/homebrew/etc/openssl@3/cert.pem'
+    if os.path.isfile(brew_cert):
+        os.environ.setdefault('SSL_CERT_FILE', brew_cert)
+        os.environ.setdefault('REQUESTS_CA_BUNDLE', brew_cert)
+
+_fix_ssl_certs()
+
 import asyncio
 import logging
 import sys
-import os
 import signal
 import threading
+import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -19,9 +45,11 @@ from app.config import settings
 from app.api.router import router
 from app.engine.market import MarketEngine
 from app.engine.storage import DataStorage
+from app.engine.analysis import AnalysisEngine
 from app.engine.scheduler import Scheduler
 from app.engine.signals import SignalEngine
 from app.engine.trade import TradeEngine
+from app.services.macro_data import MacroDataService
 
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -70,11 +98,36 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 快速初始化 - 不等待数据加载
-    storage = DataStorage(settings.db_path)
+
+    def on_revision(record: dict):
+        """回调：检测到转股价下修时通过WebSocket广播 + 精确失效该code的缓存"""
+        try:
+            ae = getattr(app.state, "analysis_engine", None)
+            if ae is not None:
+                code = record.get("code", "")
+                if code:
+                    ae.invalidate_by_code(code)
+        except Exception as e:
+            logger.warning(f"[Revision callback] Cache invalidation error: {e}")
+        try:
+            # 使用 ws.py 模块中的 WebSocket 广播机制
+            from app.api.ws import broadcast_revision
+            broadcast_revision(record)
+        except Exception as e:
+            logger.warning(f"[Revision callback] Failed to broadcast: {e}")
+
+    storage = DataStorage(settings.db_path, on_revision=on_revision)
+
+    # 配置线程池：限制并发计算线程数，避免CPU密集任务抢占事件循环
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="compute")
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(executor)
+    app.state.executor = executor
     engine = MarketEngine(refresh_interval=settings.market_refresh_interval, storage=storage)
     signal_engine = SignalEngine()
     signal_engine.set_storage(storage)
     trade_engine = TradeEngine()
+    signal_engine.set_trade_engine(trade_engine)
     scheduler = Scheduler()
 
     app.state.engine = engine
@@ -82,6 +135,51 @@ async def lifespan(app: FastAPI):
     app.state.signal_engine = signal_engine
     app.state.trade_engine = trade_engine
     app.state.scheduler = scheduler
+    app.state.analysis_engine = AnalysisEngine(cache_ttl=30, max_entries=100)
+
+    # 初始化宏观市场数据服务
+    macro_data_service = MacroDataService(cache_ttl=1800)  # 宏观数据缓存30分钟
+    app.state.macro_data_service = macro_data_service
+
+    # 初始化告警引擎（使用简单的内存实现）
+    try:
+        from app.engine.alert import AlertEngine
+        app.state.alert_engine = AlertEngine()
+    except ImportError:
+        # 如果 AlertEngine 不存在，使用轻量级内存实现
+        from app.api.alert import AlertCondition, AlertTrigger
+        class _SimpleAlertEngine:
+            def __init__(self):
+                self._alerts: dict[str, AlertCondition] = {}
+                self._triggers: list[AlertTrigger] = []
+            def get_alerts(self) -> list[AlertCondition]:
+                return list(self._alerts.values())
+            def add_alert(self, alert: AlertCondition):
+                self._alerts[alert.id] = alert
+            def remove_alert(self, alert_id: str):
+                self._alerts.pop(alert_id, None)
+        app.state.alert_engine = _SimpleAlertEngine()
+
+    # 绑定 WebSocket manager 到 app.state
+    try:
+        from app.api.ws import ws_manager
+        app.state.ws_manager = ws_manager
+    except ImportError:
+        pass
+
+    # Connect signal engine to market engine for real-time signal generation
+    engine.subscribe(signal_engine.process_quotes)
+
+    # 注册择时信号定时刷新任务（每5分钟刷新一次宏观数据+择时信号）
+    async def _refresh_timing_signal():
+        try:
+            bonds = await engine.get_all_quotes()
+            await macro_data_service.fetch_macro_data(bonds)
+            logger.info("[Scheduler] Timing signal refreshed")
+        except Exception as e:
+            logger.warning(f"[Scheduler] Timing signal refresh failed: {e}")
+
+    scheduler.add_interval_task("timing_signal_refresh", _refresh_timing_signal, 300)
 
     logger.info(f"Starting {settings.app_name} on {settings.host}:{settings.port}")
 
@@ -90,7 +188,122 @@ async def lifespan(app: FastAPI):
         try:
             await engine.start()
             await scheduler.start()
+            # Start WS stats persistence
+            from app.api.ws import start_stats_persistence
+            start_stats_persistence()
             logger.info("Background data loading completed")
+
+            # 缓存预热：引擎就绪后触发一次七维排名计算，避免首次请求慢
+            async def _warmup_songgang_cache():
+                try:
+                    from app.api.score import _compute_songgang_scores, _set_cache, _get_cache_key, _LONG_CACHE_TTL
+                    from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+                    import pandas as pd
+
+                    bonds = await engine.get_all_quotes()
+                    if not bonds:
+                        return
+                    from datetime import datetime
+                    rows = []
+                    for b in bonds:
+                        rows.append({
+                            "code": b.code, "name": b.name, "price": b.price,
+                            "premium_ratio": b.premium_ratio, "volume": b.volume or 0,
+                            "dual_low": b.dual_low, "change_pct": b.change_pct or 0,
+                            "ytm": b.ytm or 0, "remaining_years": b.remaining_years or 0,
+                            "conversion_value": b.conversion_value or 0,
+                            "stock_price": b.stock_price or 0, "stock_change_pct": b.stock_change_pct or 0,
+                            "forced_call_days": b.forced_call_days or 0,
+                            "date": datetime.now().date(),
+                        })
+                    df = pd.DataFrame(rows)
+                    strategy = SonggangSevenDimensionStrategy()
+                    strategy.on_init(df)
+                    scores_list, vetoed_list = await asyncio.to_thread(_compute_songgang_scores, strategy, df)
+                    if scores_list:
+                        # scores_list 已按 total 降序排列
+                        top_n = 60
+                        top_scores = scores_list[:top_n]
+                        items = []
+                        for idx, s in enumerate(top_scores):
+                            items.append({
+                                "rank": idx + 1,
+                                "code": s['code'],
+                                "name": s['name'],
+                                "price": round(s['price'], 3),
+                                "premium_ratio": round(s['premium_ratio'], 2),
+                                "dual_low": round(s['dual_low'], 2),
+                                "volume": round(s['volume'], 2),
+                                "change_pct": round(s['change_pct'], 2),
+                                "ytm": round(s['ytm'], 2) if s['ytm'] else None,
+                                "remaining_years": round(s['remaining_years'], 2) if s['remaining_years'] else None,
+                                "total_score": s['total'],
+                                "stock_score": s['stock_score'],
+                                "bond_score": s['bond_score'],
+                                "score_details": s['stock_details'],
+                                "bond_details": s['bond_details'],
+                            })
+                        vetoed_items = vetoed_list[:20]
+                        result = {
+                            "total": len(scores_list),
+                            "returned": len(items),
+                            "market_env": "neutral",
+                            "aum_level": "small",
+                            "params": {"top_n": top_n, "buffer_size": 5, "buffer_days": 3},
+                            "items": items,
+                            "vetoed": vetoed_items,
+                            "vetoed_count": len(vetoed_list),
+                            "buffer_status": [],
+                            "cached": False,
+                        }
+                        cache_key = _get_cache_key("songgang_ranking", top_n=top_n, aum="small", market="neutral")
+                        _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
+                        logger.info(f"[Warmup] Seven-dim cache preloaded: {len(scores_list)} bonds, {len(items)} items")
+                except Exception as e:
+                    logger.warning(f"[Warmup] Seven-dim cache preload failed: {e}")
+
+            asyncio.create_task(_warmup_songgang_cache())
+
+            # 自动回填历史数据：如果 daily_snapshots 中可用历史日期 < 3 个，
+            # 启动后台任务从东方财富补齐，确保 N 日涨跌幅能立即生效
+            async def _auto_backfill_history():
+                try:
+                    from app.engine.historical import HistoricalDataLoader
+                    distinct_dates = storage.conn.execute(
+                        "SELECT COUNT(DISTINCT snapshot_date) FROM daily_snapshots"
+                    ).fetchone()[0]
+                    if distinct_dates >= 3:
+                        logger.info(
+                            f"[AutoBackfill] daily_snapshots has {distinct_dates} dates, skip"
+                        )
+                        return
+                    logger.warning(
+                        f"[AutoBackfill] daily_snapshots 仅 {distinct_dates} 个日期，"
+                        f"启动 30 天历史回填（异步执行，不阻塞其他初始化）"
+                    )
+                    bonds = await engine.get_all_quotes()
+                    if not bonds:
+                        return
+                    codes = [b.code for b in bonds]
+                    loader = HistoricalDataLoader(storage)
+                    await loader.seed_historical_data(codes, days=30)
+                    # 回填完成后清空 songgang 缓存，让前端看到新数据
+                    try:
+                        from app.api.score import _cache
+                        cleared = sum(
+                            1 for k in list(_cache.keys())
+                            if k.startswith("songgang_ranking:")
+                        )
+                        _cache.clear()
+                        logger.info(
+                            f"[AutoBackfill] Cleared {cleared} songgang cache entries"
+                        )
+                    except Exception as ce:
+                        logger.warning(f"[AutoBackfill] cache clear failed: {ce}")
+                except Exception as e:
+                    logger.error(f"[AutoBackfill] failed: {e}")
+
+            asyncio.create_task(_auto_backfill_history())
         except Exception as e:
             logger.error(f"Background startup error: {e}")
 
@@ -161,10 +374,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    start_time = sys.float_info.epsilon  # avoid unused import
-    start_time = __import__("time").time()
+    start_time = time.time()
     response = await call_next(request)
-    duration = __import__("time").time() - start_time
+    duration = time.time() - start_time
     logger.info(f"{request.method} {request.url.path} {response.status_code} {duration*1000:.1f}ms")
     return response
 
@@ -175,9 +387,29 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 app.include_router(router, prefix="/api/v1")
 
-@app.get("/health")
-async def health_root():
-    return _health_response()
+# ---- 挂载前端静态文件 ----
+# 使用中间件方式：API 路由优先匹配，未匹配的 GET 请求返回前端 SPA
+_frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir() and (_frontend_dist / "index.html").exists():
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from fastapi.responses import FileResponse
+
+    class SPAMiddleware(BaseHTTPMiddleware):
+        """SPA 中间件：未匹配的 GET 请求返回 index.html，让前端路由处理"""
+        async def dispatch(self, request, call_next):
+            response = await call_next(request)
+            # 如果路由返回 404 且是 GET 请求，返回前端 index.html
+            if response.status_code == 404 and request.method == "GET":
+                # 不对 API 路径返回 HTML
+                if request.url.path.startswith("/api/"):
+                    return response
+                return FileResponse(_frontend_dist / "index.html")
+            return response
+
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="assets")
+    app.add_middleware(SPAMiddleware)
+    logger.info(f"前端静态文件已挂载: {_frontend_dist}")
 
 
 def _health_response() -> dict:
@@ -188,36 +420,24 @@ def _health_response() -> dict:
     except Exception:
         pass
     try:
-        db_ok = getattr(app.state, "storage", None) is not None
+        storage = getattr(app.state, "storage", None)
+        if storage is not None:
+            storage.ensure_connection()
+            storage.conn.execute("SELECT 1")
+            db_ok = True
     except Exception:
         pass
-    token = settings.ws_auth_token
-    result = {
+    return {
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
-        "ws_auth_token": token,
+        "ws_auth_token": settings.ws_auth_token,
     }
-    return result
 
 
+@app.get("/health")
 @app.get("/api/v1/health")
 async def health_v1():
     return _health_response()
-
-
-@app.get("/debug/settings")
-async def debug_settings():
-    try:
-        from app.config import settings
-        import os
-        return {
-            "ws_auth_token": settings.ws_auth_token,
-            "ws_auth_token_len": len(settings.ws_auth_token),
-            "env_LH_WS_AUTH_TOKEN": os.environ.get("LH_WS_AUTH_TOKEN", ""),
-            "has_token_file": os.path.exists(os.path.join(os.path.dirname(__file__), "..", "data", ".ws_token")),
-        }
-    except Exception as e:
-        return {"error": str(e)}

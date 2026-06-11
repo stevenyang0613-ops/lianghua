@@ -24,6 +24,7 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
   updatedAt: '',
 
   updateQuotes: (quotes) => {
+    if (!Array.isArray(quotes) || quotes.length === 0) return
     let changed = false
     for (const q of quotes) {
       const existing = bondsCache.get(q.code)
@@ -31,25 +32,20 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
       const merged = (existing && !('name' in q && q.name))
         ? { ...existing, ...q }
         : q
-      if (!existing || existing.price !== merged.price || existing.change_pct !== merged.change_pct) {
+      if (!existing || existing.price !== merged.price || existing.change_pct !== merged.change_pct || existing.is_called !== merged.is_called || existing.call_status !== merged.call_status || existing.forced_call_days !== merged.forced_call_days || existing.last_trade_date !== merged.last_trade_date || existing.maturity_date !== merged.maturity_date) {
         bondsCache.set(merged.code, merged)
         changed = true
       }
     }
-    if (!changed) {
-      // No actual content change — only update timestamp
-      set({ updatedAt: new Date().toLocaleTimeString() })
-      return
-    }
-    // Content changed: debounce allBonds to avoid rapid re-renders,
-    // but update updatedAt immediately for UI freshness indicators.
+    if (!changed) return
+    // Content changed: debounce both allBonds and updatedAt together
+    // to avoid triggering multiple re-renders per tick
     pendingBondsUpdate = Array.from(bondsCache.values())
-    set({ updatedAt: new Date().toLocaleTimeString() })
     if (!bondsUpdateTimer) {
       bondsUpdateTimer = setTimeout(() => {
         bondsUpdateTimer = null
         if (pendingBondsUpdate) {
-          set({ allBonds: pendingBondsUpdate })
+          set({ allBonds: pendingBondsUpdate, updatedAt: new Date().toLocaleTimeString() })
           pendingBondsUpdate = null
         }
       }, BONDS_DEBOUNCE_MS)
@@ -57,6 +53,11 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
   },
 
   setAllBonds: (bonds) => {
+    if (!Array.isArray(bonds)) {
+      bondsCache.clear()
+      set({ allBonds: [] })
+      return
+    }
     bondsCache.clear()
     for (const b of bonds) bondsCache.set(b.code, b)
     // Flush any pending debounced update

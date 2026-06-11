@@ -83,6 +83,7 @@ class TradingContext:
     portfolio_value: float
     current_positions: Dict[str, float]
     daily_volume: Dict[str, float]
+    total_pnl: float = 0.0
     metadata: Dict = field(default_factory=dict)
 
 
@@ -253,7 +254,8 @@ class ComplianceMonitor:
                 )
         
         except Exception as e:
-            pass
+            import logging
+            logging.getLogger(__name__).warning(f"[Compliance] Rule evaluation failed: {e}")
         
         return None
     
@@ -261,12 +263,12 @@ class ComplianceMonitor:
         """计算条件值"""
         # 简化的条件计算
         if condition == "position_value / portfolio_value":
-            position_value = context.current_positions.get(context.symbol, 0) * context.price
+            position_value = abs(context.current_positions.get(context.symbol, 0) * context.price)
             return position_value / context.portfolio_value if context.portfolio_value > 0 else 0
         
         elif condition == "total_position_value / portfolio_value":
             total_position = sum(
-                qty * context.price for qty in context.current_positions.values()
+                abs(qty * context.price) for qty in context.current_positions.values()
             )
             return total_position / context.portfolio_value if context.portfolio_value > 0 else 0
         

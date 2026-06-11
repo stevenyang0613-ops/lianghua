@@ -166,11 +166,11 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
 
     const { symbols, matrix } = correlationMatrix
 
-    // 转换数据格式 [x, y, value]
+    // 转换数据格式 [x, y, value] - 深拷贝防止原地修改影响 ECharts
     const data: [number, number, number][] = []
     for (let i = 0; i < symbols.length; i++) {
       for (let j = 0; j < symbols.length; j++) {
-        data.push([i, j, matrix[i][j]])
+        data.push([i, j, Number(matrix[i][j])])
       }
     }
 
@@ -183,8 +183,9 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
       tooltip: {
         position: 'top',
         formatter: (params: { data: [number, number, number] }) => {
+          if (!params?.data) return ''
           const [x, y, value] = params.data
-          return `${symbols[x]} - ${symbols[y]}<br/>相关系数: ${value.toFixed(3)}`
+          return `${symbols[x]} - ${symbols[y]}<br/>相关系数: ${(value ?? 0).toFixed(3)}`
         },
         backgroundColor: 'rgba(0,0,0,0.8)',
         textStyle: { color: '#fff' },
@@ -226,7 +227,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
         data,
         label: {
           show: true,
-          formatter: (params: { data: [number, number, number] }) => params.data[2].toFixed(2),
+          formatter: (params: { data: [number, number, number] }) => (params.data[2] ?? 0).toFixed(2),
           color: '#333',
           fontSize: 10,
         },
@@ -287,7 +288,7 @@ export default function RiskHeatmap({ accountIds: _accountIds, onRiskAlert }: Pr
           label: {
             show: true,
             position: 'right',
-            formatter: (params: { value: number }) => `¥${(params.value / 1000).toFixed(0)}K`,
+            formatter: (params: { value: number }) => `¥${((params.value ?? 0) / 1000).toFixed(0)}K`,
             color: '#888',
           },
         },

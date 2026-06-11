@@ -2,6 +2,8 @@
  * 策略分享服务
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface SharedStrategy {
   id: string
   name: string
@@ -217,7 +219,7 @@ export function downloadStrategy(id: string): SharedStrategy | null {
 // 获取我的策略
 export function getMyStrategies(): SharedStrategy[] {
   const saved = localStorage.getItem(MY_STRATEGIES_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<SharedStrategy[]>(saved, [])
 }
 
 // 删除我的策略
@@ -243,14 +245,14 @@ export function hasLikedStrategy(id: string): boolean {
 // 获取策略评价
 export function getStrategyReviews(strategyId: string): StrategyReview[] {
   const saved = localStorage.getItem(REVIEWS_KEY)
-  const allReviews: StrategyReview[] = saved ? JSON.parse(saved) : []
+  const allReviews: StrategyReview[] = safeJsonParse<StrategyReview[]>(saved, [])
   return allReviews.filter(r => r.strategyId === strategyId)
 }
 
 // 添加评价
 export function addStrategyReview(strategyId: string, rating: number, content: string): StrategyReview {
   const saved = localStorage.getItem(REVIEWS_KEY)
-  const reviews: StrategyReview[] = saved ? JSON.parse(saved) : []
+  const reviews: StrategyReview[] = safeJsonParse<StrategyReview[]>(saved, [])
 
   const review: StrategyReview = {
     id: `review_${Date.now()}`,

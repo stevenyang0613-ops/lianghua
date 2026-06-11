@@ -2,6 +2,7 @@
  * React 错误边界组件
  * 全局错误捕获和用户友好提示
  * 支持错误上报、重试机制、降级 UI
+ * 页面级隔离：一个页面崩溃不会影响其他页面
  */
 
 import { Component, type ReactNode, type ErrorInfo } from 'react'
@@ -28,7 +29,60 @@ interface State {
   reportSent: boolean
 }
 
+// 全局未捕获 Promise 错误处理：标记但不触发全页面崩溃
+let globalRejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null
+
+// Error deduplication: track recent errors to avoid flooding the server
+const _recentErrors = new Map<string, { count: number; firstTs: number; lastTs: number }>()
+const ERROR_DEDUP_WINDOW = 60000 // 60s dedup window
+const ERROR_DEDUP_MAX = 10 // max same error per window before suppressing
+
+function getErrorFingerprint(error: Error, errorInfo?: ErrorInfo): string {
+  // Use message + first line of component stack as fingerprint
+  const componentKey = errorInfo?.componentStack?.split('\n')[1]?.trim() || ''
+  return `${error.message}::${componentKey}`
+}
+
+function shouldReportError(fingerprint: string): boolean {
+  const now = Date.now()
+  const entry = _recentErrors.get(fingerprint)
+  if (!entry || now - entry.lastTs > ERROR_DEDUP_WINDOW) {
+    _recentErrors.set(fingerprint, { count: 1, firstTs: now, lastTs: now })
+    return true
+  }
+  entry.count++
+  entry.lastTs = now
+  // Suppress after max occurrences within window
+  if (entry.count > ERROR_DEDUP_MAX) {
+    return false
+  }
+  return true
+}
+
+// Periodic cleanup of old error fingerprints
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    const now = Date.now()
+    for (const [key, entry] of _recentErrors) {
+      if (now - entry.lastTs > ERROR_DEDUP_WINDOW) {
+        _recentErrors.delete(key)
+      }
+    }
+  }, 120000)
+}
+function setupRejectionGuard() {
+  if (globalRejectionHandler) return
+  globalRejectionHandler = (event: PromiseRejectionEvent) => {
+    // 阻止默认的全局错误传播，仅记录日志
+    console.warn('[ErrorBoundary] Unhandled promise rejection (isolated):', event.reason)
+    event.preventDefault()
+  }
+  window.addEventListener('unhandledrejection', globalRejectionHandler)
+}
+
 export default class ErrorBoundary extends Component<Props, State> {
+  private rejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null
+
   constructor(props: Props) {
     super(props)
     this.state = {
@@ -38,6 +92,10 @@ export default class ErrorBoundary extends Component<Props, State> {
       retryCount: 0,
       reportSent: false,
     }
+  }
+
+  componentDidMount(): void {
+    setupRejectionGuard()
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -85,34 +143,50 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   /**
-   * 上报错误到服务器
+   * 上报错误到服务器（带去重）
    */
   reportError = async (error: Error, errorInfo: ErrorInfo): Promise<void> => {
     if (this.state.reportSent) return
 
+    // Deduplicate: skip if same error reported too many times
+    const fingerprint = getErrorFingerprint(error, errorInfo)
+    if (!shouldReportError(fingerprint)) return
+
     try {
-      // 这里可以替换为实际的错误上报 API
       const errorReport = {
-        message: error.message,
-        stack: error.stack,
-        componentStack: errorInfo.componentStack,
-        url: window.location.href,
-        userAgent: navigator.userAgent,
-        timestamp: Date.now(),
-        retryCount: this.state.retryCount,
+        logs: [{
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          level: 'error' as const,
+          category: 'react',
+          message: error.message,
+          timestamp: new Date().toISOString(),
+          sessionId: sessionStorage.getItem('session_id') || 'unknown',
+          context: {
+            stack: error.stack || '',
+            componentStack: errorInfo.componentStack || '',
+            url: window.location.href,
+            userAgent: navigator.userAgent,
+            retryCount: this.state.retryCount,
+          },
+        }],
       }
 
-      // 尝试发送到错误收集服务
       if (navigator.onLine) {
-        // 示例：发送到后端
-        // await fetch('/api/errors', {
-        //   method: 'POST',
-        //   headers: { 'Content-Type': 'application/json' },
-        //   body: JSON.stringify(errorReport),
-        // })
-
-        console.log('[ErrorBoundary] Error reported:', errorReport)
-        this.setState({ reportSent: true })
+        // 发送到后端 /api/v1/logs/report
+        try {
+          if (window.electronAPI?.httpRequest) {
+            await window.electronAPI.httpRequest('POST', `http://localhost:${window.location.port || 8765}/api/v1/logs/report`, errorReport)
+          } else {
+            fetch('/api/v1/logs/report', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(errorReport),
+            }).catch(() => {})
+          }
+          this.setState({ reportSent: true })
+        } catch {
+          // IPC 调用可能失败（URL 无效等），不影响主流程
+        }
       }
     } catch (e) {
       console.error('[ErrorBoundary] Failed to report error:', e)
@@ -153,7 +227,15 @@ export default class ErrorBoundary extends Component<Props, State> {
       `Retry Count: ${this.state.retryCount}`,
     ].join('\n\n')
 
-    navigator.clipboard.writeText(errorText)
+    navigator.clipboard.writeText(errorText).catch(() => {})
+  }
+
+  componentWillUnmount(): void {
+    // 清理局部的 rejection handler
+    if (this.rejectionHandler) {
+      window.removeEventListener('unhandledrejection', this.rejectionHandler)
+      this.rejectionHandler = null
+    }
   }
 
   render(): ReactNode {

@@ -101,7 +101,9 @@ class SimBroker:
         self._account.market_value = sum(
             p.current_price * p.volume for p in self._positions.values()
         )
-        self._account.frozen = sum(p.cost_price * p.volume for p in self._positions.values())
+        # 当前模拟器对所有订单立即成交，所以冻结资金 = 0。
+        # 真实场景下应累加所有未成交委托占用的资金。
+        self._account.frozen = 0.0
         self._account.total_asset = self._account.cash + self._account.market_value
         self._account.total_profit = self._account.total_asset - self.initial_cash
         self._account.updated_at = datetime.now()

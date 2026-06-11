@@ -122,7 +122,7 @@ def example_scoring():
 def example_timing():
     """择时信号示例"""
     print("\n" + "=" * 60)
-    print("四因子择时示例")
+    print("多维度综合择时示例")
     print("=" * 60)
 
     from app.sg_strategy.core.timing import TimingEngine, MarketData

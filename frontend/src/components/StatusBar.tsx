@@ -1,7 +1,8 @@
 import { Tag, Space, Typography, Button, Tooltip } from 'antd'
-import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined, WifiOutlined, DisconnectOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useAppStore } from '../stores/useAppStore'
 import { useMarketStore } from '../stores/useMarketStore'
+import { marketWs, signalsWs, refreshWsToken } from '../utils/wsInstances'
 import { healthCheck } from '../services/api'
 
 const { Text } = Typography
@@ -9,6 +10,8 @@ const { Text } = Typography
 export default function StatusBar() {
   const backendConnected = useAppStore((s) => s.backendConnected)
   const setBackendConnected = useAppStore((s) => s.setBackendConnected)
+  const wsConnected = useAppStore((s) => s.marketWsConnected)
+  const signalWsConnected = useAppStore((s) => s.signalWsConnected)
   const updatedAt = useMarketStore((s) => s.updatedAt)
   const bondCount = useMarketStore((s) => s.allBonds.length)
 
@@ -17,8 +20,18 @@ export default function StatusBar() {
       await healthCheck()
       setBackendConnected(true)
     } catch {
-      setBackendConnected(false)
+      // 单次重试失败不修改全局状态，让 health check 机制管理
     }
+  }
+
+  const handleWsReconnect = () => {
+    refreshWsToken()
+    marketWs.connect()
+  }
+
+  const handleSignalWsReconnect = () => {
+    refreshWsToken()
+    signalsWs.connect()
   }
 
   return (
@@ -42,6 +55,30 @@ export default function StatusBar() {
             <Tag icon={<CloseCircleOutlined />} color="error">后端未连接</Tag>
             <Tooltip title="重新连接后端服务">
               <Button size="small" type="link" icon={<ReloadOutlined />} onClick={handleReconnect} />
+            </Tooltip>
+          </>
+        )}
+      </Space>
+      <Space size={4}>
+        {wsConnected ? (
+          <Tag icon={<WifiOutlined />} color="success">行情实时</Tag>
+        ) : (
+          <>
+            <Tag icon={<DisconnectOutlined />} color="warning">行情离线</Tag>
+            <Tooltip title="重新连接行情 WebSocket">
+              <Button size="small" type="link" icon={<ReloadOutlined />} onClick={handleWsReconnect} />
+            </Tooltip>
+          </>
+        )}
+      </Space>
+      <Space size={4}>
+        {signalWsConnected ? (
+          <Tag icon={<ThunderboltOutlined />} color="success">信号实时</Tag>
+        ) : (
+          <>
+            <Tag icon={<DisconnectOutlined />} color="warning">信号离线</Tag>
+            <Tooltip title="重新连接信号 WebSocket">
+              <Button size="small" type="link" icon={<ReloadOutlined />} onClick={handleSignalWsReconnect} />
             </Tooltip>
           </>
         )}

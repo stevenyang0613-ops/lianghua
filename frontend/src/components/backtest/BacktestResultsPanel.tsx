@@ -4,9 +4,13 @@ import { BarChartOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
 import echarts from '../../utils/echarts'
 import type { BacktestResult } from '../../services/api'
+import { fmt } from '../../utils/format'
 
 const { Text } = Typography
 const { Panel } = Collapse
+
+
+
 
 interface BacktestResultsPanelProps {
   result: BacktestResult | null
@@ -51,12 +55,12 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
     { title: '名称', dataIndex: 'name', width: 90 },
     { title: '买入日', dataIndex: 'buy_date', width: 100 },
     { title: '卖出日', dataIndex: 'sell_date', width: 100 },
-    { title: '买入价', dataIndex: 'buy_price', width: 80, render: (v: number) => v.toFixed(2) },
-    { title: '卖出价', dataIndex: 'sell_price', width: 80, render: (v: number) => v.toFixed(2) },
+    { title: '买入价', dataIndex: 'buy_price', width: 80, render: (v: number) => fmt(v) },
+    { title: '卖出价', dataIndex: 'sell_price', width: 80, render: (v: number) => fmt(v) },
     {
       title: '收益率', dataIndex: 'profit_pct', width: 80,
       render: (v: number) => (
-        <Text style={{ color: v >= 0 ? '#cf1322' : '#389e0d' }}>{v.toFixed(2)}%</Text>
+        <Text style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{fmt(v)}%</Text>
       ),
     },
     { title: '持有天数', dataIndex: 'hold_days', width: 80 },

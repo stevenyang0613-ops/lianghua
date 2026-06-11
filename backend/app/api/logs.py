@@ -10,6 +10,13 @@ from enum import Enum
 
 router = APIRouter()
 
+
+@router.get("/")
+async def list_logs():
+    """日志列表索引 — 返回已上报的日志条目数量(无 query 参数时使用)"""
+    return {"count": len(logs_db), "hint": "use /query for filtered listing"}
+
+
 class LogLevel(str, Enum):
     debug = "debug"
     info = "info"

@@ -3,6 +3,8 @@
  * 支持本地存储和远程上报
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface ErrorLog {
   type: 'javascript' | 'react' | 'api' | 'network' | 'unknown'
   message: string
@@ -48,7 +50,7 @@ export function logError(error: Partial<ErrorLog>): void {
 // 获取错误日志
 export function getErrorLogs(): ErrorLog[] {
   const saved = localStorage.getItem(ERROR_LOG_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<ErrorLog[]>(saved, [])
 }
 
 // 清除错误日志

@@ -335,8 +335,8 @@ class NaturalLanguageQuery:
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
-        except:
-            pass
+        except Exception as e:
+            logger.warning("[LLM] JSON parse failed: %s", e)
 
         return {"intent": "unknown", "raw_query": query}
 
@@ -481,8 +481,8 @@ class SentimentAnalyzer:
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
-        except:
-            pass
+        except Exception as e:
+            logger.warning("[LLM] JSON parse failed (sentiment): %s", e)
 
         return {"overall_sentiment": "neutral", "sentiment_score": 0}
 

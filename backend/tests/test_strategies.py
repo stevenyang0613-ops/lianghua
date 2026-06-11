@@ -3,7 +3,7 @@
 
 测试覆盖：
 - 七维打分策略测试
-- 四因子择时测试
+- 多维度综合择时测试
 - 信用评分模型测试
 - 交易成本模型测试
 - 事件驱动策略测试
@@ -161,10 +161,10 @@ class TestSonggangSevenDimensionStrategy:
         assert env in ['bull', 'bear', 'neutral']
 
 
-# ==================== 四因子择时测试 ====================
+# ==================== 多维度综合择时测试 ====================
 
 class TestFourFactorTiming:
-    """四因子择时模型测试"""
+    """四因子择时模型 V3 (Legacy) 测试"""
 
     @pytest.fixture
     def timing(self):

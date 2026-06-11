@@ -440,7 +440,7 @@ class QualityMonitor:
                 if isinstance(value, str) and 'date' in key.lower():
                     try:
                         datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         is_valid = False
                         break
 
@@ -641,7 +641,7 @@ class AnomalyDetector:
                 if isinstance(date_value, str):
                     try:
                         date_value = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         continue
 
                 if date_value < cutoff:
@@ -753,7 +753,7 @@ class DataLifecycleManager:
                 if isinstance(date_value, str):
                     try:
                         date_value = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         continue
 
                 if date_value < cutoff:

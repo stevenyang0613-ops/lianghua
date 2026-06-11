@@ -9,58 +9,82 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;')
 }
 
+function csvCell(v: unknown): string {
+  const s = v == null ? '' : String(v)
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
+
+function buildCsv(headers: string[], rows: unknown[][]): string {
+  return [
+    headers.map(csvCell).join(','),
+    ...rows.map((r) => r.map(csvCell).join(',')),
+  ].join('\n')
+}
+
 export function exportToCSV(bonds: ConvertibleQuote[], filename: string = 'bonds'): void {
   const headers = [
     '代码', '名称', '最新价', '涨跌幅(%)', '正股价', '正股涨跌幅(%)',
-    '转股价', '转股价值', '溢价率(%)', '双低值', 'YTM(%)', '成交额(亿)', '剩余年限'
+    '转股价', '转股价值', '溢价率(%)', '双低值', 'YTM(%)', '成交额(亿)', '剩余年限',
+    '强赎倒计时', '已公告强赎', '强赎状态', '最后交易日', '到期日', '强赎价'
   ]
 
   const rows = bonds.map((b) => [
     b.code,
     b.name,
-    b.price.toFixed(2),
-    b.change_pct.toFixed(2),
-    b.stock_price.toFixed(2),
-    b.stock_change_pct.toFixed(2),
-    b.conversion_price.toFixed(2),
-    b.conversion_value.toFixed(2),
-    b.premium_ratio.toFixed(2),
-    b.dual_low.toFixed(2),
-    b.ytm.toFixed(2),
-    b.volume.toFixed(2),
-    b.remaining_years.toFixed(1),
+    (b.price ?? 0).toFixed(2),
+    (b.change_pct ?? 0).toFixed(2),
+    (b.stock_price ?? 0).toFixed(2),
+    (b.stock_change_pct ?? 0).toFixed(2),
+    (b.conversion_price ?? 0).toFixed(2),
+    (b.conversion_value ?? 0).toFixed(2),
+    (b.premium_ratio ?? 0).toFixed(2),
+    (b.dual_low ?? 0).toFixed(2),
+    (b.ytm ?? 0).toFixed(2),
+    (b.volume ?? 0).toFixed(2),
+    (b.remaining_years ?? 0).toFixed(1),
+    (b.forced_call_days ?? 0),
+    (b.is_called ? '是' : '否'),
+    (b.call_status ?? ''),
+    (b.last_trade_date ?? ''),
+    (b.maturity_date ?? ''),
+    (b.redemption_price ?? 0).toFixed(2),
   ])
 
-  const csvContent = [
-    headers.join(','),
-    ...rows.map((r) => r.map((cell) => `"${cell}"`).join(',')),
-  ].join('\n')
-
   const BOM = '﻿'
-  const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob([BOM + buildCsv(headers, rows)], { type: 'text/csv;charset=utf-8;' })
   downloadBlob(blob, `${filename}.csv`)
 }
 
 export function exportToExcel(bonds: ConvertibleQuote[], filename: string = 'bonds'): void {
   const headers = [
     '代码', '名称', '最新价', '涨跌幅(%)', '正股价', '正股涨跌幅(%)',
-    '转股价', '转股价值', '溢价率(%)', '双低值', 'YTM(%)', '成交额(亿)', '剩余年限'
+    '转股价', '转股价值', '溢价率(%)', '双低值', 'YTM(%)', '成交额(亿)', '剩余年限',
+    '强赎倒计时', '已公告强赎', '强赎状态', '最后交易日', '到期日', '强赎价'
   ]
 
   const rows = bonds.map((b) => [
     b.code,
     b.name,
-    b.price.toFixed(2),
-    b.change_pct.toFixed(2),
-    b.stock_price.toFixed(2),
-    b.stock_change_pct.toFixed(2),
-    b.conversion_price.toFixed(2),
-    b.conversion_value.toFixed(2),
-    b.premium_ratio.toFixed(2),
-    b.dual_low.toFixed(2),
-    b.ytm.toFixed(2),
-    b.volume.toFixed(2),
-    b.remaining_years.toFixed(1),
+    (b.price ?? 0).toFixed(2),
+    (b.change_pct ?? 0).toFixed(2),
+    (b.stock_price ?? 0).toFixed(2),
+    (b.stock_change_pct ?? 0).toFixed(2),
+    (b.conversion_price ?? 0).toFixed(2),
+    (b.conversion_value ?? 0).toFixed(2),
+    (b.premium_ratio ?? 0).toFixed(2),
+    (b.dual_low ?? 0).toFixed(2),
+    (b.ytm ?? 0).toFixed(2),
+    (b.volume ?? 0).toFixed(2),
+    (b.remaining_years ?? 0).toFixed(1),
+    (b.forced_call_days ?? 0),
+    (b.is_called ? '是' : '否'),
+    (b.call_status ?? ''),
+    (b.last_trade_date ?? ''),
+    (b.maturity_date ?? ''),
+    (b.redemption_price ?? 0).toFixed(2),
   ])
 
   const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -72,7 +96,7 @@ export function exportToExcel(bonds: ConvertibleQuote[], filename: string = 'bon
 <Row>${headers.map((h) => `<Cell><Data ss:Type="String">${escapeXml(h)}</Data></Cell>`).join('')}</Row>
 ${rows.map((row) => `<Row>${row.map((cell, i) => {
   const type = i === 0 || i === 1 ? 'String' : 'Number'
-  return `<Cell><Data ss:Type="${type}">${escapeXml(cell)}</Data></Cell>`
+  return `<Cell><Data ss:Type="${type}">${escapeXml(String(cell))}</Data></Cell>`
 }).join('')}</Row>`).join('\n')}
 </Table>
 </Worksheet>
@@ -103,18 +127,17 @@ export function exportTrades(trades: any[], filename: string = 'trades'): void {
   const headers = ['时间', '代码', '名称', '方向', '价格', '数量', '金额', '状态']
 
   const rows = trades.map((t) => [
-    new Date(t.created_at).toLocaleString(),
+    t.created_at ? new Date(t.created_at).toLocaleString() : '',
     t.code,
     t.name,
     t.side === 'buy' ? '买入' : '卖出',
-    t.price.toFixed(2),
-    t.volume,
-    (t.price * t.volume).toFixed(2),
-    t.status === 'filled' ? '已成交' : t.status === 'pending' ? '待成交' : '已撤单',
+    (t.price ?? 0).toFixed(2),
+    t.volume ?? 0,
+    ((t.price ?? 0) * (t.volume ?? 0)).toFixed(2),
+    t.status === 'filled' ? '已成交' : t.status === 'pending' ? '待成交' : t.status === 'rejected' ? '已拒绝' : '已撤单',
   ])
 
-  const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob(['﻿' + buildCsv(headers, rows)], { type: 'text/csv;charset=utf-8;' })
   downloadBlob(blob, `${filename}_${formatDateForFilename()}.csv`)
 }
 
@@ -125,16 +148,15 @@ export function exportPositions(positions: any[], filename: string = 'positions'
   const rows = positions.map((p) => [
     p.code,
     p.name,
-    p.volume,
-    p.avg_cost?.toFixed(2) || '0',
-    p.current_price?.toFixed(2) || '0',
-    p.market_value?.toFixed(2) || '0',
-    p.pnl?.toFixed(2) || '0',
-    ((p.pnl_rate || 0) * 100).toFixed(2),
+    p.volume ?? 0,
+    (p.cost_price ?? 0).toFixed(2),
+    (p.current_price ?? 0).toFixed(2),
+    (p.market_value ?? 0).toFixed(2),
+    (p.profit_amount ?? 0).toFixed(2),
+    (p.profit_pct ?? 0).toFixed(2),
   ])
 
-  const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob(['﻿' + buildCsv(headers, rows)], { type: 'text/csv;charset=utf-8;' })
   downloadBlob(blob, `${filename}_${formatDateForFilename()}.csv`)
 }
 
@@ -145,8 +167,8 @@ export function exportBacktestResult(result: any, filename: string = 'backtest')
     回测区间: `${result.start_date} 至 ${result.end_date}`,
     初始资金: result.initial_capital,
     最终资金: result.final_capital,
-    总收益率: `${(result.total_return * 100).toFixed(2)}%`,
-    年化收益率: `${(result.annualized_return * 100).toFixed(2)}%`,
+    总收益率: `${((result.total_return || 0) * 100).toFixed(2)}%`,
+    年化收益率: `${((result.annualized_return || 0) * 100).toFixed(2)}%`,
     夏普比率: result.sharpe_ratio?.toFixed(2),
     最大回撤: `${((result.max_drawdown || 0) * 100).toFixed(2)}%`,
     交易次数: result.trade_count,
@@ -164,29 +186,31 @@ export function exportSignals(signals: any[], filename: string = 'signals'): voi
   const headers = ['时间', '代码', '名称', '策略', '信号类型', '价格', '置信度(%)', '说明']
 
   const rows = signals.map((s) => [
-    new Date(s.created_at).toLocaleString(),
+    s.created_at ? new Date(s.created_at).toLocaleString() : '',
     s.code,
     s.name,
     s.strategy,
     s.signal_type,
-    s.price?.toFixed(2) || '',
+    s.price != null ? s.price.toFixed(2) : '',
     ((s.confidence || 0) * 100).toFixed(1),
     s.description || '',
   ])
 
-  const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob(['﻿' + buildCsv(headers, rows)], { type: 'text/csv;charset=utf-8;' })
   downloadBlob(blob, `${filename}_${formatDateForFilename()}.csv`)
 }
 
 // Fund curve export
 export function exportFundCurve(points: any[], filename: string = 'fund_curve'): void {
-  const headers = ['日期', '净值', '累计收益率(%)']
+  const headers = ['时间', '总资产', '累计盈亏']
 
-  const rows = points.map((p) => [p.date, p.nav, ((p.total_return || 0) * 100).toFixed(2)])
+  const rows = points.map((p) => [
+    p.ts || p.date || '',
+    (p.total_asset ?? p.nav ?? 0).toFixed(2),
+    (p.total_profit ?? p.total_return ?? 0).toFixed(2),
+  ])
 
-  const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob(['﻿' + buildCsv(headers, rows)], { type: 'text/csv;charset=utf-8;' })
   downloadBlob(blob, `${filename}_${formatDateForFilename()}.csv`)
 }
 
@@ -197,6 +221,11 @@ export function exportAccountReport(
   orders: any[],
   filename: string = 'account_report'
 ): void {
+  const totalAsset = account?.total_asset ?? 0
+  const cash = account?.cash ?? 0
+  const marketValue = account?.market_value ?? Math.max(0, totalAsset - cash)
+  const totalProfit = account?.total_profit ?? 0
+
   const report = `
 ========================================
 LiangHua 交易报告
@@ -204,17 +233,17 @@ LiangHua 交易报告
 ========================================
 
 账户概览:
-  总资产: ¥${account?.total_value?.toFixed(2) || '0.00'}
-  现金: ¥${account?.cash?.toFixed(2) || '0.00'}
-  持仓市值: ¥${((account?.total_value || 0) - (account?.cash || 0)).toFixed(2)}
-  累计盈亏: ¥${account?.pnl?.toFixed(2) || '0.00'}
+  总资产: ¥${totalAsset.toFixed(2)}
+  现金: ¥${cash.toFixed(2)}
+  持仓市值: ¥${marketValue.toFixed(2)}
+  累计盈亏: ¥${totalProfit.toFixed(2)}
 
 持仓详情:
   持仓数量: ${positions.length} 只
 ${positions
   .map(
     (p) =>
-      `  - ${p.name}(${p.code}): ${p.volume}股, 盈亏¥${p.pnl?.toFixed(2) || '0.00'}`
+      `  - ${p.name}(${p.code}): ${p.volume ?? 0}张, 盈亏¥${(p.profit_amount ?? 0).toFixed(2)}`
   )
   .join('\n')}
 
@@ -222,6 +251,7 @@ ${positions
   已成交: ${orders.filter((o) => o.status === 'filled').length} 笔
   待成交: ${orders.filter((o) => o.status === 'pending').length} 笔
   已撤单: ${orders.filter((o) => o.status === 'cancelled').length} 笔
+  已拒绝: ${orders.filter((o) => o.status === 'rejected').length} 笔
 
 ========================================
 `.trim()

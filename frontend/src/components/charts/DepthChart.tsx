@@ -26,6 +26,11 @@ export interface DepthChartProps {
   quantityPrecision?: number
 }
 
+function safeToFixed(v: number | undefined | null, digits: number, fallback = ''): string {
+  const d = Math.max(0, Math.min(20, digits ?? 2))
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : fallback
+}
+
 const DepthChart: React.FC<DepthChartProps> = ({
   data,
   symbol,
@@ -88,11 +93,11 @@ const DepthChart: React.FC<DepthChartProps> = ({
     const bidColor = '#26a69a'
     const askColor = '#ef5350'
 
-    const bidPrices = processedData.bids.map(d => d.price.toFixed(pricePrecision))
+    const bidPrices = processedData.bids.map(d => safeToFixed(d.price, pricePrecision, '0'))
     const bidQuantities = processedData.bids.map(d => d.quantity)
     const bidCumulative = processedData.bids.map(d => d.cumulative)
 
-    const askPrices = processedData.asks.map(d => d.price.toFixed(pricePrecision))
+    const askPrices = processedData.asks.map(d => safeToFixed(d.price, pricePrecision, '0'))
     const askQuantities = processedData.asks.map(d => d.quantity)
     const askCumulative = processedData.asks.map(d => d.cumulative)
 
@@ -184,10 +189,10 @@ const DepthChart: React.FC<DepthChartProps> = ({
           let html = ''
 
           if (bidParam) {
-            html += `<div style="color: ${bidColor}">买: ${bidParam.value.toFixed(quantityPrecision)}</div>`
+            html += `<div style="color: ${bidColor}">买: ${safeToFixed(bidParam.value, quantityPrecision, '0')}</div>`
           }
           if (askParam) {
-            html += `<div style="color: ${askColor}">卖: ${askParam.value.toFixed(quantityPrecision)}</div>`
+            html += `<div style="color: ${askColor}">卖: ${safeToFixed(askParam.value, quantityPrecision, '0')}</div>`
           }
 
           return html
@@ -215,7 +220,7 @@ const DepthChart: React.FC<DepthChartProps> = ({
       xAxis: [
         {
           type: 'category',
-          data: bidPrices.reverse(),
+          data: [...bidPrices].reverse(),
           axisLine: { lineStyle: { color: axisLineColor } },
           axisLabel: {
             color: textColor,

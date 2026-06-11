@@ -6,6 +6,7 @@ import StartupLoading from './components/StartupLoading'
 import ErrorBoundary from './components/ErrorBoundary'
 import { initDefaultUser } from './stores/useUserStore'
 import { useAccountStore } from './stores/useAccountStore'
+import { useAppStore } from './stores/useAppStore'
 import { initBackgroundSync } from './utils/backgroundSync'
 import { initNetworkMonitor } from './utils/smartSync'
 import { initWarmup } from './utils/cacheWarmup'
@@ -23,6 +24,7 @@ import { monitoring, trackWebVitals } from './utils/monitoring'
 import { initPerformanceOptimization } from './utils/performanceOptimization'
 import { logCollector } from './utils/logCollector'
 import { alertManager, initPredefinedRules } from './utils/alertNotification'
+import { startHealthCheck } from './utils/healthCheck'
 
 const Market = lazy(() => import('./pages/Market'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
@@ -54,6 +56,7 @@ const AnalyticsDashboard = lazy(() => import('./pages/AnalyticsDashboard'))
 const ThemeConfig = lazy(() => import('./pages/ThemeConfig'))
 const DataImportExport = lazy(() => import('./pages/DataImportExport'))
 const OpsDashboard = lazy(() => import('./components/OpsDashboard'))
+const ExchangeableBonds = lazy(() => import('./pages/ExchangeableBonds'))
 
 // 注册 Service Worker (仅在浏览器/PWA 环境下, Electron 不支持 Service Worker)
 function registerServiceWorker() {
@@ -72,6 +75,13 @@ function registerServiceWorker() {
 
 export default function App() {
   useEffect(() => {
+    // 全局 unhandledrejection 守卫：防止单个页面崩溃导致连锁崩溃
+    const rejectionGuard = (event: PromiseRejectionEvent) => {
+      console.warn('[App] Unhandled rejection (isolated):', event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', rejectionGuard)
+
     initDefaultUser()
     // 初始化后台数据同步
     initBackgroundSync()
@@ -88,22 +98,23 @@ export default function App() {
 
     // 网络状态监听
     const networkCleanup = onNetworkChange((online) => {
-      if (online) {
+      if (online && useAppStore.getState().backendConnected) {
         console.log('[Network] Online - reconnecting...')
-        marketWs.connect()
-        signalsWs.connect()
-      } else {
+        try { marketWs.connect() } catch { /* isolated */ }
+        try { signalsWs.connect() } catch { /* isolated */ }
+      } else if (!online) {
         console.log('[Network] Offline - switching to offline mode')
       }
     })
 
-    // 检查初始网络状态
-    const network = checkNetworkStatus()
-    if (network.online && !isOfflineMode()) {
-      // 连接 WebSocket
-      marketWs.connect()
-      signalsWs.connect()
-    }
+    // 全局 WS 连接管理：等 token 就绪后再连接
+    try {
+      const wsToken = localStorage.getItem('ws_auth_token')
+      if (wsToken) {
+        try { marketWs.connect() } catch { /* isolated */ }
+        try { signalsWs.connect() } catch { /* isolated */ }
+      }
+    } catch { /* localStorage may be unavailable */ }
 
     // 加载加密的 API Key 到内存
     useAccountStore.getState().loadSecureFields()
@@ -137,10 +148,16 @@ export default function App() {
     preloadByPriority()
     // 设置智能预加载（鼠标悬停预加载）
     const preloadCleanup = setupSmartPreload()
+    // 启动后端健康检查（后端断开时自动断WS，恢复时自动重连）
+    const healthCleanup = startHealthCheck()
 
     return () => {
       networkCleanup()
       preloadCleanup()
+      healthCleanup()
+      window.removeEventListener('unhandledrejection', rejectionGuard)
+      marketWs.disconnect()
+      signalsWs.disconnect()
     }
   }, [])
 
@@ -151,6 +168,7 @@ export default function App() {
         <Routes>
         <Route path="/" element={<ErrorBoundary><Market /></ErrorBoundary>} />
         <Route path="/market" element={<ErrorBoundary><Market /></ErrorBoundary>} />
+        <Route path="/exchangeable" element={<ErrorBoundary><ExchangeableBonds /></ErrorBoundary>} />
         <Route path="/watchlist" element={<ErrorBoundary><Watchlist /></ErrorBoundary>} />
         <Route path="/backtest" element={<ErrorBoundary><Backtest /></ErrorBoundary>} />
         <Route path="/trade" element={<ErrorBoundary><Trade /></ErrorBoundary>} />

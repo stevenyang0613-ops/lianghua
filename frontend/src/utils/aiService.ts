@@ -4,6 +4,7 @@
  */
 
 import { secureSave, secureLoad, secureRemove } from './secureStorage'
+import { safeJsonParse } from './safeJson'
 
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system'
@@ -66,7 +67,7 @@ function generateId(): string {
 // 获取所有对话
 export function getConversations(): AIConversation[] {
   const saved = localStorage.getItem(CONVERSATIONS_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<AIConversation[]>(saved, [])
 }
 
 // 获取单个对话

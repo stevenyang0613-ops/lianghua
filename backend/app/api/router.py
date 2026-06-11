@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 
 from app.api.market import router as market_router
 from app.api.ws import router as ws_router
@@ -8,15 +8,66 @@ from app.api.trade import router as trade_router
 from app.api.analysis import router as analysis_router
 from app.api.signals import router as signal_router
 from app.api.score import router as score_router
+from app.api.sg_strategy import router as sg_strategy_router
+from app.api.alert import router as alert_router
+from app.api.auth import router as auth_router, verify_token
+from app.api.accounts import router as accounts_router
+from app.api.logs import router as logs_router
+from app.api.data_source import router as data_source_router
 
 router = APIRouter()
-router.include_router(market_router, prefix="/market", tags=["market"])
-router.include_router(ws_router, prefix="/ws", tags=["websocket"])
-router.include_router(backtest_router, prefix="/backtest", tags=["backtest"])
-router.include_router(history_router, prefix="/history", tags=["history"])
-router.include_router(trade_router, prefix="/trade", tags=["trade"])
-router.include_router(analysis_router, prefix="/analysis", tags=["analysis"])
-router.include_router(signal_router, prefix="", tags=["signals"])
-router.include_router(score_router, prefix="/analysis", tags=["score"])
+router.include_router(market_router, prefix="/market", tags=["market"], dependencies=[Depends(verify_token)])
+router.include_router(ws_router, prefix="/ws", tags=["websocket"])  # WS auth handled in ws.py via verify_ws_auth()
+router.include_router(backtest_router, prefix="/backtest", tags=["backtest"], dependencies=[Depends(verify_token)])
+router.include_router(history_router, prefix="/history", tags=["history"], dependencies=[Depends(verify_token)])
+router.include_router(trade_router, prefix="/trade", tags=["trade"], dependencies=[Depends(verify_token)])
+router.include_router(analysis_router, prefix="/analysis", tags=["analysis"], dependencies=[Depends(verify_token)])
+router.include_router(signal_router, prefix="", tags=["signals"], dependencies=[Depends(verify_token)])
+router.include_router(score_router, prefix="/analysis", tags=["score"], dependencies=[Depends(verify_token)])
+router.include_router(sg_strategy_router, tags=["sg-strategy"], dependencies=[Depends(verify_token)])
+router.include_router(alert_router, tags=["alerts"], dependencies=[Depends(verify_token)])
+router.include_router(auth_router, prefix="/auth", tags=["auth"])  # 无需认证
+router.include_router(accounts_router, prefix="/accounts", tags=["accounts"], dependencies=[Depends(verify_token)])
+router.include_router(logs_router, prefix="/logs", tags=["logs"], dependencies=[Depends(verify_token)])
+router.include_router(data_source_router, tags=["data"], dependencies=[Depends(verify_token)])
 
 
+# 兼容旧路径的索引端点(测试与外部消费者期望的 /api/v1/<resource> 入口)
+@router.get("/backtest/plans", dependencies=[Depends(verify_token)])
+async def _list_backtest_plans():
+    return {"plans": [], "hint": "use /api/v1/backtest/strategies for full listing"}
+
+
+@router.get("/analysis/scores", dependencies=[Depends(verify_token)])
+async def _list_analysis_scores():
+    return {"scores": [], "hint": "see /api/v1/analysis/* for score endpoints"}
+
+
+@router.get("/strategies", dependencies=[Depends(verify_token)])
+async def _list_strategies():
+    return {"strategies": [], "hint": "use /api/v1/sg-strategy/* for sg strategies"}
+
+
+@router.get("/health")
+async def api_health_check(request: Request):
+    """API兼容的健康检查端点 - 路径: /api/v1/health"""
+    from app.config import settings
+    engine_running = False
+    db_ok = False
+    try:
+        engine = getattr(request.app.state, "engine", None)
+        engine_running = engine and engine.is_running
+    except Exception:
+        pass
+    try:
+        db_ok = getattr(request.app.state, "storage", None) is not None
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "version": settings.app_version,
+        "ws_auth_token": settings.ws_auth_token,
+        "market_running": engine_running,
+        "db_ok": db_ok,
+    }

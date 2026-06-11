@@ -128,8 +128,8 @@ async def test_akshare_adapter_returns_empty_on_no_cache_timeout():
     adapter._cache = None
     adapter._cache_time = None
 
-    # Mock _fetch_bond_data to raise timeout
-    with patch.object(adapter, '_fetch_bond_data', side_effect=asyncio.TimeoutError):
+    # Mock _fetch_and_merge to raise timeout
+    with patch.object(adapter, '_fetch_and_merge', side_effect=asyncio.TimeoutError):
         result = await adapter.fetch_all_quotes()
         assert result == []
 

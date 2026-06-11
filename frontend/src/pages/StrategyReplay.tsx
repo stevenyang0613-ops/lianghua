@@ -8,10 +8,13 @@ import { Card, Button, Space, Slider, Typography, Row, Col, Statistic, Tag, Tabl
 import { PlayCircleOutlined, PauseCircleOutlined, StepBackwardOutlined, StepForwardOutlined, StopOutlined, DownloadOutlined, LineChartOutlined } from '@ant-design/icons'
 import { replayEngine, generateMockReplayData, type ReplayStep, type ReplayConfig, type ReplayState } from '../utils/strategyReplay'
 import type { ColumnsType } from 'antd/es/table'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
 export default function StrategyReplay() {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [config, setConfig] = useState<ReplayConfig>({
     strategy: 'macd_cross',
     startDate: '2024-01-01',
@@ -98,18 +101,18 @@ export default function StrategyReplay() {
         </Tag>
       ),
     },
-    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v.toFixed(2) },
+    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
     { title: '持仓数量', dataIndex: 'shares', width: 80 },
-    { title: '现金', dataIndex: 'cash', width: 100, render: (v: number) => v.toLocaleString() },
-    { title: '市值', dataIndex: 'position', width: 100, render: (v: number) => v.toLocaleString() },
-    { title: '总资产', dataIndex: 'totalValue', width: 100, render: (v: number) => v.toLocaleString() },
+    { title: '现金', dataIndex: 'cash', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
+    { title: '市值', dataIndex: 'position', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
+    { title: '总资产', dataIndex: 'totalValue', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
     {
       title: '收益',
       dataIndex: 'profitPct',
       width: 80,
       render: (v: number) => (
         <Text style={{ color: v >= 0 ? '#52c41a' : '#ff4d4f' }}>
-          {v >= 0 ? '+' : ''}{v.toFixed(2)}%
+          {v >= 0 ? '+' : ''}{fmt(v)}%
         </Text>
       ),
     },
@@ -277,7 +280,7 @@ export default function StrategyReplay() {
               dataSource={steps.filter(s => s.action !== 'hold')}
               columns={tradeColumns}
               rowKey="step"
-              pagination={{ pageSize: 20 }}
+              pagination={{ current: page, pageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setPage(p); setPageSize(ps) } }}
               size="small"
               scroll={{ x: 900 }}
               rowClassName={(record) => record.step === state.currentStep ? 'ant-table-row-selected' : ''}

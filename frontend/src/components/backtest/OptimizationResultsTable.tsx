@@ -3,8 +3,12 @@ import { Card, Row, Col, Statistic, Table, Badge, Tag, Tooltip, Typography } fro
 import { ThunderboltOutlined } from '@ant-design/icons'
 import type { OptimizationResult, OptimizationResultItem } from '../../services/api'
 import { METRIC_OPTIONS } from './BacktestConfigPanel'
+import { fmt } from '../../utils/format'
 
 const { Text } = Typography
+
+
+
 
 interface OptimizationResultsTableProps {
   optResult: OptimizationResult
@@ -42,19 +46,19 @@ const OptimizationResultsTable = memo(function OptimizationResultsTable({
         const val = (record as any)[optResult?.optimize_metric ?? ''] ?? 0
         return (
           <Text style={{ color: '#1890ff' }} strong>
-            {typeof val === 'number' ? val.toFixed(2) : val}
+            {typeof val === 'number' ? fmt(val) : val}
           </Text>
         )
       },
     },
-    { title: '总收益%', dataIndex: 'total_return_pct', key: 'ret', width: 90, render: (v: number) => v.toFixed(2) },
-    { title: '年化%', dataIndex: 'annual_return_pct', key: 'ann', width: 80, render: (v: number) => v.toFixed(2) },
-    { title: '最大回撤%', dataIndex: 'max_drawdown_pct', key: 'mdd', width: 90, render: (v: number) => <Text style={{ color: '#faad14' }}>{v.toFixed(2)}</Text> },
-    { title: 'Sharpe', dataIndex: 'sharpe_ratio', key: 'sharpe', width: 80, render: (v: number) => v.toFixed(3) },
-    { title: '胜率%', dataIndex: 'win_rate', key: 'win', width: 70, render: (v: number) => v.toFixed(1) },
+    { title: '总收益%', dataIndex: 'total_return_pct', key: 'ret', width: 90, render: (v: number) => fmt(v) },
+    { title: '年化%', dataIndex: 'annual_return_pct', key: 'ann', width: 80, render: (v: number) => fmt(v) },
+    { title: '最大回撤%', dataIndex: 'max_drawdown_pct', key: 'mdd', width: 90, render: (v: number) => <Text style={{ color: '#faad14' }}>{fmt(v)}</Text> },
+    { title: 'Sharpe', dataIndex: 'sharpe_ratio', key: 'sharpe', width: 80, render: (v: number) => fmt(v, 3) },
+    { title: '胜率%', dataIndex: 'win_rate', key: 'win', width: 70, render: (v: number) => fmt(v, 1) },
     { title: '交易次数', dataIndex: 'total_trades', key: 'trades', width: 70 },
-    { title: 'Sortino', dataIndex: 'sortino_ratio', key: 'sortino', width: 80, render: (v: number) => v.toFixed(3) },
-    { title: 'Calmar', dataIndex: 'calmar_ratio', key: 'calmar', width: 80, render: (v: number) => v.toFixed(2) },
+    { title: 'Sortino', dataIndex: 'sortino_ratio', key: 'sortino', width: 80, render: (v: number) => fmt(v, 3) },
+    { title: 'Calmar', dataIndex: 'calmar_ratio', key: 'calmar', width: 80, render: (v: number) => fmt(v) },
   ], [optParamNames, optMetricLabel, optResult])
 
   if (!optResult || optResult.top_results.length === 0) return null
@@ -74,7 +78,7 @@ const OptimizationResultsTable = memo(function OptimizationResultsTable({
           </Col>
           <Col>
             <Text type="secondary">
-              执行耗时: {(optResult.execution_time_ms / 1000).toFixed(1)}s
+              执行耗时: {fmt((optResult.execution_time_ms ?? 0) / 1000, 1)}s
             </Text>
           </Col>
           <Col>

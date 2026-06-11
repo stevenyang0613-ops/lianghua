@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Any
 from datetime import date, datetime, timedelta
 import pandas as pd
-import numpy as np
 import time
 import hashlib
 import logging
+import json
+import asyncio
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1139,6 +1141,90 @@ async def compare_rankings(
 from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
 
 
+def _compute_songgang_scores(strategy, df):
+    """同步计算七维评分（在线程池中执行，优先使用向量化）"""
+    import threading
+    t0 = time.time()
+    thread_name = threading.current_thread().name
+    logger.info(f"[Compute] Seven-dim scoring started on thread={thread_name}, rows={len(df)}")
+    # 优先使用向量化计算（约50-100倍提速）
+    if hasattr(strategy, 'calc_vectorized'):
+        scores_list, vetoed_list = strategy.calc_vectorized(df)
+    else:
+        scores_list = []
+        vetoed_list = []
+        for _, row in df.iterrows():
+            veto = strategy._check_veto(row)
+            if not veto.passed:
+                vetoed_list.append({
+                    "code": row['code'],
+                    "name": row.get('name', ''),
+                    "reasons": veto.reasons,
+                    "credit_score": round(veto.score, 1),
+                })
+                continue
+            score_dict = strategy._calc_total_score(row, df)
+            score_dict['code'] = row['code']
+            score_dict['name'] = row.get('name', '')
+            score_dict['price'] = row['price']
+            score_dict['premium_ratio'] = row['premium_ratio']
+            score_dict['dual_low'] = row['dual_low']
+            score_dict['volume'] = row['volume']
+            score_dict['change_pct'] = row['change_pct']
+            score_dict['ytm'] = row['ytm']
+            score_dict['remaining_years'] = row['remaining_years']
+            scores_list.append(score_dict)
+    elapsed = time.time() - t0
+    logger.info(f"[Compute] Seven-dim scoring done on thread={thread_name}, scores={len(scores_list)} vetoed={len(vetoed_list)} time={elapsed:.2f}s")
+    return scores_list, vetoed_list
+
+
+def _compute_market_change_stats(bonds) -> dict:
+    """
+    统计全市场可转债当日涨跌情况。
+
+    返回:
+        {
+            "total": 总数,
+            "up": 上涨只数 (change_pct > 0),
+            "down": 下跌只数 (change_pct < 0),
+            "flat": 持平只数 (change_pct == 0),
+            "up_ratio": 上涨占比 %,
+            "down_ratio": 下跌占比 %,
+            "avg_change": 平均涨跌幅 %,
+            "median_change": 中位数涨跌幅 %
+        }
+    """
+    if not bonds:
+        return {"total": 0, "up": 0, "down": 0, "flat": 0,
+                "up_ratio": 0.0, "down_ratio": 0.0,
+                "avg_change": 0.0, "median_change": 0.0}
+
+    changes = [float(b.change_pct or 0) for b in bonds]
+    total = len(changes)
+    up = sum(1 for c in changes if c > 0)
+    down = sum(1 for c in changes if c < 0)
+    flat = total - up - down
+
+    sorted_changes = sorted(changes)
+    n = len(sorted_changes)
+    if n % 2 == 0:
+        median_change = (sorted_changes[n // 2 - 1] + sorted_changes[n // 2]) / 2
+    else:
+        median_change = sorted_changes[n // 2]
+
+    return {
+        "total": total,
+        "up": up,
+        "down": down,
+        "flat": flat,
+        "up_ratio": round(up / total * 100, 2) if total else 0.0,
+        "down_ratio": round(down / total * 100, 2) if total else 0.0,
+        "avg_change": round(sum(changes) / total, 3) if total else 0.0,
+        "median_change": round(median_change, 3),
+    }
+
+
 @router.get("/songgang-ranking")
 async def get_songgang_ranking(
     request: Request,
@@ -1156,8 +1242,9 @@ async def get_songgang_ranking(
     包含一票否决制和缓冲带机制
     """
     cache_key = _get_cache_key("songgang_ranking", top_n=top_n, aum=aum_level, market=market_env)
-    cached = _get_cached(cache_key)
+    cached = _get_cached(cache_key, ttl=_LONG_CACHE_TTL)
     if cached:
+        cached["cached"] = True
         return cached
 
     try:
@@ -1198,36 +1285,14 @@ async def get_songgang_ranking(
             aum_level=aum_level,
             market_env=market_env,
         )
+        # 从 DB 加载持久化的缓冲带状态
+        storage = getattr(request.app.state, "storage", None)
+        if storage:
+            strategy.load_buffer_from_storage(storage)
         strategy.on_init(df)
 
-        # 执行打分
-        scores_list = []
-        vetoed_list = []
-
-        for i, row in df.iterrows():
-            # 一票否决检查
-            veto = strategy._check_veto(row)
-            if not veto.passed:
-                vetoed_list.append({
-                    "code": row['code'],
-                    "name": row.get('name', ''),
-                    "reasons": veto.reasons,
-                    "credit_score": round(veto.score, 1),
-                })
-                continue
-
-            # 计算七维评分
-            score_dict = strategy._calc_total_score(row, df)
-            score_dict['code'] = row['code']
-            score_dict['name'] = row.get('name', '')
-            score_dict['price'] = row['price']
-            score_dict['premium_ratio'] = row['premium_ratio']
-            score_dict['dual_low'] = row['dual_low']
-            score_dict['volume'] = row['volume']
-            score_dict['change_pct'] = row['change_pct']
-            score_dict['ytm'] = row['ytm']
-            score_dict['remaining_years'] = row['remaining_years']
-            scores_list.append(score_dict)
+        # 执行打分（在线程池中计算，不阻塞事件循环）
+        scores_list, vetoed_list = await asyncio.to_thread(_compute_songgang_scores, strategy, df)
 
         if not scores_list:
             return {
@@ -1238,20 +1303,20 @@ async def get_songgang_ranking(
                 "market_env": market_env,
             }
 
-        scores_df = pd.DataFrame(scores_list)
-        scores_df = scores_df.sort_values('total', ascending=False).reset_index(drop=True)
+        # scores_list 已按 total 降序排列（calc_vectorized 返回排序结果）
+        # 无需再次 sort_values，直接使用
 
         # 更新缓冲带状态
         buffer_status_list = []
-        for rank, (_, row) in enumerate(scores_df.iterrows(), 1):
-            code = row['code']
+        for rank, s in enumerate(scores_list, 1):
+            code = s['code']
             status = strategy._update_buffer_status(code, rank)
             if status.in_buffer or rank <= top_n + 5:
                 buffer_status_list.append({
                     "code": code,
-                    "name": row['name'],
+                    "name": s['name'],
                     "rank": rank,
-                    "score": row['total'],
+                    "score": s['total'],
                     "in_buffer": status.in_buffer,
                     "days_in_buffer": status.days_in_buffer,
                     "days_above_60": status.days_above_60,
@@ -1259,33 +1324,55 @@ async def get_songgang_ranking(
                 })
 
         # 取前N名
-        top_df = scores_df.head(top_n)
+        top_scores = scores_list[:top_n]
+
+        # 查询多周期历史涨跌幅（3/5/10/30日）
+        storage = getattr(request.app.state, "storage", None)
+        period_changes: dict[str, dict[int, float | None]] = {}
+        if storage is not None:
+            try:
+                period_changes = await asyncio.to_thread(
+                    storage.get_period_changes_batch,
+                    [s['code'] for s in top_scores],
+                    [1, 3, 5, 10, 30],
+                )
+            except Exception as e:
+                logger.warning(f"[Songgang] period changes query failed: {e}")
 
         items = []
-        for idx, row in top_df.iterrows():
+        for idx, s in enumerate(top_scores):
+            code = s['code']
+            pc = period_changes.get(code, {})
             items.append({
                 "rank": idx + 1,
-                "code": row['code'],
-                "name": row['name'],
-                "price": round(row['price'], 3),
-                "premium_ratio": round(row['premium_ratio'], 2),
-                "dual_low": round(row['dual_low'], 2),
-                "volume": round(row['volume'], 2),
-                "change_pct": round(row['change_pct'], 2),
-                "ytm": round(row['ytm'], 2) if row['ytm'] else None,
-                "remaining_years": round(row['remaining_years'], 2) if row['remaining_years'] else None,
-                "total_score": round(row['total'], 2),
-                "stock_score": round(row['stock_score'], 2),
-                "bond_score": round(row['bond_score'], 2),
-                "score_details": row['stock_details'],
-                "bond_details": row['bond_details'],
+                "code": code,
+                "name": s['name'],
+                "price": round(s['price'], 3),
+                "premium_ratio": round(s['premium_ratio'], 2),
+                "dual_low": round(s['dual_low'], 2),
+                "volume": round(s['volume'], 2),
+                "change_pct": round(s['change_pct'], 2),
+                "ytm": round(s['ytm'], 2) if s['ytm'] else None,
+                "remaining_years": round(s['remaining_years'], 2) if s['remaining_years'] else None,
+                "total_score": s['total'],
+                "stock_score": s['stock_score'],
+                "bond_score": s['bond_score'],
+                "score_details": s['stock_details'],
+                "bond_details": s['bond_details'],
+                "change_1d": round(s['change_pct'], 2),
+                "change_3d": pc.get(3),
+                "change_5d": pc.get(5),
+                "change_10d": pc.get(10),
+                "change_30d": pc.get(30),
             })
 
         result = {
-            "total": len(scores_df),
+            "total": len(scores_list),
             "returned": len(items),
             "market_env": market_env,
             "aum_level": aum_level,
+            "score_date": datetime.now().strftime("%Y-%m-%d"),
+            "score_time": datetime.now().strftime("%H:%M:%S"),
             "params": {
                 "top_n": top_n,
                 "buffer_size": 5,
@@ -1295,14 +1382,190 @@ async def get_songgang_ranking(
             "vetoed": vetoed_list[:20],  # 只返回前20个被否决的
             "vetoed_count": len(vetoed_list),
             "buffer_status": buffer_status_list[:20],
+            "market_stats": _compute_market_change_stats(bonds),  # 全市场当日涨跌统计
             "cached": False,
         }
 
-        _set_cache(cache_key, result)
+        # 持久化缓冲带状态到 DB
+        if storage:
+            try:
+                strategy.save_buffer_to_storage(storage)
+            except Exception as e:
+                logger.warning(f"[Songgang] save buffer tracker failed: {e}")
+
+        _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
         return result
 
     except Exception as e:
         logger.exception("Songgang ranking error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/songgang-ranking/stream")
+async def stream_songgang_ranking(
+    request: Request,
+    top_n: int = Query(60, ge=10, le=200),
+    aum_level: str = Query("small"),
+    market_env: str = Query("neutral"),
+):
+    """SSE流式返回七维排名，每计算完一批就推送"""
+
+    async def event_generator():
+        try:
+            engine = request.app.state.engine
+            bonds = await engine.get_all_quotes()
+
+            # 立即推送进度事件，重置前端超时定时器
+            yield f"data: {json.dumps({'type': 'progress', 'progress': 0, 'computed': 0, 'total': len(bonds) if bonds else 0})}\n\n"
+
+            if not bonds:
+                yield f"data: {json.dumps({'type': 'done', 'total': 0, 'items': [], 'vetoed': []})}\n\n"
+                return
+
+            rows = []
+            for b in bonds:
+                rows.append({
+                    "code": b.code, "name": b.name, "price": b.price,
+                    "premium_ratio": b.premium_ratio, "volume": b.volume or 0,
+                    "dual_low": b.dual_low, "change_pct": b.change_pct or 0,
+                    "ytm": b.ytm or 0, "remaining_years": b.remaining_years or 0,
+                    "conversion_value": b.conversion_value or 0,
+                    "stock_price": b.stock_price or 0, "stock_change_pct": b.stock_change_pct or 0,
+                    "forced_call_days": b.forced_call_days or 0,
+                    "date": datetime.now().date(),
+                })
+
+            df = pd.DataFrame(rows)
+            strategy = SonggangSevenDimensionStrategy(
+                hold_count=top_n, aum_level=aum_level, market_env=market_env,
+            )
+            strategy.on_init(df)
+
+            # 全量计算一次（向量化，Z-score基于全量数据，0.5ms内完成）
+            scores_list, vetoed_list = await asyncio.to_thread(_compute_songgang_scores, strategy, df)
+
+            if not scores_list:
+                yield f"data: {json.dumps({'type': 'done', 'total': 0, 'items': [], 'vetoed': vetoed_list[:20], 'vetoed_count': len(vetoed_list)})}\n\n"
+                return
+
+            # scores_list 已按 total 降序排列，直接取 top_n
+            top_items = scores_list[:top_n]
+            storage = getattr(request.app.state, "storage", None)
+            period_changes: dict[str, dict[int, float | None]] = {}
+            if storage is not None:
+                try:
+                    period_changes = await asyncio.to_thread(
+                        storage.get_period_changes_batch,
+                        [s['code'] for s in top_items],
+                        [1, 3, 5, 10, 30],
+                    )
+                except Exception as e:
+                    logger.warning(f"[Songgang.stream] period changes query failed: {e}")
+
+            items = [{
+                "rank": idx + 1, "code": s['code'], "name": s['name'],
+                "price": round(s['price'], 3), "premium_ratio": round(s['premium_ratio'], 2),
+                "dual_low": round(s['dual_low'], 2), "volume": round(s['volume'], 2),
+                "change_pct": round(s['change_pct'], 2),
+                "ytm": round(s['ytm'], 2) if s['ytm'] else None,
+                "remaining_years": round(s['remaining_years'], 2) if s['remaining_years'] else None,
+                "total_score": s['total'],
+                "stock_score": s['stock_score'],
+                "bond_score": s['bond_score'],
+                "score_details": s['stock_details'],
+                "bond_details": s['bond_details'],
+                "change_1d": round(s['change_pct'], 2),
+                "change_3d": period_changes.get(s['code'], {}).get(3),
+                "change_5d": period_changes.get(s['code'], {}).get(5),
+                "change_10d": period_changes.get(s['code'], {}).get(10),
+                "change_30d": period_changes.get(s['code'], {}).get(30),
+            } for idx, s in enumerate(top_items)]
+
+            result = {
+                "type": "done", "total": len(scores_list), "returned": len(items),
+                "market_env": market_env, "aum_level": aum_level,
+                "items": items, "vetoed": vetoed_list[:20], "vetoed_count": len(vetoed_list),
+                "market_stats": _compute_market_change_stats(bonds),
+            }
+
+            cache_key = _get_cache_key("songgang_ranking", top_n=top_n, aum=aum_level, market=market_env)
+            _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
+
+            yield f"data: {json.dumps(result)}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/songgang-ranking/save-snapshot")
+async def save_songgang_snapshot(request: Request):
+    """保存当日七维评分快照"""
+    try:
+        storage = getattr(request.app.state, "storage", None)
+        if not storage:
+            raise HTTPException(status_code=500, detail="Storage not available")
+
+        engine = request.app.state.engine
+        bonds = await engine.get_all_quotes()
+
+        if not bonds:
+            return {"status": "ok", "saved": 0}
+
+        rows = []
+        for b in bonds:
+            rows.append({
+                "code": b.code, "name": b.name, "price": b.price,
+                "premium_ratio": b.premium_ratio, "volume": b.volume or 0,
+                "dual_low": b.dual_low, "change_pct": b.change_pct or 0,
+                "ytm": b.ytm or 0, "remaining_years": b.remaining_years or 0,
+                "conversion_value": b.conversion_value or 0,
+                "stock_price": b.stock_price or 0, "stock_change_pct": b.stock_change_pct or 0,
+                "forced_call_days": b.forced_call_days or 0,
+                "date": datetime.now().date(),
+            })
+
+        df = pd.DataFrame(rows)
+        strategy = SonggangSevenDimensionStrategy()
+        strategy.on_init(df)
+
+        scores = []
+        for _, row in df.iterrows():
+            veto = strategy._check_veto(row)
+            if not veto.passed:
+                continue
+            score_dict = strategy._calc_total_score(row, df)
+            score_dict['code'] = row['code']
+            score_dict['name'] = row.get('name', '')
+            score_dict['price'] = row['price']
+            score_dict['premium_ratio'] = row['premium_ratio']
+            score_dict['dual_low'] = row['dual_low']
+            scores.append(score_dict)
+
+        storage.save_seven_dim_snapshot(scores)
+        return {"status": "ok", "saved": len(scores)}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/songgang-ranking/history/{code}")
+async def get_songgang_history(
+    request: Request,
+    code: str,
+    days: int = Query(30, ge=1, le=365, description="查询天数"),
+):
+    """获取某只转债的七维评分历史"""
+    try:
+        storage = getattr(request.app.state, "storage", None)
+        if not storage:
+            raise HTTPException(status_code=500, detail="Storage not available")
+
+        history = storage.get_seven_dim_history(code, days)
+        return {"code": code, "days": days, "items": history}
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1366,26 +1629,26 @@ async def get_songgang_single_score(
 
         result = {
             "code": code,
-            "name": target_row['name'],
-            "price": target_row['price'],
-            "premium_ratio": target_row['premium_ratio'],
-            "dual_low": target_row['dual_low'],
-            "volume": target_row['volume'],
-            "ytm": target_row['ytm'],
-            "remaining_years": target_row['remaining_years'],
+            "name": str(target_row['name']),
+            "price": float(target_row['price']),
+            "premium_ratio": float(target_row['premium_ratio']),
+            "dual_low": float(target_row['dual_low']),
+            "volume": float(target_row['volume']),
+            "ytm": float(target_row['ytm']),
+            "remaining_years": float(target_row['remaining_years']),
             "veto_check": {
-                "passed": veto.passed,
-                "reasons": veto.reasons,
-                "credit_score": round(veto.score, 1),
+                "passed": bool(veto.passed),
+                "reasons": [str(r) for r in veto.reasons],
+                "credit_score": float(round(veto.score, 1)),
             },
-            "total_score": score_dict['total'],
-            "stock_score": score_dict['stock_score'],
-            "bond_score": score_dict['bond_score'],
-            "stock_details": score_dict['stock_details'],
-            "bond_details": score_dict['bond_details'],
+            "total_score": float(score_dict['total']),
+            "stock_score": float(score_dict['stock_score']),
+            "bond_score": float(score_dict['bond_score']),
+            "stock_details": {k: float(v) for k, v in score_dict['stock_details'].items()},
+            "bond_details": {k: float(v) for k, v in score_dict['bond_details'].items()},
             "weights": {
-                "stock_weights": strategy.STOCK_WEIGHTS,
-                "bond_weights": strategy.BOND_WEIGHTS,
+                "stock_weights": {k: float(v) for k, v in strategy.STOCK_WEIGHTS.items()},
+                "bond_weights": {k: float(v) for k, v in strategy.BOND_WEIGHTS.items()},
             },
         }
 
@@ -1461,7 +1724,7 @@ async def check_songgang_veto(
                 },
                 "forced_call": {
                     "value": target_row['forced_call_days'],
-                    "passed": target_row['forced_call_days'] == 0 or target_row['forced_call_days'] >= 15,
+                    "passed": target_row['forced_call_days'] == 0,
                 },
             },
         }
@@ -1950,7 +2213,7 @@ async def get_risk_metrics(
 
         # 年化收益率（假设每期hold_days天）
         total_days = len(returns) * hold_days
-        annualized_return = (cumulative_returns[-1] / total_days * 252) if total_days > 0 else 0
+        annualized_return = (1 + cumulative_returns[-1] / 100) ** (252 / total_days) - 1 if total_days > 0 else 0
 
         # 波动率
         if len(returns) > 1:
@@ -2038,8 +2301,8 @@ async def add_notification_channel(req: NotificationChannel, request: Request):
             raise HTTPException(status_code=500, detail="Storage not available")
 
         # 存储通知渠道配置
-        with storage._write_lock:
-            storage.conn.execute("""
+        with storage._write() as conn:
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS notification_channels (
                     id INTEGER PRIMARY KEY,
                     channel_type VARCHAR,
@@ -2049,11 +2312,11 @@ async def add_notification_channel(req: NotificationChannel, request: Request):
                     created_at TIMESTAMP
                 )
             """)
-            storage.conn.execute("""
+            conn.execute("""
                 INSERT INTO notification_channels (channel_type, name, config, enabled, created_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (req.channel_type, req.name, str(req.config), req.enabled, datetime.now()))
-            channel_id = storage.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            """, (req.channel_type, req.name, json.dumps(req.config, ensure_ascii=False), req.enabled, datetime.now()))
+            channel_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         return {"status": "ok", "id": channel_id}
 
@@ -2069,6 +2332,11 @@ async def get_notification_channels(request: Request):
         if not storage:
             raise HTTPException(status_code=500, detail="Storage not available")
 
+        try:
+            storage.conn.execute("SELECT 1 FROM notification_channels LIMIT 0")
+        except Exception:
+            return {"channels": []}
+
         result = storage.conn.execute("SELECT * FROM notification_channels WHERE enabled = TRUE").fetchall()
         channels = []
         for row in result:
@@ -2076,7 +2344,7 @@ async def get_notification_channels(request: Request):
                 "id": row[0],
                 "channel_type": row[1],
                 "name": row[2],
-                "config": eval(row[3]) if row[3] else {},
+                "config": json.loads(row[3]) if row[3] else {},
                 "enabled": row[4],
                 "created_at": str(row[5]),
             })
@@ -2095,7 +2363,8 @@ async def remove_notification_channel(channel_id: int, request: Request):
         if not storage:
             raise HTTPException(status_code=500, detail="Storage not available")
 
-        storage.conn.execute("DELETE FROM notification_channels WHERE id = ?", (channel_id,))
+        with storage._write() as conn:
+            conn.execute("DELETE FROM notification_channels WHERE id = ?", (channel_id,))
         return {"status": "ok"}
 
     except Exception as e:

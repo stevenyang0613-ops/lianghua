@@ -470,7 +470,7 @@ export default function PerformanceMonitor() {
               </Col>
             </Row>
             <Progress
-              percent={Math.round((metrics.memory.used / metrics.memory.total) * 100) || 0}
+              percent={metrics.memory.total > 0 ? Math.round((metrics.memory.used / metrics.memory.total) * 100) : 0}
               strokeColor={memoryColor}
             />
           </Card>

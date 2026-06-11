@@ -4,6 +4,7 @@
  */
 
 import type { ConvertibleQuote } from '../types'
+import { fmt } from './format'
 
 export interface ExportData {
   version: string
@@ -72,20 +73,27 @@ export async function exportToCsv(
 ): Promise<void> {
   const headers = [
     '代码', '名称', '价格', '涨跌幅', '正股价格', '转股价',
-    '转股价值', '溢价率', '双低值', '成交量'
+    '转股价值', '溢价率', '双低值', '成交量',
+    '强赎倒计时', '已公告强赎', '强赎状态', '最后交易日', '到期日', '强赎价'
   ]
 
   const rows = quotes.map((q) => [
     q.code,
     q.name,
-    q.price,
-    q.change_pct?.toFixed(2) || 0,
-    q.stock_price,
-    q.conversion_price,
-    q.conversion_value?.toFixed(2) || 0,
-    q.premium_ratio?.toFixed(2) || 0,
-    q.dual_low?.toFixed(2) || 0,
+    fmt(q.price),
+    fmt(q.change_pct) || '0',
+    fmt(q.stock_price),
+    fmt(q.conversion_price),
+    fmt(q.conversion_value) || '0',
+    fmt(q.premium_ratio) || '0',
+    fmt(q.dual_low) || '0',
     q.volume || 0,
+    (q.forced_call_days ?? 0),
+    (q.is_called ? '是' : '否'),
+    (q.call_status ?? ''),
+    (q.last_trade_date ?? ''),
+    (q.maturity_date ?? ''),
+    (q.redemption_price ?? 0).toFixed(2),
   ])
 
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
@@ -108,7 +116,8 @@ export async function exportToExcel(
 ): Promise<void> {
   const headers = [
     '代码', '名称', '价格', '涨跌幅', '正股价格', '转股价',
-    '转股价值', '溢价率', '双低值', '成交量'
+    '转股价值', '溢价率', '双低值', '成交量',
+    '强赎倒计时', '已公告强赎', '强赎状态', '最后交易日', '到期日', '强赎价'
   ]
 
   let html = `
@@ -123,14 +132,20 @@ export async function exportToExcel(
     html += `<tr>
       <td>${q.code}</td>
       <td>${q.name}</td>
-      <td>${q.price}</td>
-      <td>${q.change_pct?.toFixed(2) || 0}%</td>
-      <td>${q.stock_price}</td>
-      <td>${q.conversion_price}</td>
-      <td>${q.conversion_value?.toFixed(2) || 0}</td>
-      <td>${q.premium_ratio?.toFixed(2) || 0}%</td>
-      <td>${q.dual_low?.toFixed(2) || 0}</td>
+      <td>${fmt(q.price)}</td>
+      <td>${fmt(q.change_pct) || '0'}%</td>
+      <td>${fmt(q.stock_price)}</td>
+      <td>${fmt(q.conversion_price)}</td>
+      <td>${fmt(q.conversion_value) || '0'}</td>
+      <td>${fmt(q.premium_ratio) || '0'}%</td>
+      <td>${fmt(q.dual_low) || '0'}</td>
       <td>${q.volume || 0}</td>
+      <td>${q.forced_call_days ?? 0}</td>
+      <td>${q.is_called ? '是' : '否'}</td>
+      <td>${q.call_status ?? ''}</td>
+      <td>${q.last_trade_date ?? ''}</td>
+      <td>${q.maturity_date ?? ''}</td>
+      <td>${(q.redemption_price ?? 0).toFixed(2)}</td>
     </tr>`
   })
 

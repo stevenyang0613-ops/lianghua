@@ -31,12 +31,13 @@ import {
 
 const menuItems = [
   { key: '/', icon: <StockOutlined />, label: '实时行情' },
+  { key: '/exchangeable', icon: <StockOutlined />, label: '可交换债' },
   { key: '/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
   { key: '/watchlist', icon: <StarOutlined />, label: '自选列表' },
   { key: '/signals', icon: <AlertOutlined />, label: '交易信号' },
   { key: '/score-ranking', icon: <TrophyOutlined />, label: '评分排名' },
-  { key: '/songgang-score', icon: <StarOutlined />, label: '松岗七维打分' },
-  { key: '/timing-signal', icon: <ThunderboltOutlined />, label: '四因子择时' },
+  { key: '/songgang-score', icon: <StarOutlined />, label: '七维详情分析' },
+  { key: '/timing-signal', icon: <ThunderboltOutlined />, label: '多维度择时' },
   { key: '/backtest', icon: <ExperimentOutlined />, label: '回测中心' },
   { key: '/trade', icon: <DollarOutlined />, label: '交易终端' },
   { key: '/trade-log', icon: <HistoryOutlined />, label: '交易日志' },

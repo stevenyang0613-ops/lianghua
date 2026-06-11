@@ -2,7 +2,7 @@ import asyncio
 import pandas as pd
 from datetime import date
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.strategies import get_strategy, list_strategies
 from app.engine.backtest import BacktestEngine
@@ -24,6 +24,15 @@ class BacktestRequest(BaseModel):
     end_date: str = "2025-12-31"
     config: BacktestConfig = BacktestConfig()
     optimization: OptimizationConfig = OptimizationConfig()
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date(cls, v: str) -> str:
+        try:
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError(f'Invalid date format: {v}, expected YYYY-MM-DD')
+        return v
 
 
 async def _build_data(request: Request, start_date: date, end_date: date) -> pd.DataFrame:
@@ -80,19 +89,21 @@ async def run_backtest(req: BacktestRequest, request: Request):
 
         strategy_cls = get_strategy(req.strategy)
 
+        data_source = getattr(full_data, '_backtest_data_source', 'unknown')
         if req.optimization.enabled and req.optimization.param_ranges:
             engine = BacktestEngine(config=req.config)
             opt_result = engine.run_optimization(strategy_cls, full_data, req.optimization)
             return {
                 "success": True,
                 "type": "optimization",
+                "data_source": data_source,
                 "result": opt_result.model_dump(mode="json"),
             }
         else:
             strategy = strategy_cls(**req.params)
             engine = BacktestEngine(config=req.config)
             result = engine.run(strategy, full_data)
-            return {"success": True, "type": "backtest", "result": result.model_dump(mode="json")}
+            return {"success": True, "type": "backtest", "data_source": data_source, "result": result.model_dump(mode="json")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -124,6 +135,7 @@ async def optimize_params(req: BacktestRequest, request: Request):
             ]
 
         result = engine.run_optimization(strategy_cls, full_data, opt_config)
-        return {"success": True, "result": result.model_dump(mode="json")}
+        data_source = getattr(full_data, '_backtest_data_source', 'unknown')
+        return {"success": True, "data_source": data_source, "result": result.model_dump(mode="json")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

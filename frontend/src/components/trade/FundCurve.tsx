@@ -20,10 +20,10 @@ function FundCurve({ fundCurve }: FundCurveProps) {
         if (!point) return ''
         return `
           <div>时间: ${point.ts}</div>
-          <div>总资产: ${point.total_asset.toFixed(2)}</div>
-          <div>现金: ${point.cash.toFixed(2)}</div>
-          <div>市值: ${point.market_value.toFixed(2)}</div>
-          <div>总盈亏: ${point.total_profit >= 0 ? '+' : ''}${point.total_profit.toFixed(2)}</div>
+          <div>总资产: ${(point.total_asset ?? 0).toFixed(2)}</div>
+          <div>现金: ${(point.cash ?? 0).toFixed(2)}</div>
+          <div>市值: ${(point.market_value ?? 0).toFixed(2)}</div>
+          <div>总盈亏: ${point.total_profit >= 0 ? '+' : ''}${(point.total_profit ?? 0).toFixed(2)}</div>
         `
       },
     },

@@ -179,7 +179,7 @@ export default function Trade() {
                 <Col span={12}><Statistic title="持仓市值" value={account.market_value} precision={2} prefix="¥" /></Col>
                 <Col span={12}><Statistic title="冻结资金" value={account.frozen} precision={2} prefix="¥" valueStyle={{ color: '#faad14' }} /></Col>
                 <Col span={12}><Statistic title="总盈亏" value={account.total_profit} precision={2} prefix="¥" valueStyle={{ color: account.total_profit >= 0 ? '#cf1322' : '#389e0d' }} /></Col>
-                <Col span={12}><Statistic title="收益率" value={account.total_asset > 0 ? (account.total_profit / (account.total_asset - account.total_profit)) * 100 : 0} precision={2} suffix="%" valueStyle={{ color: account.total_profit >= 0 ? '#cf1322' : '#389e0d' }} /></Col>
+                <Col span={12}><Statistic title="收益率" value={(() => { const base = (account.total_asset || 0) - (account.total_profit || 0); return base > 0 ? ((account.total_profit || 0) / base) * 100 : 0 })()} precision={2} suffix="%" valueStyle={{ color: (account.total_profit || 0) >= 0 ? '#cf1322' : '#389e0d' }} /></Col>
               </Row>
             ) : <Spin />}
           </Card>

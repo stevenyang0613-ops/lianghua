@@ -37,6 +37,8 @@ const actionLabels: Record<string, string> = {
 }
 
 export default function TradeLogPage() {
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [logs, setLogs] = useState<TradeLog[]>([])
   const [stats, setStats] = useState(getTradeStats())
   const [loading, setLoading] = useState(false)
@@ -261,7 +263,7 @@ export default function TradeLogPage() {
             dataSource={logs}
             columns={columns}
             rowKey="id"
-            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ current: page, pageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setPage(p); setPageSize(ps) } }}
             size="small"
             scroll={{ x: 1200 }}
           />

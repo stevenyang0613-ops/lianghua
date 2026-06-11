@@ -8,8 +8,12 @@ import {
   getSyncInterval,
   setSyncInterval,
 } from '../../utils/backgroundSync'
+import { marketWs } from '../../utils/wsInstances'
 
 const { Text } = Typography
+
+const STALE_KEY = 'ws_stale_threshold_sec'
+const DEFAULT_STALE_SEC = 60
 
 interface NetworkSettingsCardProps {
   onSyncComplete: (syncTime: number) => void
@@ -20,6 +24,10 @@ export const NetworkSettingsCard = React.memo(function NetworkSettingsCard({ onS
   const [autoSync, setAutoSync] = useState(() => localStorage.getItem('auto_sync') === 'true')
   const [syncing, setSyncing] = useState(false)
   const [syncIntervalMin, setSyncIntervalMin] = useState(() => getSyncInterval() / 60000)
+  const [staleSec, setStaleSec] = useState(() => {
+    const saved = localStorage.getItem(STALE_KEY)
+    return saved ? parseInt(saved, 10) : DEFAULT_STALE_SEC
+  })
 
   const toggleOfflineMode = (checked: boolean) => {
     setOfflineMode(checked)
@@ -117,6 +125,26 @@ export const NetworkSettingsCard = React.memo(function NetworkSettingsCard({ onS
           </div>
         </>
       )}
+      <Divider style={{ margin: '12px 0' }} />
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <Text>行情延迟告警阈值</Text>
+          <Text type="secondary">{staleSec} 秒</Text>
+        </div>
+        <Slider
+          min={30}
+          max={300}
+          step={10}
+          value={staleSec}
+          onChange={(v) => {
+            setStaleSec(v)
+            localStorage.setItem(STALE_KEY, String(v))
+            marketWs.updateStaleThreshold(v * 1000)
+          }}
+          marks={{ 30: '30s', 60: '1分', 120: '2分', 180: '3分', 300: '5分' }}
+        />
+        <Text type="secondary" style={{ fontSize: 12 }}>超过此时间未收到行情更新时，将弹出延迟告警通知</Text>
+      </div>
       <Divider style={{ margin: '12px 0' }} />
       <Button
         icon={syncing ? <SyncOutlined spin /> : <SyncOutlined />}

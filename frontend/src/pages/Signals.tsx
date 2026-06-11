@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Table, Tag, Button, Select, Space, Spin, Alert, Typography, Statistic, Row, Col, message, Tabs, Tooltip, Switch, Skeleton } from 'antd'
-import { ThunderboltOutlined, CheckCircleOutlined, DownloadOutlined, HistoryOutlined, BarChartOutlined, WifiOutlined, CloudDownloadOutlined, DeleteOutlined } from '@ant-design/icons'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Card, Table, Tag, Button, Select, Space, Spin, Alert, Typography, Statistic, Row, Col, message, Tabs, Badge, Empty, Skeleton } from 'antd'
+import { ThunderboltOutlined, CheckCircleOutlined, DownloadOutlined, HistoryOutlined, BarChartOutlined, WifiOutlined, DisconnectOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useSignalStore } from '../stores/useSignalStore'
-import { setAutoExecuteConfig, cleanupSignalHistory, getSignalExportCsvUrl } from '../services/api'
+import { useAppStore } from '../stores/useAppStore'
+import { signalsWs, refreshWsToken } from '../utils/wsInstances'
 import type { TradeSignal } from '../services/api'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
-const actionColors: Record<string, string> = { buy: 'green', sell: 'red' }
+const actionColors: Record<string, string> = {
+  buy: 'green',
+  sell: 'red',
+}
 
 const confidenceColor = (v: number) => {
   if (v >= 0.7) return 'green'
@@ -16,6 +21,10 @@ const confidenceColor = (v: number) => {
 }
 
 export default function Signals() {
+  const [signalsPage, setSignalsPage] = useState(1)
+  const [signalsPageSize, setSignalsPageSize] = useState(20)
+  const [historyPage, setHistoryPage] = useState(1)
+  const [historyPageSize, setHistoryPageSize] = useState(20)
   const signals = useSignalStore((s) => s.signals)
   const activeStrategies = useSignalStore((s) => s.activeStrategies)
   const availableStrategies = useSignalStore((s) => s.availableStrategies)
@@ -24,7 +33,7 @@ export default function Signals() {
   const total = useSignalStore((s) => s.total)
   const loading = useSignalStore((s) => s.loading)
   const error = useSignalStore((s) => s.error)
-  const wsConnected = useSignalStore((s) => s.wsConnected)
+  const wsConnected = useAppStore((s) => s.signalWsConnected)
   const loadSignals = useSignalStore((s) => s.loadSignals)
   const loadAvailableStrategies = useSignalStore((s) => s.loadAvailableStrategies)
   const loadHistory = useSignalStore((s) => s.loadHistory)
@@ -32,32 +41,58 @@ export default function Signals() {
   const setStrategies = useSignalStore((s) => s.setStrategies)
   const execute = useSignalStore((s) => s.execute)
   const batchExecute = useSignalStore((s) => s.batchExecute)
-  const connectWs = useSignalStore((s) => s.connectWs)
-  const disconnectWs = useSignalStore((s) => s.disconnectWs)
-  const [tab, setTab] = useState('current')
-  const [autoExecEnabled, setAutoExecEnabled] = useState(() => localStorage.getItem('signal_auto_execute') === 'true')
-  const [autoExecThreshold] = useState(() => Number(localStorage.getItem('signal_auto_execute_threshold') || '0.85'))
+  const subscribeWs = useSignalStore((s) => s.subscribeWs)
 
-  useEffect(() => {
-    loadSignals()
-    loadAvailableStrategies()
-    loadHistory()
-    loadStats()
-    const disconnect = connectWs()
-    return () => {
-      disconnect()
-      disconnectWs()
-    }
+  const [tab, setTab] = useState('current')
+  const [wsLastError, setWsLastError] = useState<string>('')
+  const loadingRef = useRef(false)
+  // Track initial load to show skeleton instead of empty state
+  const [initialLoading, setInitialLoading] = useState(true)
+
+  // Sync loadingRef for interval guard
+  useEffect(() => { loadingRef.current = loading }, [loading])
+
+  const handleWsReconnect = useCallback(() => {
+    refreshWsToken()
+    signalsWs.connect()
   }, [])
 
-  const handleExecute = useCallback(async (code: string) => {
+  useEffect(() => {
+    loadSignals().then(() => setInitialLoading(false)).catch(() => setInitialLoading(false))
+    loadAvailableStrategies().catch(() => {})
+    loadHistory().catch(() => {})
+    loadStats().catch(() => {})
+    const unsub = subscribeWs()
+
+    // Single WS state listener for error display only (wsConnected tracked by useAppStore)
+    const unsubState = signalsWs.onStateChange((state) => {
+      if (state === 'disconnected' || state === 'reconnecting') {
+        const err = signalsWs.getLastError()
+        setWsLastError(err ? `${err.reason || '连接断开'} (${err.code})` : '')
+      } else if (state === 'connected') {
+        setWsLastError('')
+      }
+    })
+
+    return () => { unsub(); unsubState() }
+  }, [])
+
+  // 60s fallback refresh (not 30s — WS provides real-time updates, this is just a safety net)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!loadingRef.current) loadSignals().catch(() => {})
+    }, 60000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleExecute = async (code: string) => {
     try {
       await execute(code)
       message.success(`信号 ${code} 已执行`)
     } catch (e) {
       message.error(`执行失败: ${e}`)
     }
-  }, [execute])
+  }
 
   const handleBatchExecute = async () => {
     try {
@@ -68,34 +103,44 @@ export default function Signals() {
     }
   }
 
-  const handleAutoExecToggle = async (enabled: boolean) => {
-    setAutoExecEnabled(enabled)
-    localStorage.setItem('signal_auto_execute', String(enabled))
-    try {
-      await setAutoExecuteConfig(enabled ? autoExecThreshold : 0)
-      message.success(enabled ? '自动执行已开启' : '自动执行已关闭')
-    } catch (e) {
-      message.error(`设置失败: ${e}`)
-    }
-  }
+  const currentColumns = [
+    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
+    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 100, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '方向', dataIndex: 'action', key: 'action', width: 70, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 100, render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
+    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 100, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
+    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
+    { title: '时间', dataIndex: 'ts', key: 'ts', width: 180, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
+    {
+      title: '操作', key: 'action', width: 100,
+      render: (_: unknown, record: TradeSignal) => (
+        <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => handleExecute(record.code)}>执行</Button>
+      ),
+    },
+  ]
 
-  const handleCleanup = async () => {
-    try {
-      await cleanupSignalHistory(30)
-      message.success('历史信号已清理')
-      loadStats()
-      loadHistory()
-    } catch (e) {
-      message.error(`清理失败: ${e}`)
-    }
-  }
+  const historyColumns = [
+    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 130 },
+    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 90, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '方向', dataIndex: 'action', key: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 90, render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
+    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 80, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
+    { title: '已执行', dataIndex: 'executed', key: 'executed', width: 80, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
+    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
+    { title: '时间', dataIndex: 'ts', key: 'ts', width: 170, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
+  ]
 
-  if (loading && signals.length === 0) {
+  // Initial loading skeleton
+  if (initialLoading) {
     return (
       <div style={{ padding: 24 }}>
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-            <Col span={3} key={i}><Card size="small"><Skeleton active title={false} paragraph={{ rows: 2, width: ['60%', '40%'] }} /></Card></Col>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Col span={4} key={i}>
+              <Card size="small"><Skeleton.Input active style={{ width: '100%' }} /></Card>
+            </Col>
           ))}
         </Row>
         <Card>
@@ -105,54 +150,40 @@ export default function Signals() {
     )
   }
 
-  const currentColumns = useMemo(() => [
-    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
-    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 100, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '方向', dataIndex: 'action', key: 'action', width: 70, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
-    { title: '价格', dataIndex: 'price', key: 'price', width: 100, render: (v: number) => v.toFixed(3) },
-    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 100, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
-    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
-    { title: '时间', dataIndex: 'ts', key: 'ts', width: 180, render: (v: string) => new Date(v).toLocaleString('zh-CN') },
-    {
-      title: '操作', key: 'action', width: 100,
-      render: (_: unknown, record: TradeSignal) => (
-        <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => handleExecute(record.code)}>执行</Button>
-      ),
-    },
-  ], [handleExecute])
-
-  const historyColumns = useMemo(() => [
-    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 130 },
-    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 90, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '方向', dataIndex: 'action', key: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
-    { title: '价格', dataIndex: 'price', key: 'price', width: 90, render: (v: number) => v.toFixed(3) },
-    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 80, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
-    { title: '已执行', dataIndex: 'executed', key: 'executed', width: 80, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
-    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
-    { title: '时间', dataIndex: 'ts', key: 'ts', width: 170, render: (v: string) => new Date(v).toLocaleString('zh-CN') },
-  ], [])
-
   return (
     <div style={{ padding: 24 }}>
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col span={3}><Card size="small"><Statistic title="当前信号" value={total} prefix={<ThunderboltOutlined />} valueStyle={{ color: total > 0 ? '#faad14' : undefined }} /></Card></Col>
-        <Col span={3}><Card size="small"><Statistic title="活跃策略" value={activeStrategies.length} prefix={<CheckCircleOutlined />} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={3}><Card size="small"><Statistic title="可用策略" value={availableStrategies.length} prefix={<BarChartOutlined />} valueStyle={{ color: '#1677ff' }} /></Card></Col>
-        <Col span={3}><Card size="small"><Statistic title="历史信号" value={stats?.total ?? '-'} prefix={<HistoryOutlined />} /></Card></Col>
-        <Col span={3}><Card size="small"><Statistic title="已执行" value={stats?.executed ?? '-'} prefix={<CheckCircleOutlined />} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={3}><Card size="small"><Statistic title="执行率" value={stats && stats.total > 0 ? `${((stats.executed / stats.total) * 100).toFixed(1)}%` : '-'} prefix={<BarChartOutlined />} /></Card></Col>
-        <Col span={3}>
-          <Card size="small">
-            <Statistic title="自动执行" value={autoExecEnabled ? '开启' : '关闭'} prefix={
-              <Switch size="small" checked={autoExecEnabled} onChange={handleAutoExecToggle} />
-            } valueStyle={{ color: autoExecEnabled ? '#52c41a' : '#8c8c8c', fontSize: 14 }} />
-          </Card>
+        <Col span={4}>
+          <Card size="small"><Statistic title="当前信号" value={total} prefix={<ThunderboltOutlined />} valueStyle={{ color: total > 0 ? '#faad14' : undefined }} /></Card>
         </Col>
-        <Col span={3}>
+        <Col span={4}>
+          <Card size="small"><Statistic title="活跃策略" value={activeStrategies.length} prefix={<CheckCircleOutlined />} valueStyle={{ color: '#52c41a' }} /></Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small"><Statistic title="可用策略" value={availableStrategies.length} prefix={<BarChartOutlined />} valueStyle={{ color: '#1677ff' }} /></Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small"><Statistic title="历史信号" value={stats?.total ?? '-'} prefix={<HistoryOutlined />} /></Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small"><Statistic title="已执行" value={stats?.executed ?? '-'} prefix={<CheckCircleOutlined />} valueStyle={{ color: '#52c41a' }} /></Card>
+        </Col>
+        <Col span={4}>
           <Card size="small">
-            <Statistic title="WS 状态" value={wsConnected ? '已连接' : '未连接'} prefix={<WifiOutlined />} valueStyle={{ color: wsConnected ? '#52c41a' : '#ff4d4f', fontSize: 14 }} />
+            <Statistic
+              title="WS 状态"
+              value={wsConnected ? '已连接' : '未连接'}
+              prefix={<WifiOutlined />}
+              valueStyle={{ color: wsConnected ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
+            />
+            {!wsConnected && (
+              <div style={{ marginTop: 4 }}>
+                <Button type="link" size="small" icon={<ReloadOutlined />} onClick={handleWsReconnect} style={{ padding: 0, fontSize: 12 }}>
+                  重连
+                </Button>
+                {wsLastError && <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{wsLastError}</div>}
+              </div>
+            )}
           </Card>
         </Col>
       </Row>
@@ -161,17 +192,11 @@ export default function Signals() {
         title={
           <Space>
             <Title level={5} style={{ margin: 0 }}>交易信号</Title>
-            <Button size="small" onClick={loadSignals} loading={loading}>刷新</Button>
+            <Button size="small" onClick={() => loadSignals().catch(() => {})} loading={loading}>刷新</Button>
           </Space>
         }
         extra={
           <Space>
-            <Tooltip title="导出 CSV">
-              <Button icon={<CloudDownloadOutlined />} onClick={() => window.open(getSignalExportCsvUrl(), '_blank')}>导出</Button>
-            </Tooltip>
-            <Tooltip title="清理30天前的历史">
-              <Button icon={<DeleteOutlined />} onClick={handleCleanup}>清理</Button>
-            </Tooltip>
             <Button type="primary" icon={<DownloadOutlined />} onClick={handleBatchExecute} loading={loading} disabled={total === 0}>
               一键批量执行
             </Button>
@@ -180,7 +205,7 @@ export default function Signals() {
               mode="multiple"
               style={{ minWidth: 200 }}
               value={activeStrategies}
-              onChange={setStrategies}
+              onChange={(v: string[]) => setStrategies(v).catch(() => {})}
               options={availableStrategies.map((s) => ({ label: s.name, value: s.id }))}
               loading={loading}
             />
@@ -190,17 +215,45 @@ export default function Signals() {
         {error && <Alert message={error} type="error" style={{ marginBottom: 12 }} closable />}
         <Tabs activeKey={tab} onChange={setTab} items={[
           {
-            key: 'current', label: '当前信号',
+            key: 'current',
+            label: '当前信号',
             children: (
               <Spin spinning={loading}>
-                <Table dataSource={signals} columns={currentColumns} rowKey={(r) => `${r.code}-${r.strategy}`} size="small" scroll={{ y: 400 }} virtual pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }} />
+                {signals.length === 0 && !loading ? (
+                  <Empty
+                    description={
+                      <span>
+                        {wsConnected ? '暂无信号' : '信号服务未连接'}
+                        {!wsConnected && (
+                          <Button type="link" size="small" onClick={handleWsReconnect}>点击重连</Button>
+                        )}
+                      </span>
+                    }
+                    style={{ marginTop: 40 }}
+                  />
+                ) : (
+                <Table
+                  dataSource={signals}
+                  columns={currentColumns}
+                  rowKey={(r) => `${r.code}-${r.strategy}`}
+                  size="small"
+                  pagination={{ current: signalsPage, pageSize: signalsPageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setSignalsPage(p); setSignalsPageSize(ps) } }}
+                />
+                )}
               </Spin>
             ),
           },
           {
-            key: 'history', label: '历史记录',
+            key: 'history',
+            label: '历史记录',
             children: (
-              <Table dataSource={history} columns={historyColumns} rowKey="id" size="small" scroll={{ y: 400 }} virtual pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }} />
+              <Table
+                dataSource={history}
+                columns={historyColumns}
+                rowKey="id"
+                size="small"
+                pagination={{ current: historyPage, pageSize: historyPageSize, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条`, onChange: (p: number, ps: number) => { setHistoryPage(p); setHistoryPageSize(ps) } }}
+              />
             ),
           },
         ]} />

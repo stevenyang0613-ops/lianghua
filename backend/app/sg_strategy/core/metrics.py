@@ -300,7 +300,7 @@ class MetricsManager:
             # 打开文件数
             try:
                 self.set_gauge("sg_process_open_files", len(process.open_files()))
-            except:
+            except Exception:
                 pass
 
         except Exception as e:
@@ -320,7 +320,7 @@ class MetricsManager:
                     result[name] = metric._value.get() if hasattr(metric, '_value') else None
                 elif metric_type == MetricType.COUNTER:
                     result[name] = metric._value.get() if hasattr(metric, '_value') else None
-            except:
+            except Exception:
                 pass
 
         return result

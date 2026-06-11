@@ -69,9 +69,22 @@ echo "  [OK] TypeScript compiled"
 cd "$REPO_DIR"
 echo ""
 
-# Step 4: Electron packaging
+# Step 4: Clean old build artifacts (prevent asar bloat)
 cd "$REPO_DIR/electron"
-echo "[5/6] Electron Builder packaging..."
+echo "[5/7] Cleaning old build artifacts..."
+rm -rf dist/mac-arm64/
+rm -f dist/builder-debug.yml dist/*.map dist/*.d.ts
+rm -rf dist/tests/
+echo "  [OK] Old artifacts cleaned"
+
+# Step 5: Clean old release artifacts
+echo "[6/7] Cleaning old release artifacts..."
+# 保留最新的 DMG 和 blockmap，删除旧的
+find release -name '*.dmg' -not -newer release/ -delete 2>/dev/null || true
+echo "  [OK] Release artifacts cleaned"
+
+# Step 6: Electron packaging
+echo "[7/7] Electron Builder packaging..."
 npx electron-builder --mac --publish=never
 
 DMG_PATH=$(ls -t release/*.dmg 2>/dev/null | head -1)
@@ -91,3 +104,6 @@ echo ""
 echo "Artifacts:"
 echo "  - backend/dist/lianghua-backend (PyInstaller)"
 echo "  - electron/release/*.dmg (Electron DMG)"
+echo ""
+echo "⚠  If DMG is still too large, run this before rebuilding:"
+echo "    rm -rf electron/dist/mac-arm64/"

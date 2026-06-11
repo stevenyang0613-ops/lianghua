@@ -221,7 +221,7 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
             </Space>
             {triggers.slice(0, 5).map((t, i) => (
               <Tag key={i} color="orange">
-                {t.name} {alertTypeLabels[t.alert_type]} {t.threshold} (当前: {t.current_value.toFixed(2)})
+                {t.name} {alertTypeLabels[t.alert_type]} {t.threshold} (当前: {Number.isFinite(t.current_value) ? t.current_value.toFixed(2) : '-'})
               </Tag>
             ))}
           </Space>

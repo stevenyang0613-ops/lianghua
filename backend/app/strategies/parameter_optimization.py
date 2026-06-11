@@ -144,7 +144,8 @@ class ParameterGridOptimizer:
                         abs(score_minus - base_score) / abs(base_score) if base_score else 0,
                     )
                     perturbations.append(change_rate)
-                except:
+                except Exception as e:
+                    logger.debug("[ParamOpt] Stability calc failed: %s", e)
                     perturbations.append(1.0)
 
         if not perturbations:

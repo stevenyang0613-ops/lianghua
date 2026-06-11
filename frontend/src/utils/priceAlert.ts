@@ -3,6 +3,8 @@
  * 支持价格、涨跌幅、成交量预警
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface PriceAlert {
   id: string
   code: string
@@ -26,36 +28,41 @@ interface AlertCondition {
   label: (target: number) => string
 }
 
+const safeNum = (v: unknown, fallback = 0): number => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
 const ALERT_CONDITIONS: Record<string, AlertCondition> = {
   price_above: {
     type: 'price_above',
     check: (current, target) => current >= target,
-    label: (target) => `价格高于 ¥${target.toFixed(2)}`,
+    label: (target) => `价格高于 ¥${safeNum(target).toFixed(2)}`,
   },
   price_below: {
     type: 'price_below',
     check: (current, target) => current <= target,
-    label: (target) => `价格低于 ¥${target.toFixed(2)}`,
+    label: (target) => `价格低于 ¥${safeNum(target).toFixed(2)}`,
   },
   change_above: {
     type: 'change_above',
     check: (current, target) => current >= target,
-    label: (target) => `涨幅大于 ${target.toFixed(2)}%`,
+    label: (target) => `涨幅大于 ${safeNum(target).toFixed(2)}%`,
   },
   change_below: {
     type: 'change_below',
     check: (current, target) => current <= target,
-    label: (target) => `跌幅大于 ${Math.abs(target).toFixed(2)}%`,
+    label: (target) => `跌幅大于 ${Math.abs(safeNum(target)).toFixed(2)}%`,
   },
   volume_above: {
     type: 'volume_above',
     check: (current, target) => current >= target,
-    label: (target) => `成交量大于 ${(target / 10000).toFixed(0)}万`,
+    label: (target) => `成交量大于 ${(safeNum(target) / 10000).toFixed(0)}万`,
   },
   volume_below: {
     type: 'volume_below',
     check: (current, target) => current <= target,
-    label: (target) => `成交量小于 ${(target / 10000).toFixed(0)}万`,
+    label: (target) => `成交量小于 ${(safeNum(target) / 10000).toFixed(0)}万`,
   },
 }
 
@@ -69,7 +76,7 @@ function generateId(): string {
 // 获取所有预警
 export function getAlerts(): PriceAlert[] {
   const saved = localStorage.getItem(ALERTS_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<PriceAlert[]>(saved, [])
 }
 
 // 获取活跃预警

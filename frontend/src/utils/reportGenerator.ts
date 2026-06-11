@@ -3,6 +3,8 @@
  * 支持 Excel 和 PDF 报告导出
  */
 
+import { safeJsonParse } from './safeJson'
+
 export interface ReportConfig {
   title: string
   type: 'trade' | 'performance' | 'position' | 'signal' | 'backtest' | 'custom'
@@ -136,7 +138,7 @@ export function generateReport(config: ReportConfig): GeneratedReport {
 // 获取所有报告
 export function getReports(): GeneratedReport[] {
   const saved = localStorage.getItem(REPORTS_KEY)
-  return saved ? JSON.parse(saved) : []
+  return safeJsonParse<GeneratedReport[]>(saved, [])
 }
 
 // 删除报告

@@ -44,15 +44,16 @@ export default function Backtest() {
     fetchStrategies()
       .then((list) => {
         setStrategies(list)
-        if (list.length > 0) {
+        if (list.length > 0 && list[0].id) {
           setSelectedStrategy(list[0].id)
           const defaults: Record<string, number> = {}
-          for (const p of list[0].params) {
-            defaults[p.name] = p.default
+          for (const p of (list[0].params || [])) {
+            defaults[p.name] = p.default ?? 0
           }
           setStrategyParams(defaults)
         }
       })
+      .catch(() => message.error('策略列表加载失败'))
       .finally(() => setStrategiesLoading(false))
   }, [])
 
@@ -65,14 +66,17 @@ export default function Backtest() {
     if (s) {
       const defaults: Record<string, number> = {}
       const ranges: OptimizationParamRange[] = []
-      for (const p of s.params) {
-        defaults[p.name] = p.default
+      for (const p of (s.params || [])) {
+        const def = p.default ?? 0
+        defaults[p.name] = def
         if (p.type === 'int' || p.type === 'float') {
+          const min = p.min_val ?? def * 0.5
+          const max = p.max_val ?? def * 1.5
           ranges.push({
             name: p.name,
-            min_val: p.min_val ?? p.default * 0.5,
-            max_val: p.max_val ?? p.default * 1.5,
-            step: p.type === 'int' ? 1 : Math.round(((p.max_val ?? p.default * 2) - (p.min_val ?? p.default * 0.5)) / 5 * 100) / 100,
+            min_val: min,
+            max_val: max,
+            step: p.type === 'int' ? 1 : Math.round((max - min) / 5 * 100) / 100 || 1,
           })
         }
       }

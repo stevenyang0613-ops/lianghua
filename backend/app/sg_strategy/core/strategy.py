@@ -247,7 +247,7 @@ class SGConvertibleStrategy:
                     min_score=round(self.scores[-1].total_score, 1) if self.scores else 0,
                     duration_ms=round((time.time() - step_start) * 1000, 2))
 
-        # 4. 四因子择时
+        # 4. 多维度综合择时
         if market_data:
             step_start = time.time()
             self.timing_signal = self.timing_engine.calculate_timing(market_data)

@@ -4,8 +4,12 @@ import { ExportOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
 import type { Position } from '../../stores/useTradeStore'
 import { exportPositions } from '../../utils/export'
+import { fmt } from '../../utils/format'
 
 const { Text } = Typography
+
+
+
 
 interface PositionTableProps {
   positions: Position[]
@@ -16,20 +20,20 @@ const positionColumns = [
   { title: '名称', dataIndex: 'name', width: 100, ellipsis: true },
   { title: '持仓', dataIndex: 'volume', width: 60 },
   { title: '可用', dataIndex: 'available_volume', width: 60 },
-  { title: '成本价', dataIndex: 'cost_price', width: 80, render: (v: number) => v.toFixed(2) },
-  { title: '现价', dataIndex: 'current_price', width: 80, render: (v: number) => v.toFixed(2) },
-  { title: '市值', dataIndex: 'market_value', width: 90, render: (v: number) => v.toFixed(2) },
+  { title: '成本价', dataIndex: 'cost_price', width: 80, render: (v: number) => fmt(v) },
+  { title: '现价', dataIndex: 'current_price', width: 80, render: (v: number) => fmt(v) },
+  { title: '市值', dataIndex: 'market_value', width: 90, render: (v: number) => fmt(v) },
   {
     title: '盈亏',
     dataIndex: 'profit_amount',
     width: 90,
-    render: (v: number) => <Text style={{ color: v >= 0 ? '#cf1322' : '#389e0d' }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}</Text>,
+    render: (v: number) => <Text style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}</Text>,
   },
   {
     title: '收益率',
     dataIndex: 'profit_pct',
     width: 80,
-    render: (v: number) => <span style={{ color: v >= 0 ? '#cf1322' : '#389e0d' }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>,
+    render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span>,
   },
 ]
 

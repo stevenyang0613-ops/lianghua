@@ -15,9 +15,13 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
+import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 const { TabPane } = Tabs
+
+
+
 
 // 回测结果接口
 interface BacktestResult {
@@ -146,7 +150,9 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       // 归一化
       if (config.normalized) {
         const baseValue = data[0]
-        data = data.map(v => (v / baseValue - 1) * 100)
+        if (baseValue && baseValue !== 0) {
+          data = data.map(v => (v / baseValue - 1) * 100)
+        }
       }
 
       return {
@@ -383,11 +389,11 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Text style={{ color: record.metrics.totalReturn >= 0 ? '#52c41a' : '#ff4d4f' }}>
-            {record.metrics.totalReturn.toFixed(2)}%
+            {fmt(record.metrics.totalReturn)}%
           </Text>
           {baseline && record.id !== baseline.id && (
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {record.diff.totalReturn >= 0 ? '+' : ''}{record.diff.totalReturn.toFixed(2)}%
+              {record.diff.totalReturn >= 0 ? '+' : ''}{fmt(record.diff.totalReturn)}%
             </Text>
           )}
         </Space>
@@ -400,10 +406,10 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       width: 100,
       render: (_, record) => (
         <Space direction="vertical" size={0}>
-          <Text>{record.metrics.sharpeRatio.toFixed(2)}</Text>
+          <Text>{fmt(record.metrics.sharpeRatio)}</Text>
           {baseline && record.id !== baseline.id && (
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {record.diff.sharpeRatio >= 0 ? '+' : ''}{record.diff.sharpeRatio.toFixed(2)}
+              {record.diff.sharpeRatio >= 0 ? '+' : ''}{fmt(record.diff.sharpeRatio)}
             </Text>
           )}
         </Space>
@@ -417,11 +423,11 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Text style={{ color: record.metrics.maxDrawdown > 20 ? '#ff4d4f' : undefined }}>
-            -{record.metrics.maxDrawdown.toFixed(2)}%
+            -{fmt(record.metrics.maxDrawdown)}%
           </Text>
           {baseline && record.id !== baseline.id && (
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {record.diff.maxDrawdown >= 0 ? '+' : ''}{record.diff.maxDrawdown.toFixed(2)}%
+              {record.diff.maxDrawdown >= 0 ? '+' : ''}{fmt(record.diff.maxDrawdown)}%
             </Text>
           )}
         </Space>
@@ -433,7 +439,7 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       key: 'winRate',
       width: 80,
       render: (_, record) => (
-        <Text>{record.metrics.winRate.toFixed(1)}%</Text>
+        <Text>{fmt(record.metrics.winRate, 1)}%</Text>
       ),
       sorter: (a, b) => a.metrics.winRate - b.metrics.winRate,
     },
@@ -442,7 +448,7 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
       key: 'profitFactor',
       width: 80,
       render: (_, record) => (
-        <Text>{record.metrics.profitFactor.toFixed(2)}</Text>
+        <Text>{fmt(record.metrics.profitFactor)}</Text>
       ),
       sorter: (a, b) => a.metrics.profitFactor - b.metrics.profitFactor,
     },
@@ -456,7 +462,7 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
           percent={Math.max(0, Math.min(100, score))}
           size="small"
           strokeColor={score > 80 ? '#52c41a' : score > 50 ? '#faad14' : '#ff4d4f'}
-          format={() => score.toFixed(0)}
+          format={() => fmt(score, 0)}
         />
       ),
       sorter: (a, b) => a.score - b.score,

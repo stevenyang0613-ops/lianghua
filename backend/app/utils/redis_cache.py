@@ -4,6 +4,7 @@ Redis 缓存服务
 
 import redis.asyncio as redis
 import json
+import asyncio
 from typing import Optional, Any
 from datetime import timedelta
 import os
@@ -228,7 +229,7 @@ class RedisCache:
         while time.time() < end_time:
             if await self.client.set(lock_key, identifier, nx=True, ex=timeout):
                 return True
-            time.sleep(0.001)
+            await asyncio.sleep(0.001)
 
         return False
 

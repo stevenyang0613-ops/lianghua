@@ -5,16 +5,9 @@
 
 // 关键资源预加载
 export function preloadCriticalResources() {
-  const criticalResources = [
-    // 预加载字体
-    { rel: 'preload', as: 'font', href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap', crossorigin: 'anonymous' },
-  ]
-
-  criticalResources.forEach((resource) => {
-    const link = document.createElement('link')
-    Object.assign(link, resource)
-    document.head.appendChild(link)
-  })
+  // Electron 桌面应用不需要预加载 Google Fonts CDN
+  // Inter 字体由 Ant Design 内联或系统字体回退提供
+  // 移除原先错误的 as='font' 预加载 CSS 文件（导致 preload 警告）
 }
 
 // 骨架屏组件样式
@@ -177,18 +170,7 @@ export function setupLazyLoading() {
 
 // 预连接到关键域名
 export function preconnectOrigins() {
-  const origins = [
-    'https://fonts.googleapis.com',
-    'https://fonts.gstatic.com',
-  ]
-
-  origins.forEach((origin) => {
-    const link = document.createElement('link')
-    link.rel = 'preconnect'
-    link.href = origin
-    link.crossOrigin = 'anonymous'
-    document.head.appendChild(link)
-  })
+  // Electron 桌面应用后端在 localhost，无需预连接外部域名
 }
 
 // 初始化首屏优化

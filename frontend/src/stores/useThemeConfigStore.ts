@@ -175,6 +175,13 @@ export const useThemeConfigStore = create<ThemeState>()(
     }),
     {
       name: 'lianghua-theme-config',
+      version: 1,
+      migrate: (persistedState: unknown, _version: number) => {
+        if (persistedState && typeof persistedState === 'object') {
+          return { ...defaultTheme, ...(persistedState as object) }
+        }
+        return defaultTheme
+      },
     }
   )
 )
@@ -191,13 +198,19 @@ export function applyThemeToDOM(config: ThemeConfig) {
 
   root.setAttribute('data-theme', isDark ? 'dark' : 'light')
 
-  // 应用 CSS 变量
+  // 应用 CSS 变量 (兼容两套命名:主题系统 + useThemeConfigStore)
   root.style.setProperty('--primary-color', config.colors.primary)
   root.style.setProperty('--success-color', config.colors.success)
   root.style.setProperty('--warning-color', config.colors.warning)
   root.style.setProperty('--error-color', config.colors.error)
   root.style.setProperty('--info-color', config.colors.info)
   root.style.setProperty('--border-radius-base', `${config.borderRadius}px`)
+  // Ant Design 命名(与 themes.ts applyTheme 对齐)
+  root.style.setProperty('--ant-primary-color', config.colors.primary)
+  root.style.setProperty('--ant-success-color', config.colors.success)
+  root.style.setProperty('--ant-warning-color', config.colors.warning)
+  root.style.setProperty('--ant-error-color', config.colors.error)
+  root.style.setProperty('--ant-info-color', config.colors.info)
 
   // 应用字体大小
   const fontSizes = { small: '13px', default: '14px', large: '16px' }
