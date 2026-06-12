@@ -49,6 +49,7 @@
           "!tests/**",
           "!*.pyc",
           "!.venv/**",
+          "!.venv",
           "!dist/**",
           "!build/**",
           "!wheels/**",

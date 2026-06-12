@@ -122,6 +122,7 @@ export default function SonggangScore() {
   const [tradesPage, setTradesPage] = useState(1)
   const [tradesPageSize, setTradesPageSize] = useState(10)
   const [loading, setLoading] = useState(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [data, setData] = useState<{
     total: number
     returned: number

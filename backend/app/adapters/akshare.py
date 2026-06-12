@@ -246,6 +246,9 @@ class AKShareAdapter(DataSourceAdapter):
             return True
         if remaining_years == 0.0 and price < 1.0:
             return True
+        # 已到期转债：price=100 且无剩余年限 → 过滤掉
+        if price == 100.0 and remaining_years == 0.0:
+            return True
         now = datetime.now().date()
         if last_trade_date is not None:
             try:

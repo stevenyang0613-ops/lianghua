@@ -9,6 +9,7 @@ from app.api.analysis import router as analysis_router
 from app.api.signals import router as signal_router
 from app.api.score import router as score_router
 from app.api.sg_strategy import router as sg_strategy_router
+from app.api.xuanji import router as xuanji_router
 from app.api.alert import router as alert_router
 from app.api.auth import router as auth_router, verify_token
 from app.api.accounts import router as accounts_router
@@ -25,6 +26,7 @@ router.include_router(analysis_router, prefix="/analysis", tags=["analysis"], de
 router.include_router(signal_router, prefix="", tags=["signals"], dependencies=[Depends(verify_token)])
 router.include_router(score_router, prefix="/analysis", tags=["score"], dependencies=[Depends(verify_token)])
 router.include_router(sg_strategy_router, tags=["sg-strategy"], dependencies=[Depends(verify_token)])
+router.include_router(xuanji_router, tags=["xuanji"], dependencies=[Depends(verify_token)])
 router.include_router(alert_router, tags=["alerts"], dependencies=[Depends(verify_token)])
 router.include_router(auth_router, prefix="/auth", tags=["auth"])  # 无需认证
 router.include_router(accounts_router, prefix="/accounts", tags=["accounts"], dependencies=[Depends(verify_token)])

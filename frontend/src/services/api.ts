@@ -1,6 +1,6 @@
 import type { ConvertibleQuote } from '../types'
 import { saveToCache, getFromCache, getCacheExpiryStatus } from '../utils/dataCache'
-import { getApiBase } from '../utils/config'
+import { getApiBase, setWsAuthToken } from '../utils/config'
 import { recordApiPerformance } from '../utils/performanceMonitor'
 import { withRetry } from '../utils/retryStrategy'
 import { logApiError } from '../utils/errorLogger'
@@ -39,6 +39,24 @@ class ApiError extends Error {
   }
 }
 
+async function refreshAuthToken(): Promise<boolean> {
+  try {
+    const base = getApiBase()
+    const resp = await fetch(`${base}/health`, { headers: { 'Content-Type': 'application/json' } })
+    if (!resp.ok) return false
+    const data = await resp.json()
+    const newToken = data?.ws_auth_token
+    if (newToken && typeof newToken === 'string') {
+      setWsAuthToken(newToken)
+      console.log('[API] Auth token refreshed from /health')
+      return true
+    }
+  } catch (e) {
+    console.warn('[API] Failed to refresh auth token:', e)
+  }
+  return false
+}
+
 // 统一 API 请求函数 - 只要 httpRequest 存在就使用 IPC 代理
 async function requestAPI<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -50,23 +68,44 @@ async function requestAPI<T>(
   if (window.electronAPI?.httpRequest) {
     const result = await window.electronAPI.httpRequest(method, url, body)
     if (!result.ok) {
+      if (result.status === 401) {
+        console.warn('[API] IPC proxy got 401, requesting token refresh...')
+        try {
+          const refreshResult = await window.electronAPI.httpRequest('GET', getApiBase() + '/health')
+          if (refreshResult.ok && refreshResult.data?.ws_auth_token) {
+            setWsAuthToken(refreshResult.data.ws_auth_token)
+            const retryResult = await window.electronAPI.httpRequest(method, url, body)
+            if (retryResult.ok) return retryResult.data as T
+          }
+        } catch { /* retry failed */ }
+      }
       throw new ApiError(result.status, result.error || `HTTP ${result.status}`)
     }
     return result.data as T
   }
 
   // Web 环境使用 fetch —— 注入 ws_auth_token 作为 Bearer 以通过后端鉴权
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const wsToken = localStorage.getItem('ws_auth_token')
-  if (wsToken) {
-    headers['Authorization'] = `Bearer ${wsToken}`
+  const doFetch = async (token?: string): Promise<Response> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const wsToken = token || localStorage.getItem('ws_auth_token')
+    if (wsToken) {
+      headers['Authorization'] = `Bearer ${wsToken}`
+    }
+    return fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
   }
 
-  const resp = await fetch(url, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let resp = await doFetch()
+  if (resp.status === 401) {
+    console.warn('[API] Got 401, refreshing auth token...')
+    const refreshed = await refreshAuthToken()
+    if (refreshed) {
+      resp = await doFetch()
+    }
+  }
   if (!resp.ok) {
     const text = await resp.text()
     try {
@@ -192,6 +231,7 @@ export interface OptimizationConfig {
   optimize_metric: string
   max_iterations: number
   top_n: number
+  parallel_workers?: number
 }
 
 export interface BacktestRequest {
@@ -234,6 +274,8 @@ export interface BacktestResult {
     hold_days: number
     reason: string
   }[]
+  monthly_returns?: { year: number; month: number; return_pct: number }[]
+  benchmark_curve?: { date: string; value: number }[]
   execution_time_ms: number
 }
 
@@ -1516,4 +1558,285 @@ export interface SignalsHealth {
 
 export async function fetchSignalsHealth(): Promise<SignalsHealth> {
   return fetchJSON(`${BASE}/signals/health`)
+}
+
+// ── 璇玑十二因子 API ──
+
+export interface XuanjiFactorScore {
+  value: number
+  weight: number
+}
+
+export interface XuanjiItem {
+  rank: number
+  code: string
+  name: string
+  price: number
+  premium_ratio: number
+  dual_low: number
+  volume: number
+  change_pct: number
+  ytm: number | null
+  remaining_years: number | null
+  hv: number
+  industry: string
+  rating: string
+  score: number
+  score_dual_low: number
+  score_momentum: number
+  score_hv: number
+  score_quality: number
+  score_valuation: number
+  score_ytm: number
+  score_event: number
+  score_delta: number
+}
+
+export interface XuanjiRankingResponse {
+  total: number
+  returned: number
+  market_state_requested: string
+  market_state_detected: string
+  market_state_actual: string
+  market_weights: Record<string, number>
+  factor_names: Record<string, string>
+  params: Record<string, any>
+  items: XuanjiItem[]
+}
+
+export interface XuanjiGreeks {
+  delta: number
+  gamma: number
+  vega: number
+  theta: number
+  iv: number
+}
+
+export interface XuanjiSingleResponse {
+  code: string
+  name: string
+  market_state: string
+  market_weights: Record<string, number>
+  factor_names: Record<string, string>
+  factor_scores: Record<string, XuanjiFactorScore>
+  composite_score: number
+  vol_factor: number
+  basic_info: Record<string, any>
+  greeks: XuanjiGreeks
+}
+
+export interface XuanjiDeltaCandidate {
+  code: string
+  name: string
+  iv: number
+  hv: number
+  iv_hv_diff: number
+  premium_ratio: number
+  price: number
+  delta: number
+  alpha_potential: string
+}
+
+export interface XuanjiDeltaResponse {
+  total: number
+  items: XuanjiDeltaCandidate[]
+  params: Record<string, any>
+}
+
+export interface XuanjiGreeksSummary {
+  total: number
+  summary: {
+    delta_mean: number
+    gamma_mean: number
+    vega_mean: number
+    theta_mean: number
+    iv_mean: number
+  }
+  distribution: {
+    high_delta: number
+    mid_delta: number
+    low_delta: number
+  }
+}
+
+export interface XuanjiMarketWeight {
+  value: string
+  label_cn: string
+  weights: Record<string, number>
+}
+
+export interface XuanjiMarketWeightsResponse {
+  states: XuanjiMarketWeight[]
+  factor_names: Record<string, string>
+}
+
+export interface XuanjiAlphaSource {
+  id: string
+  name: string
+  range: string
+  category: string
+  status: string
+  implementation: string
+}
+
+export interface XuanjiAlphaResponse {
+  sources: XuanjiAlphaSource[]
+  total_alpha_potential: string
+  return_path: Array<{ version: string; neutral: string; optimistic: string }>
+}
+
+export async function fetchXuanjiRanking(
+  topN: number = 50,
+  marketState: string = 'mild_bull',
+  maxPremium: number = 50,
+  minPrice: number = 90,
+  maxPrice: number = 150,
+  volAdjust: number = 0.85
+): Promise<XuanjiRankingResponse> {
+  const params = new URLSearchParams({
+    top_n: String(topN),
+    market_state: marketState,
+    max_premium: String(maxPremium),
+    min_price: String(minPrice),
+    max_price: String(maxPrice),
+    vol_adjust: String(volAdjust),
+  })
+  return fetchJSON<XuanjiRankingResponse>(`${BASE}/xuanji/ranking?${params.toString()}`)
+}
+
+export async function fetchXuanjiSingle(code: string, marketState: string = 'mild_bull'): Promise<XuanjiSingleResponse> {
+  return fetchJSON<XuanjiSingleResponse>(`${BASE}/xuanji/single/${code}?market_state=${marketState}`)
+}
+
+export async function fetchXuanjiDeltaCandidates(
+  minIvHv: number = 5.0,
+  premiumLow: number = 20.0,
+  premiumHigh: number = 80.0,
+  topN: number = 30
+): Promise<XuanjiDeltaResponse> {
+  const params = new URLSearchParams({
+    min_iv_hv: String(minIvHv),
+    premium_low: String(premiumLow),
+    premium_high: String(premiumHigh),
+    top_n: String(topN),
+  })
+  return fetchJSON<XuanjiDeltaResponse>(`${BASE}/xuanji/delta-candidates?${params.toString()}`)
+}
+
+export async function fetchXuanjiGreeks(): Promise<XuanjiGreeksSummary> {
+  return fetchJSON<XuanjiGreeksSummary>(`${BASE}/xuanji/greeks`)
+}
+
+export async function fetchXuanjiMarketWeights(): Promise<XuanjiMarketWeightsResponse> {
+  return fetchJSON<XuanjiMarketWeightsResponse>(`${BASE}/xuanji/market-weights`)
+}
+
+export async function fetchXuanjiAlphaSources(): Promise<XuanjiAlphaResponse> {
+  return fetchJSON<XuanjiAlphaResponse>(`${BASE}/xuanji/alpha-sources`)
+}
+
+export interface XuanjiStressScenario {
+  name: string
+  description: string
+  expected_return: number
+  max_drawdown: number
+  win_rate: number
+  selected_count: number
+}
+
+export interface XuanjiStressResponse {
+  market_state: string
+  total_bonds: number
+  scenarios: XuanjiStressScenario[]
+  summary: {
+    avg_return: number
+    worst_case: number
+    best_case: number
+    expected_sharpe: number
+  }
+}
+
+export async function fetchXuanjiStressTest(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiStressResponse> {
+  return fetchJSON<XuanjiStressResponse>(`${BASE}/xuanji/stress-test?top_n=${topN}&market_state=${marketState}`)
+}
+
+export interface XuanjiFactorContribution {
+  factor: string
+  name: string
+  mean_score: number
+  weight: number
+  contribution: number
+  contribution_pct: number
+}
+
+export interface XuanjiFactorContributionResponse {
+  market_state: string
+  top_n: number
+  factors: XuanjiFactorContribution[]
+  total_score: number
+  selection: {
+    count: number
+    avg_price: number
+    avg_premium: number
+    avg_dual_low: number
+    avg_hv: number
+  }
+}
+
+export async function fetchXuanjiFactorContribution(topN: number = 20, marketState: string = 'mild_bull'): Promise<XuanjiFactorContributionResponse> {
+  return fetchJSON<XuanjiFactorContributionResponse>(`${BASE}/xuanji/factor-contribution?top_n=${topN}&market_state=${marketState}`)
+}
+
+export interface XuanjiFactorCorrelation {
+  factor1: string
+  factor2: string
+  correlation: number
+  abs_correlation: number
+  redundancy: 'high' | 'medium' | 'low'
+}
+
+export interface XuanjiFactorCorrelationResponse {
+  market_state: string
+  top_n: number
+  total_pairs: number
+  high_redundancy_pairs: number
+  correlations: XuanjiFactorCorrelation[]
+}
+
+export async function fetchXuanjiFactorCorrelation(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiFactorCorrelationResponse> {
+  return fetchJSON<XuanjiFactorCorrelationResponse>(`${BASE}/xuanji/factor-correlation?top_n=${topN}&market_state=${marketState}`)
+}
+
+export interface XuanjiStrategyCompare {
+  id: string
+  name: string
+  factors: number
+  market_adaptive: boolean
+  avg_score: number
+  avg_price: number
+  selected: number
+  overlap_with_xuanji: number
+  overlap_with_mf: number
+  overlap_with_sg: number
+}
+
+export interface XuanjiComparisonResponse {
+  top_n: number
+  total_bonds: number
+  strategies: XuanjiStrategyCompare[]
+}
+
+export async function fetchXuanjiComparison(topN: number = 50): Promise<XuanjiComparisonResponse> {
+  return fetchJSON<XuanjiComparisonResponse>(`${BASE}/xuanji/comparison?top_n=${topN}`)
+}
+
+export interface XuanjiSummary {
+  strategy: any
+  target_returns: any
+  key_features: any
+  endpoints: any
+}
+
+export async function fetchXuanjiSummary(): Promise<XuanjiSummary> {
+  return fetchJSON<XuanjiSummary>(`${BASE}/xuanji/summary`)
 }

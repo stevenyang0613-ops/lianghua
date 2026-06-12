@@ -1,13 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import { echartsSafePlugin } from './vite-plugin-echarts-safe'
+// import { echartsSafePlugin } from './vite-plugin-echarts-safe'
 
 export default defineConfig({
   base: './',
   plugins: [
     react(),
-    echartsSafePlugin(),
+    // echartsSafePlugin(),
     {
       name: 'remove-crossorigin-and-module',
       transformIndexHtml(html: string) {

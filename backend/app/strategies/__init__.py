@@ -4,6 +4,7 @@ from app.strategies.low_premium import LowPremiumStrategy
 from app.strategies.momentum import MomentumStrategy
 from app.strategies.multi_factor import MultiFactorStrategy
 from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+from app.strategies.xuanji_twelve_factor import XuanjiTwelveFactorStrategy
 
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
@@ -12,6 +13,7 @@ STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "momentum": MomentumStrategy,
     "multi_factor": MultiFactorStrategy,
     "songgang_seven": SonggangSevenDimensionStrategy,
+    "xuanji_twelve": XuanjiTwelveFactorStrategy,
 }
 
 
