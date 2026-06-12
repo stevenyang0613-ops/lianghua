@@ -733,7 +733,8 @@ def get_alpha_sources(request: Request):
             r = s["range"]
             if "~" in r and r[0] in "+-":
                 try:
-                    lo, hi = r[1:].split("~")
+                    body = r[1:].rstrip('%')
+                    lo, hi = body.split("~")
                     nums.append((float(lo), float(hi)))
                 except (ValueError, IndexError):
                     pass
