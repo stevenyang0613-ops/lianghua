@@ -9,7 +9,6 @@ import numpy as np
 import time
 import hashlib
 import logging
-import json
 
 router = APIRouter(prefix="/xuanji", tags=["璇玑十二因子"])
 logger = logging.getLogger(__name__)
@@ -48,31 +47,74 @@ def _cleanup_cache():
         del _cache[k]
 
 
+_ENRICH_COLS = [
+    'roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
+    'buyback_amount', 'mgmt_buy_price', 'current_ratio',
+    'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
+    'outstanding_scale',
+]
+
+
+def _build_row_from_bond(b) -> dict:
+    row = {
+        "code": b.code,
+        "name": b.name,
+        "stock_code": getattr(b, 'stock_code', ''),
+        "price": b.price,
+        "premium_ratio": b.premium_ratio if b.premium_ratio is not None else 0.0,
+        "volume": b.volume or 0,
+        "dual_low": b.dual_low,
+        "change_pct": b.change_pct if b.change_pct is not None else 0.0,
+        "ytm": b.ytm,
+        "remaining_years": b.remaining_years,
+        "conversion_value": b.conversion_value,
+        "stock_price": b.stock_price,
+        "industry": getattr(b, 'industry', None) or "其他",
+        "rating": getattr(b, 'rating', None) or "AA",
+    }
+    for col in _ENRICH_COLS:
+        if hasattr(b, col):
+            row[col] = getattr(b, col, None)
+    return row
+
+
 def _compute_hv_estimate(df: pd.DataFrame) -> pd.DataFrame:
-    """计算历史波动率(HV) - 优先使用90日真实波动率，后备使用单日涨跌幅年化近似"""
+    """计算历史波动率(HV) - 优先使用90日真实波动率, 后备使用单日涨跌幅年化近似
+    标准化: 涨跌幅*√252*0.6 (|Z|*√T/√n) 与 IV 公式保持一致
+    """
     df = df.copy()
     if df.empty:
+        df['hv'] = pd.Series(dtype=float)
         return df
 
-    # 优先使用 data_enrich 缓存的90日真实波动率
+    # 保证 'hv' 列存在
+    if 'hv' not in df.columns:
+        df['hv'] = np.nan
+
+    # 优先使用 data_enrich 缓存的90日真实波动率 (vectorized)
     if 'stock_code' in df.columns:
         try:
             from app.engine.data_enrich import get_volatility
-            for idx, row in df.iterrows():
-                stock_code = str(row.get('stock_code', '')).strip()
-                if stock_code:
-                    real_vol = get_volatility(stock_code)
-                    if real_vol is not None and real_vol > 0:
-                        df.at[idx, 'hv'] = real_vol
+            stock_codes = df['stock_code'].fillna('').astype(str).str.strip()
+            vol_map = {}
+            for code in stock_codes.unique():
+                if code:
+                    vol = get_volatility(code)
+                    if vol is not None and vol > 0:
+                        vol_map[code] = vol
+            if vol_map:
+                mapped = stock_codes.map(vol_map)
+                fill_mask = df['hv'].isna() | (df['hv'] <= 0)
+                df.loc[fill_mask & mapped.notna(), 'hv'] = mapped[fill_mask & mapped.notna()]
         except Exception:
             pass
 
-    # 对剩余没有HV的行，使用单日涨跌幅年化近似
-    hv_missing = df['hv'].isna() | (df['hv'] <= 0) if 'hv' in df.columns else pd.Series(True, index=df.index)
+    # 对剩余没有HV的行，使用单日涨跌幅年化近似 (与 IV 同公式)
+    hv_missing = df['hv'].isna() | (df['hv'] <= 0)
     if hv_missing.any() and 'change_pct' in df.columns:
-        df.loc[hv_missing, 'hv'] = (df.loc[hv_missing, 'change_pct'].abs() * np.sqrt(252) * 0.8).clip(lower=3, upper=80)
-    if 'hv' not in df.columns:
-        df['hv'] = 20.0
+        chg = pd.to_numeric(df.loc[hv_missing, 'change_pct'], errors='coerce').fillna(0)
+        df.loc[hv_missing, 'hv'] = (chg.abs() * np.sqrt(252) * 0.6).clip(lower=3, upper=80)
+
     df['hv'] = df['hv'].fillna(20.0).clip(lower=3, upper=80)
     return df
 
@@ -131,41 +173,56 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
 
     score_dual_low = _normalize_rank(df['dual_low'], ascending=True)
-    hv_median = df['hv'].median() if 'hv' in df.columns and df['hv'].notna().any() else 0
-    score_hv = _normalize_rank(df['hv'].fillna(hv_median if hv_median > 0 else 0), ascending=True)
+    hv_median = df['hv'].median() if 'hv' in df.columns and df['hv'].notna().any() else 20.0
+    if 'hv' in df.columns:
+        df['hv'] = df['hv'].fillna(hv_median)
+        df.loc[df['hv'] <= 0, 'hv'] = hv_median
+    score_hv = _normalize_rank(df['hv'], ascending=True)
 
     if 'change_pct' in df.columns:
         score_momentum = _normalize_rank(df['change_pct'].fillna(0), ascending=False)
     else:
         score_momentum = pd.Series(0.5, index=df.index)
 
-    if 'ytm' in df.columns:
-        score_ytm = _normalize_rank(df['ytm'].fillna(0), ascending=False)
+    if 'ytm' in df.columns and df['ytm'].notna().any():
+        ytm_median = df['ytm'].median()
+        if pd.isna(ytm_median):
+            ytm_median = 0
+        score_ytm = _normalize_rank(df['ytm'].fillna(ytm_median), ascending=False)
     else:
-        score_ytm = pd.Series(0.5, index=df.index)
+        score_ytm = pd.Series(0.25, index=df.index)
 
     if 'remaining_years' in df.columns and df['remaining_years'].notna().any():
-        score_remaining_years = _normalize_rank(df['remaining_years'].fillna(3), ascending=False)
+        ry_median = df['remaining_years'].median()
+        if pd.isna(ry_median):
+            ry_median = 3
+        score_remaining_years = _normalize_rank(df['remaining_years'].fillna(ry_median), ascending=False)
     else:
-        score_remaining_years = pd.Series(0.5, index=df.index)
+        score_remaining_years = pd.Series(0.25, index=df.index)
 
     quality_parts = []
     has_quality_data = any(col in df.columns and df[col].notna().any() for col in ['roe', 'gpm', 'cagr', 'debt_ratio'])
     if has_quality_data:
         for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True)]:
             if col in df.columns and df[col].notna().any():
-                col_data = pd.to_numeric(df[col], errors='coerce').fillna(df[col].median() if df[col].notna().any() else 0)
+                col_median = df[col].median()
+                if pd.isna(col_median):
+                    col_median = 0
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(col_median)
                 quality_parts.append(_normalize_rank(col_data, ascending=asc))
-    score_quality = sum(quality_parts) / len(quality_parts) if quality_parts else pd.Series(0.5, index=df.index)
+    score_quality = sum(quality_parts) / len(quality_parts) if quality_parts else pd.Series(0.25, index=df.index)
 
     valuation_parts = []
     has_val_data = any(col in df.columns and df[col].notna().any() for col in ['pe', 'pb'])
     if has_val_data:
         for col, asc in [('pe', True), ('pb', True)]:
             if col in df.columns and df[col].notna().any():
-                col_data = pd.to_numeric(df[col], errors='coerce').fillna(df[col].median() if df[col].notna().any() else 50)
+                col_median = df[col].median()
+                if pd.isna(col_median):
+                    col_median = 50
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(col_median)
                 valuation_parts.append(_normalize_rank(col_data, ascending=asc))
-    score_valuation = sum(valuation_parts) / len(valuation_parts) if valuation_parts else pd.Series(0.5, index=df.index)
+    score_valuation = sum(valuation_parts) / len(valuation_parts) if valuation_parts else pd.Series(0.25, index=df.index)
 
     event_parts = []
     has_event_data = any(col in df.columns and df[col].notna().any() for col in ['buyback_amount', 'mgmt_buy_price'])
@@ -174,9 +231,9 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
             if col in df.columns and df[col].notna().any():
                 col_data = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 event_parts.append(_normalize_rank(col_data, ascending=False))
-    score_event = sum(event_parts) / len(event_parts) if event_parts else pd.Series(0.5, index=df.index)
+    score_event = sum(event_parts) / len(event_parts) if event_parts else pd.Series(0.25, index=df.index)
 
-    score_delta = pd.Series(0.5, index=df.index)
+    score_delta = pd.Series(0.25, index=df.index)
     score_delta_available = 'iv' in df.columns and df['iv'].notna().any() and 'hv' in df.columns
     if score_delta_available:
         iv_hv_diff = (pd.to_numeric(df['iv'], errors='coerce').fillna(0) - df['hv']).clip(lower=0)
@@ -266,56 +323,31 @@ async def get_xuanji_ranking(
         if not bonds:
             return {"total": 0, "items": [], "market_state_detected": "neutral"}
 
-        rows = []
-        for b in bonds:
-            row = {
-                "code": b.code,
-                "name": b.name,
-                "stock_code": getattr(b, 'stock_code', ''),
-                "price": b.price,
-                "premium_ratio": b.premium_ratio,
-                "volume": b.volume or 0,
-                "dual_low": b.dual_low,
-                "change_pct": b.change_pct or 0,
-                "ytm": b.ytm,
-                "remaining_years": b.remaining_years,
-                "conversion_value": b.conversion_value,
-                "stock_price": b.stock_price,
-                "industry": getattr(b, 'industry', None) or "其他",
-                "rating": getattr(b, 'rating', None) or "AA",
-            }
-            for opt_col in ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
-                            'buyback_amount', 'mgmt_buy_price', 'current_ratio',
-                            'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
-                            'outstanding_scale']:
-                if hasattr(b, opt_col):
-                    row[opt_col] = getattr(b, opt_col, None)
-            rows.append(row)
+        rows = [_build_row_from_bond(b) for b in bonds]
 
         if not rows:
-            return {"total": 0, "items": [], "market_state_detected": "neutral"}
+            return {"total": 0, "total_unfiltered": 0, "items": [], "market_state_detected": "neutral"}
 
-        df = pd.DataFrame(rows)
+        df_full = pd.DataFrame(rows)
+        total_unfiltered = len(df_full)
 
-        df = _compute_hv_estimate(df)
+        df_full = _compute_hv_estimate(df_full)
+        detected_state = _detect_market_state(df_full)
 
-        # 三层漏斗筛选
-        df = df[
-            (df['premium_ratio'] <= max_premium) &
-            (df['price'] >= min_price) &
-            (df['price'] <= max_price) &
-            (df['price'] > 0)
+        df = df_full[
+            (df_full['premium_ratio'] >= 0) &
+            (df_full['premium_ratio'] <= max_premium) &
+            (df_full['price'] >= min_price) &
+            (df_full['price'] <= max_price) &
+            (df_full['price'] > 0)
         ]
-
-        if df.empty:
-            return {"total": 0, "items": [], "market_state_detected": "neutral"}
-
-        # 自动检测市场状态
-        detected_state = _detect_market_state(df)
         actual_state = detected_state if market_state == "auto" else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = "neutral"
 
         # 计算综合评分
         df = _compute_xuanji_scores(df, actual_state, vol_adjust)
+        active_weights = df.attrs.get('active_weights', MARKET_WEIGHTS[actual_state])
 
         # 按分数降序
         df = df.sort_values('score', ascending=False).reset_index(drop=True)
@@ -323,6 +355,11 @@ async def get_xuanji_ranking(
 
         items = []
         for idx, row in top_df.iterrows():
+            def _r2(key, _r=row):
+                v = _r.get(key)
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return None
+                return round(float(v), 2)
             items.append({
                 "rank": idx + 1,
                 "code": row['code'],
@@ -338,12 +375,20 @@ async def get_xuanji_ranking(
                 "industry": row.get('industry', '其他'),
                 "rating": row.get('rating', 'AA'),
                 "stock_code": row.get('stock_code', ''),
-                "pe": row.get('pe'),
-                "pb": row.get('pb'),
-                "roe": row.get('roe'),
-                "turnover_rate": row.get('turnover_rate'),
-                "net_capital_flow": row.get('net_capital_flow'),
-                "net_capital_flow_pct": row.get('net_capital_flow_pct'),
+                "pe": _r2('pe'),
+                "pb": _r2('pb'),
+                "roe": _r2('roe'),
+                "gpm": _r2('gpm'),
+                "cagr": _r2('cagr'),
+                "debt_ratio": _r2('debt_ratio'),
+                "current_ratio": _r2('current_ratio'),
+                "iv": _r2('iv'),
+                "buyback_amount": _r2('buyback_amount'),
+                "mgmt_buy_price": _r2('mgmt_buy_price'),
+                "outstanding_scale": _r2('outstanding_scale'),
+                "turnover_rate": _r2('turnover_rate'),
+                "net_capital_flow": _r2('net_capital_flow'),
+                "net_capital_flow_pct": _r2('net_capital_flow_pct'),
                 "score": round(float(row['score']), 4),
                 "score_dual_low": round(float(row['score_dual_low']), 4),
                 "score_momentum": round(float(row['score_momentum']), 4),
@@ -358,11 +403,12 @@ async def get_xuanji_ranking(
 
         result = {
             "total": int(len(df)),
+            "total_unfiltered": int(total_unfiltered),
             "returned": int(len(items)),
             "market_state_requested": market_state,
             "market_state_detected": detected_state,
             "market_state_actual": actual_state,
-            "market_weights": MARKET_WEIGHTS[actual_state],
+            "market_weights": active_weights,
             "factor_names": FACTOR_NAMES,
             "params": {
                 "top_n": top_n,
@@ -391,6 +437,7 @@ async def get_xuanji_single(
     max_premium: float = Query(80.0, ge=10, le=100),
     min_price: float = Query(80.0, ge=70, le=120),
     max_price: float = Query(180.0, ge=120, le=200),
+    vol_adjust: float = Query(0.85, ge=0.5, le=1.0, description="波动率调权系数"),
 ):
     """单只转债的璇玑十二因子详细评分 (基于全市场相对排名)"""
     try:
@@ -401,37 +448,25 @@ async def get_xuanji_single(
             raise HTTPException(status_code=404, detail=f"转债 {code} 不存在")
 
         # Build full universe DataFrame for meaningful relative ranking
-        rows = []
-        for b in bonds:
-            row = {
-                "code": b.code, "name": b.name, "price": b.price,
-                "premium_ratio": b.premium_ratio, "volume": b.volume or 0,
-                "dual_low": b.dual_low, "change_pct": b.change_pct or 0,
-                "ytm": b.ytm, "remaining_years": b.remaining_years,
-                "conversion_value": b.conversion_value, "stock_price": b.stock_price,
-            }
-            for opt_col in ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
-                            'buyback_amount', 'mgmt_buy_price', 'current_ratio',
-                            'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
-                            'outstanding_scale']:
-                if hasattr(b, opt_col):
-                    row[opt_col] = getattr(b, opt_col, None)
-            rows.append(row)
+        rows = [_build_row_from_bond(b) for b in bonds]
 
         df = pd.DataFrame(rows)
         df = _compute_hv_estimate(df)
 
+        # Detect market state BEFORE filtering for meaningful distribution
+        actual_state = market_state if market_state != 'auto' else _detect_market_state(df)
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = 'neutral'
+
         # Filter (consistent with ranking endpoint)
-        df = df[(df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price) & (df['price'] > 0)]
+        df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price) & (df['price'] > 0)]
         if df.empty:
             raise HTTPException(status_code=404, detail="筛选后无有效数据")
 
-        actual_state = market_state if market_state != 'auto' else _detect_market_state(df)
-        if actual_state == 'auto':
-            actual_state = 'neutral'
-
         weights = MARKET_WEIGHTS.get(actual_state, MARKET_WEIGHTS['neutral'])
-        df = _compute_xuanji_scores(df, actual_state)
+        df = _compute_xuanji_scores(df, actual_state, vol_adjust)
+
+        active_weights = df.attrs.get('active_weights', weights)
 
         # Extract target bond from scored universe
         target_rows = df[df['code'] == code]
@@ -443,15 +478,15 @@ async def get_xuanji_single(
         full_rank = int((df['score'] > row['score']).sum()) + 1
 
         factor_scores = {
-            "dual_low": {"value": round(float(row['score_dual_low']), 4), "weight": weights['dual_low']},
-            "momentum": {"value": round(float(row['score_momentum']), 4), "weight": weights['momentum']},
-            "hv":       {"value": round(float(row['score_hv']), 4), "weight": weights['hv']},
-            "quality":  {"value": round(float(row['score_quality']), 4), "weight": weights['quality']},
-            "valuation": {"value": round(float(row['score_valuation']), 4), "weight": weights['valuation']},
-            "ytm":      {"value": round(float(row['score_ytm']), 4), "weight": weights['ytm']},
-            "remaining_years": {"value": round(float(row['score_remaining_years']), 4), "weight": weights['remaining_years']},
-            "event":    {"value": round(float(row['score_event']), 4), "weight": weights['event']},
-            "delta":    {"value": round(float(row['score_delta']), 4), "weight": weights['delta']},
+            "dual_low": {"value": round(float(row['score_dual_low']), 4), "weight": active_weights.get('dual_low', weights['dual_low'])},
+            "momentum": {"value": round(float(row['score_momentum']), 4), "weight": active_weights.get('momentum', weights['momentum'])},
+            "hv":       {"value": round(float(row['score_hv']), 4), "weight": active_weights.get('hv', weights['hv'])},
+            "quality":  {"value": round(float(row['score_quality']), 4), "weight": active_weights.get('quality', weights['quality'])},
+            "valuation": {"value": round(float(row['score_valuation']), 4), "weight": active_weights.get('valuation', weights['valuation'])},
+            "ytm":      {"value": round(float(row['score_ytm']), 4), "weight": active_weights.get('ytm', weights['ytm'])},
+            "remaining_years": {"value": round(float(row['score_remaining_years']), 4), "weight": active_weights.get('remaining_years', weights['remaining_years'])},
+            "event":    {"value": round(float(row['score_event']), 4), "weight": active_weights.get('event', weights['event'])},
+            "delta":    {"value": round(float(row['score_delta']), 4), "weight": active_weights.get('delta', weights['delta'])},
         }
 
         greeks = _compute_greeks(target)
@@ -460,7 +495,7 @@ async def get_xuanji_single(
             "code": target.code,
             "name": target.name,
             "market_state": actual_state,
-            "market_weights": weights,
+            "market_weights": active_weights,
             "factor_names": FACTOR_NAMES,
             "factor_scores": factor_scores,
             "composite_score": round(float(row['score']), 4),
@@ -477,6 +512,23 @@ async def get_xuanji_single(
                 "volume": float(target.volume or 0),
                 "stock_price": round(float(target.stock_price), 2) if target.stock_price else None,
                 "conversion_value": round(float(target.conversion_value), 2) if target.conversion_value else None,
+                "industry": getattr(target, 'industry', None) or "其他",
+                "rating": getattr(target, 'rating', None) or "AA",
+                "stock_code": getattr(target, 'stock_code', ''),
+                "pe": getattr(target, 'pe', None),
+                "pb": getattr(target, 'pb', None),
+                "roe": getattr(target, 'roe', None),
+                "gpm": getattr(target, 'gpm', None),
+                "cagr": getattr(target, 'cagr', None),
+                "debt_ratio": getattr(target, 'debt_ratio', None),
+                "current_ratio": getattr(target, 'current_ratio', None),
+                "iv": getattr(target, 'iv', None),
+                "turnover_rate": getattr(target, 'turnover_rate', None),
+                "net_capital_flow": getattr(target, 'net_capital_flow', None),
+                "net_capital_flow_pct": getattr(target, 'net_capital_flow_pct', None),
+                "buyback_amount": getattr(target, 'buyback_amount', None),
+                "mgmt_buy_price": getattr(target, 'mgmt_buy_price', None),
+                "outstanding_scale": getattr(target, 'outstanding_scale', None),
             },
             "greeks": greeks,
         }
@@ -488,11 +540,11 @@ async def get_xuanji_single(
 
 
 def _compute_greeks(bond) -> dict:
-    """计算Greeks近似值 (基于转换价值/价格 推导delta)"""
+    """计算Greeks近似值 (基于转换价值/价格 推导delta, IV 优先使用 data_enrich 实际值)"""
     try:
         price = float(bond.price) if bond.price else 0
         if price <= 0:
-            return {"delta": 0.5, "gamma": 0.01, "vega": 0.5, "theta": -0.001, "iv": 30.0}
+            return {"delta": 0.5, "gamma": 0.01, "vega": 0.5, "theta": -0.001, "iv": 30.0, "iv_source": "estimated"}
 
         conversion_value = float(bond.conversion_value) if bond.conversion_value else price * 0.9
         stock_price = float(bond.stock_price) if bond.stock_price else price * 0.8
@@ -505,8 +557,23 @@ def _compute_greeks(bond) -> dict:
         vega = delta * np.sqrt(0.25 / 365) * 100
         # Theta: 时间损耗 (负值代表衰减，delta<1时为正贡献)
         theta = -(1 - delta) * 0.01 / 365 if delta < 1 else -0.001
-        # IV: 隐含波动率(近似为delta*50% + 10%基础波动率)
-        iv = round(delta * 40 + 10, 2)
+
+        # IV: 优先使用 data_enrich 计算的真实波动率，否则用 delta 近似
+        actual_iv = getattr(bond, 'iv', None)
+        actual_iv_source = getattr(bond, 'iv_source', None)
+        try:
+            iv_val = float(actual_iv) if isinstance(actual_iv, (int, float)) else None
+            if iv_val is not None and iv_val > 0:
+                iv = round(iv_val, 2)
+                iv_source = actual_iv_source if actual_iv_source in ("actual", "hv_proxy") else "hv_proxy"
+            else:
+                chg = abs(float(getattr(bond, 'change_pct', 0) or 0))
+                hv_est = max(3.0, min(80.0, chg * np.sqrt(252) * 0.6)) if chg > 0 else 20.0
+                iv = round(hv_est * 1.3 + 5.0, 2)
+                iv_source = "estimated"
+        except (TypeError, ValueError):
+            iv = round(delta * 40 + 10, 2)
+            iv_source = "estimated"
 
         return {
             "delta": round(delta, 4),
@@ -514,9 +581,10 @@ def _compute_greeks(bond) -> dict:
             "vega": round(vega, 4),
             "theta": round(theta, 6),
             "iv": iv,
+            "iv_source": iv_source,
         }
     except Exception:
-        return {"delta": 0.5, "gamma": 0.01, "vega": 0.5, "theta": -0.001, "iv": 30.0}
+        return {"delta": 0.5, "gamma": 0.01, "vega": 0.5, "theta": -0.001, "iv": 30.0, "iv_source": "fallback"}
 
 
 @router.get("/delta-candidates")
@@ -534,23 +602,50 @@ async def get_delta_candidates(
         if not bonds:
             return {"total": 0, "items": []}
 
+        # 优先从 data_enrich 加载真实波动率缓存
+        try:
+            from app.engine.data_enrich import get_volatility as _get_vol
+            _get_vol  # ensure module imported
+        except Exception:
+            _get_vol = None
+
         candidates = []
         for b in bonds:
             try:
-                hv_est = abs(float(b.change_pct or 0)) * np.sqrt(252) * 0.6
+                stock_code = getattr(b, 'stock_code', '') or ''
+                hv_est = None
+                hv_source = "fallback"
+                if _get_vol is not None and stock_code:
+                    try:
+                        cached = _get_vol(stock_code)
+                        if cached is not None and cached > 0:
+                            hv_est = float(cached)
+                            hv_source = "actual"
+                    except Exception:
+                        pass
+                if hv_est is None:
+                    hv_est = abs(float(b.change_pct or 0)) * np.sqrt(252) * 0.6
+                    hv_source = "estimated"
                 hv_est = max(3.0, min(80.0, hv_est))
+
                 actual_iv = float(getattr(b, 'iv', 0) or 0)
+                actual_iv_source = getattr(b, 'iv_source', None)
                 if actual_iv > 0:
                     iv_est = actual_iv
+                    iv_source = actual_iv_source if actual_iv_source in ("actual", "hv_proxy") else "hv_proxy"
                 else:
                     iv_est = hv_est * 1.3 + 5.0
+                    iv_source = "estimated"
+
                 iv_hv_diff = iv_est - hv_est
                 premium = float(b.premium_ratio or 0)
                 if (iv_hv_diff >= min_iv_hv and premium_low <= premium <= premium_high
-                        and float(b.price) > 0):
+                        and premium >= 0 and float(b.price) > 0):
                     candidates.append({
                         "code": b.code,
                         "name": b.name,
+                        "stock_code": stock_code,
+                        "industry": getattr(b, 'industry', None) or "其他",
                         "iv": round(iv_est, 2),
                         "hv": round(hv_est, 2),
                         "iv_hv_diff": round(iv_hv_diff, 2),
@@ -560,7 +655,8 @@ async def get_delta_candidates(
                             float(b.conversion_value or b.price * 0.9) / b.price
                             if b.price > 0 else 0.5)), 4),
                         "alpha_potential": None,
-                        "iv_source": "actual" if actual_iv > 0 else "estimated",
+                        "iv_source": iv_source,
+                        "hv_source": hv_source,
                     })
             except Exception:
                 continue
@@ -592,6 +688,10 @@ async def get_greeks_summary(request: Request):
         greeks_list = [_compute_greeks(b) for b in bonds]
 
         delta_values = [g['delta'] for g in greeks_list]
+
+        def _safe_mean(vals, default=0.0):
+            return float(np.mean(vals)) if vals else default
+
         high_delta = sum(1 for d in delta_values if d > 0.7)
         mid_delta = sum(1 for d in delta_values if 0.3 <= d <= 0.7)
         low_delta = sum(1 for d in delta_values if d < 0.3)
@@ -599,11 +699,11 @@ async def get_greeks_summary(request: Request):
         return {
             "total": len(bonds),
             "summary": {
-                "delta_mean": round(float(np.mean(delta_values)), 4),
-                "gamma_mean": round(float(np.mean([g['gamma'] for g in greeks_list])), 4),
-                "vega_mean": round(float(np.mean([g['vega'] for g in greeks_list])), 4),
-                "theta_mean": round(float(np.mean([g['theta'] for g in greeks_list])), 6),
-                "iv_mean": round(float(np.mean([g['iv'] for g in greeks_list])), 2),
+                "delta_mean": round(_safe_mean(delta_values), 4),
+                "gamma_mean": round(_safe_mean([g['gamma'] for g in greeks_list]), 4),
+                "vega_mean": round(_safe_mean([g['vega'] for g in greeks_list]), 4),
+                "theta_mean": round(_safe_mean([g['theta'] for g in greeks_list]), 6),
+                "iv_mean": round(_safe_mean([g['iv'] for g in greeks_list]), 2),
             },
             "distribution": {
                 "high_delta": high_delta,
@@ -634,7 +734,7 @@ def get_market_weights():
 
 
 @router.get("/alpha-sources")
-def get_alpha_sources(request: Request):
+async def get_alpha_sources(request: Request):
     """12个Alpha源信息 (range 字段由相应模块从当前数据动态估算)"""
     ranges: dict[str, str] = {}
     try:
@@ -668,16 +768,7 @@ def get_alpha_sources(request: Request):
             try:
                 engine = getattr(request.app.state, "engine", None)
                 if engine is not None:
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    try:
-                        quotes = loop.run_until_complete(engine.get_all_quotes())
-                    except Exception:
-                        quotes = []
+                    quotes = await engine.get_all_quotes()
                     if quotes and len(quotes) > 0:
                         total_bonds = len(quotes)
                         premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
@@ -756,7 +847,8 @@ def get_alpha_sources(request: Request):
     return {
         "sources": sources,
         "total_alpha_potential": total_alpha_potential,
-        "return_path": [],
+        "return_path": return_path,
+        "return_path_migrated_to": "/api/v1/xuanji/summary (target_returns)",
     }
 
 
@@ -777,6 +869,9 @@ async def stress_test(
     request: Request,
     top_n: int = Query(50, ge=10, le=100),
     market_state: str = Query("mild_bull"),
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
 ):
     """压力测试: 模拟4种极端场景下的策略表现"""
     try:
@@ -785,39 +880,34 @@ async def stress_test(
         if not bonds:
             return {"scenarios": []}
 
-        df = pd.DataFrame([{
-            "code": b.code,
-            "name": b.name,
-            "price": b.price,
-            "premium_ratio": b.premium_ratio,
-            "volume": b.volume or 0,
-            "dual_low": b.dual_low,
-            "change_pct": b.change_pct or 0,
-            "ytm": b.ytm or 0,
-            "remaining_years": b.remaining_years or 3,
-        } for b in bonds])
+        df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
+        total_unfiltered = len(df)
 
         df = _compute_hv_estimate(df)
 
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180)]
+        actual_state = _detect_market_state(df) if market_state == 'auto' else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = 'neutral'
+        df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price)]
         if df.empty:
-            return {"scenarios": []}
+            return {"scenarios": [], "total_unfiltered": total_unfiltered}
 
-        weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
-        df = _compute_xuanji_scores(df, market_state)
+        weights = MARKET_WEIGHTS.get(actual_state, MARKET_WEIGHTS['neutral'])
+        df = _compute_xuanji_scores(df, actual_state)
 
-        # 场景1: 牛市(+15%)
+        # 场景1: 牛市(+15%) - 高分券反弹能力强，回撤小
         bull_top = df.nlargest(top_n, 'score').copy()
         bull_mean_score = _safe_float(bull_top['score'].mean(), 0.5)
         bull_mean_hv = _safe_float(bull_top['hv'].mean(), 20)
-        bull_dd = -abs((1 - bull_mean_score) * bull_mean_hv / 100 * 0.5)
+        # 牛市回撤 = HV * 0.5 但需要 score 修正 (高分=低回撤)
+        bull_dd = -abs(bull_mean_hv / 100 * 0.5 * (1.5 - bull_mean_score))
         bull_win = int(min(85, max(40, bull_mean_score * 60 + 25)))
         bull_return = bull_mean_score * 15 - bull_mean_hv * 0.05
 
         bear_top = df.nsmallest(top_n // 2, 'score').copy()
         bear_mean_score = _safe_float(bear_top['score'].mean(), 0.3)
         bear_mean_hv = _safe_float(bear_top['hv'].mean(), 20)
-        bear_dd = -abs((1 - bear_mean_score) * bull_mean_hv / 100)
+        bear_dd = -abs((1 - bear_mean_score) * bear_mean_hv / 100)
         bear_win = int(min(60, max(20, bear_mean_score * 40 + 15)))
         bear_return = -(1 - bear_mean_score) * 12 - bear_mean_hv * 0.03
 
@@ -913,8 +1003,10 @@ async def stress_test(
         ]
 
         return {
-            "market_state": market_state,
+            "market_state": actual_state,
+            "market_state_requested": market_state,
             "total_bonds": len(df),
+            "total_unfiltered": total_unfiltered,
             "scenarios": scenarios,
             "summary": {
                 "avg_return": round(np.mean([s['expected_return'] for s in scenarios]), 2),
@@ -934,6 +1026,9 @@ async def factor_contribution(
     request: Request,
     top_n: int = Query(20, ge=5, le=50),
     market_state: str = Query("mild_bull"),
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
 ):
     """因子贡献度分析: 计算每个因子对最终评分的贡献比例"""
     try:
@@ -942,26 +1037,20 @@ async def factor_contribution(
         if not bonds:
             return {"factors": []}
 
-        df = pd.DataFrame([{
-            "code": b.code,
-            "name": b.name,
-            "price": b.price,
-            "premium_ratio": b.premium_ratio,
-            "volume": b.volume or 0,
-            "dual_low": b.dual_low,
-            "change_pct": b.change_pct or 0,
-            "ytm": b.ytm or 0,
-            "remaining_years": b.remaining_years or 3,
-        } for b in bonds])
+        df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
+        total_unfiltered = len(df)
 
         df = _compute_hv_estimate(df)
 
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180)]
+        actual_state = _detect_market_state(df) if market_state == 'auto' else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = 'neutral'
+        df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price)]
         if df.empty:
-            return {"factors": []}
+            return {"factors": [], "total_unfiltered": total_unfiltered}
 
-        weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
-        df = _compute_xuanji_scores(df, market_state)
+        weights = MARKET_WEIGHTS.get(actual_state, MARKET_WEIGHTS['neutral'])
+        df = _compute_xuanji_scores(df, actual_state)
 
         active_weights = df.attrs.get('active_weights', weights)
 
@@ -994,10 +1083,12 @@ async def factor_contribution(
         factor_contributions.sort(key=lambda x: x["contribution"], reverse=True)
 
         return {
-            "market_state": market_state,
+            "market_state": actual_state,
+            "market_state_requested": market_state,
             "top_n": top_n,
             "factors": factor_contributions,
             "total_score": round(total_contribution, 4),
+            "total_unfiltered": total_unfiltered,
             "selection": {
                 "count": len(top_df),
                 "avg_price": round(float(top_df['price'].mean()), 2),
@@ -1016,6 +1107,9 @@ async def factor_correlation(
     request: Request,
     market_state: str = Query("mild_bull"),
     top_n: int = Query(50, ge=10, le=100),
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
 ):
     """因子相关性分析: 评估各因子之间的相关性，识别冗余因子"""
     try:
@@ -1024,26 +1118,31 @@ async def factor_correlation(
         if not bonds:
             return {"correlations": []}
 
-        df = pd.DataFrame([{
-            "code": b.code,
-            "price": b.price,
-            "premium_ratio": b.premium_ratio,
-            "dual_low": b.dual_low,
-            "change_pct": b.change_pct or 0,
-            "ytm": b.ytm or 0,
-            "remaining_years": b.remaining_years or 3,
-        } for b in bonds])
+        df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
+        total_unfiltered = len(df)
 
         df = _compute_hv_estimate(df)
 
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180)]
+        actual_state = _detect_market_state(df) if market_state == 'auto' else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = 'neutral'
+        df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price)]
         if df.empty:
-            return {"correlations": []}
+            return {"correlations": [], "total_unfiltered": total_unfiltered}
 
-        df = _compute_xuanji_scores(df, market_state)
+        df = _compute_xuanji_scores(df, actual_state)
         top_df = df.nlargest(top_n, 'score')
 
         factor_cols = [f"score_{k}" for k in FACTOR_NAMES.keys() if f"score_{k}" in top_df.columns]
+        if len(top_df) < 2 or not factor_cols:
+            return {
+                "market_state": actual_state,
+                "market_state_requested": market_state,
+                "top_n": top_n,
+                "total_pairs": 0,
+                "high_redundancy_pairs": 0,
+                "correlations": [],
+            }
         corr_matrix = top_df[factor_cols].corr()
 
         # 转为可序列化格式
@@ -1051,7 +1150,10 @@ async def factor_correlation(
         for i, col1 in enumerate(factor_cols):
             for j, col2 in enumerate(factor_cols):
                 if i < j:  # 避免重复
-                    val = float(corr_matrix.loc[col1, col2])
+                    val = corr_matrix.loc[col1, col2]
+                    if pd.isna(val):
+                        continue
+                    val = float(val)
                     if abs(val) > 0.3:  # 只显示相关性较强的
                         correlations.append({
                             "factor1": col1.replace("score_", ""),
@@ -1064,10 +1166,12 @@ async def factor_correlation(
         correlations.sort(key=lambda x: x["abs_correlation"], reverse=True)
 
         return {
-            "market_state": market_state,
+            "market_state": actual_state,
+            "market_state_requested": market_state,
             "top_n": top_n,
             "total_pairs": len(correlations),
             "high_redundancy_pairs": len([c for c in correlations if c["redundancy"] == "high"]),
+            "total_unfiltered": total_unfiltered,
             "correlations": correlations[:20],  # 返回Top20
         }
     except Exception as e:
@@ -1080,6 +1184,9 @@ async def strategy_comparison(
     request: Request,
     top_n: int = Query(50, ge=10, le=100),
     market_state: str = Query("mild_bull"),
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
 ):
     """多策略对比: 璇玑 vs 多因子 vs 松岗七维"""
     try:
@@ -1088,27 +1195,21 @@ async def strategy_comparison(
         if not bonds:
             return {"strategies": []}
 
-        df = pd.DataFrame([{
-            "code": b.code,
-            "name": b.name,
-            "price": b.price,
-            "premium_ratio": b.premium_ratio,
-            "volume": b.volume or 0,
-            "dual_low": b.dual_low,
-            "change_pct": b.change_pct or 0,
-            "ytm": b.ytm or 0,
-            "remaining_years": b.remaining_years or 3,
-        } for b in bonds])
+        df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
+        total_unfiltered = len(df)
 
         df = _compute_hv_estimate(df)
 
-        # Filter outliers (consistent with other endpoints)
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180)]
+        actual_state = _detect_market_state(df) if market_state == 'auto' else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = 'neutral'
+
+        df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price)]
         if df.empty:
-            return {"top_n": top_n, "total_bonds": 0, "strategies": []}
+            return {"top_n": top_n, "total_bonds": 0, "total_unfiltered": total_unfiltered, "strategies": []}
 
         # 策略1: 璇玑十二因子
-        xuanji_df = _compute_xuanji_scores(df.copy(), market_state)
+        xuanji_df = _compute_xuanji_scores(df.copy(), actual_state)
         xuanji_top = xuanji_df.nlargest(top_n, 'score')
         xuanji_avg_score = float(xuanji_top['score'].mean()) if len(xuanji_top) > 0 else 0
         xuanji_avg_price = float(xuanji_top['price'].mean()) if len(xuanji_top) > 0 else 0
@@ -1153,6 +1254,9 @@ async def strategy_comparison(
         return {
             "top_n": top_n,
             "total_bonds": len(df),
+            "total_unfiltered": total_unfiltered,
+            "market_state": actual_state,
+            "market_state_requested": market_state,
             "strategies": [
                 {
                     "id": "xuanji_twelve",
@@ -1211,21 +1315,13 @@ async def strategy_summary(request: Request):
         if engine is not None:
             bonds = await engine.get_all_quotes()
             if bonds:
-                df = pd.DataFrame([{
-                    "code": b.code,
-                    "price": float(getattr(b, 'price', 100) or 100),
-                    "premium_ratio": float(getattr(b, 'premium_ratio', 0) or 0),
-                    "ytm": float(getattr(b, 'ytm', 0) or 0),
-                    "remaining_years": float(getattr(b, 'remaining_years', 3) or 3),
-                    "dual_low": float(getattr(b, 'dual_low', 0) or 0),
-                    "change_pct": float(getattr(b, 'change_pct', 0) or 0),
-                    "volume": float(getattr(b, 'volume', 0) or 0),
-                } for b in bonds])
+                df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
                 df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= 80) &
                         (df['price'] >= 80) & (df['price'] <= 180)]
                 if not df.empty:
                     df = _compute_hv_estimate(df)
-                    scored = _compute_xuanji_scores(df.copy(), "mild_bull")
+                    detected_state = _detect_market_state(df)
+                    scored = _compute_xuanji_scores(df.copy(), detected_state)
                     top = scored.nlargest(min(20, len(scored)), 'score')
                     if not top.empty:
                         avg_score = float(top['score'].mean())

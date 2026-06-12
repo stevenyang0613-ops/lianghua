@@ -425,31 +425,34 @@ class FactorDataSource:
         # 获取各因子数据
         financial = self.get_financial_indicators(code)
 
-        # 财务因子评分
-        if financial['asset_liability_ratio'] < 50:
+        debt_ratio = financial.get('asset_liability_ratio', 50)
+        if debt_ratio < 50:
             scores['debt'] = 100
-        elif financial['asset_liability_ratio'] < 70:
+        elif debt_ratio < 70:
             scores['debt'] = 50
         else:
             scores['debt'] = 0
 
-        if financial['current_ratio'] > 2:
+        current_ratio = financial.get('current_ratio', 1.0)
+        if current_ratio > 2:
             scores['liquidity'] = 100
-        elif financial['current_ratio'] > 1:
+        elif current_ratio > 1:
             scores['liquidity'] = 50
         else:
             scores['liquidity'] = 0
 
-        if financial['net_profit_growth'] > 20:
+        net_profit_growth = financial.get('net_profit_growth', 0)
+        if net_profit_growth > 20:
             scores['growth'] = 100
-        elif financial['net_profit_growth'] > 0:
+        elif net_profit_growth > 0:
             scores['growth'] = 50
         else:
             scores['growth'] = 0
 
-        # 股东因子评分
         pledge = self.get_shareholder_pledge_ratio(code)
-        if pledge < 30:
+        if pledge is None:
+            scores['pledge'] = 50
+        elif pledge < 30:
             scores['pledge'] = 100
         elif pledge < 60:
             scores['pledge'] = 50
@@ -457,7 +460,9 @@ class FactorDataSource:
             scores['pledge'] = 0
 
         guarantee = self.get_guarantee_ratio(code)
-        if guarantee < 10:
+        if guarantee is None:
+            scores['guarantee'] = 50
+        elif guarantee < 10:
             scores['guarantee'] = 100
         elif guarantee < 30:
             scores['guarantee'] = 50
@@ -493,13 +498,13 @@ class FactorDataSource:
 
             for factor in factors:
                 if factor == 'debt':
-                    row[factor] = financial['asset_liability_ratio']
+                    row[factor] = financial.get('asset_liability_ratio', 0)
                 elif factor == 'liquidity':
-                    row[factor] = financial['current_ratio']
+                    row[factor] = financial.get('current_ratio', 0)
                 elif factor == 'growth':
-                    row[factor] = financial['net_profit_growth']
+                    row[factor] = financial.get('net_profit_growth', 0)
                 elif factor == 'roe':
-                    row[factor] = financial['roe']
+                    row[factor] = financial.get('roe', 0)
                 elif factor == 'pledge':
                     row[factor] = self.get_shareholder_pledge_ratio(code) or 0
                 elif factor == 'guarantee':
