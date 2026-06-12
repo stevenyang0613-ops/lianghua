@@ -92,6 +92,13 @@ class MarketEngine:
 
         await self._notify_subscribers(bonds)
 
+        # 数据增强（异步非阻塞）
+        try:
+            from app.engine.data_enrich import enrich_quotes
+            asyncio.create_task(enrich_quotes(bonds))
+        except Exception:
+            pass
+
         # 自动缓存行情数据到DuckDB（每日首次写入，避免高频写入压力）
         if bonds and self._storage:
             today = str(date.today())

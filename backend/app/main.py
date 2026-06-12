@@ -193,6 +193,14 @@ async def lifespan(app: FastAPI):
             start_stats_persistence()
             logger.info("Background data loading completed")
 
+            # 启动数据增强缓存（行业/PE/PB 后台预热）
+            try:
+                from app.engine.data_enrich import start_background_refresh
+                await start_background_refresh()
+                logger.info("[DataEnrich] Background cache refresh started")
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Background cache start failed: {e}")
+
             # 缓存预热：引擎就绪后触发一次七维排名计算，避免首次请求慢
             async def _warmup_songgang_cache():
                 try:

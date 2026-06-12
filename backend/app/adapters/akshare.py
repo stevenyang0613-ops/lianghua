@@ -394,7 +394,10 @@ class AKShareAdapter(DataSourceAdapter):
                 last_trade_date=ri.get("last_trade_date"),
                 maturity_date=maturity,
                 redemption_price=float(ri.get("redemption_price", 0.0) or 0.0),
-                rating=rating or str(row.get("信用评级", ""))[:10] or None,
+                rating=rating,
             )
-        except (ValueError, TypeError, ZeroDivisionError):
+            if rating:
+                logger.debug(f"[AKShare] Rating for {code} ({name}): {rating}")
+        except (ValueError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"[AKShare] _row_to_quote failed for row: {e}")
             return None
