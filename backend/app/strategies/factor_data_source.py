@@ -74,6 +74,8 @@ class FactorDataSource:
 
                 industry_pe: dict[str, list[float]] = {}
                 for sc, info in (_de._spot_map or {}).items():
+                    if not isinstance(info, dict):
+                        continue
                     pe = info.get("pe")
                     if pe is None or not (5 < float(pe) < 200):
                         continue
@@ -84,6 +86,8 @@ class FactorDataSource:
 
                 industry_roe: dict[str, list[float]] = {}
                 for sc, info in (_de._fin_map or {}).items():
+                    if not isinstance(info, dict):
+                        continue
                     roe = info.get("roe")
                     if roe is None:
                         continue
@@ -150,6 +154,8 @@ class FactorDataSource:
 
             industry_stats: dict[str, dict] = {}
             for sc, info in (_de._spot_map or {}).items():
+                if not isinstance(info, dict):
+                    continue
                 pe = info.get("pe")
                 ind = _de._industry_map.get(str(sc).strip())
                 if not ind:
@@ -163,6 +169,8 @@ class FactorDataSource:
                 stats["count"] += 1
 
             for sc, info in (_de._fin_map or {}).items():
+                if not isinstance(info, dict):
+                    continue
                 roe = info.get("roe")
                 ind = _de._industry_map.get(str(sc).strip())
                 if not ind or roe is None:
@@ -323,7 +331,10 @@ class FactorDataSource:
                 total_change = 0.0
                 valid_change_count = 0
                 stock_count = 0
-                for sc, info in (_de._spot_map or {}).items():
+                _spot_iter = _de._spot_map or {}
+                for sc, info in list(_spot_iter.items()):
+                    if not isinstance(info, dict):
+                        continue
                     ch = info.get("change_pct")
                     if ch is not None:
                         try:
