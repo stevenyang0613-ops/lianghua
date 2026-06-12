@@ -37,6 +37,7 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
         return {
             "code": q.code,
             "name": getattr(q, "name", ""),
+            "stock_code": getattr(q, "stock_code", ""),
             "price": getattr(q, "price", 0),
             "change_pct": getattr(q, "change_pct", 0),
             "stock_price": getattr(q, "stock_price", 0),
@@ -54,12 +55,23 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
             "maturity_date": _iso(getattr(q, "maturity_date", None)),
             "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+            "rating": str(getattr(q, "rating", "") or "") or None,
+            "industry": getattr(q, "industry", None),
+            "roe": getattr(q, "roe", None),
+            "gpm": getattr(q, "gpm", None),
+            "cagr": getattr(q, "cagr", None),
+            "debt_ratio": getattr(q, "debt_ratio", None),
+            "current_ratio": getattr(q, "current_ratio", None),
+            "pe": getattr(q, "pe", None),
+            "pb": getattr(q, "pb", None),
+            "iv": getattr(q, "iv", None),
         }
 
     def row_to_dict(r: dict) -> dict:
         return {
             "code": r.get("code", ""),
             "name": r.get("name", ""),
+            "stock_code": r.get("stock_code", ""),
             "price": float(r.get("price", 0)),
             "change_pct": float(r.get("change_pct", 0)),
             "stock_price": float(r.get("stock_price", 0)),
@@ -77,6 +89,16 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "last_trade_date": _iso(r.get("last_trade_date")),
             "maturity_date": _iso(r.get("maturity_date")),
             "redemption_price": float(r.get("redemption_price", 0) or 0.0),
+            "rating": str(r.get("rating", "") or "") or None,
+            "industry": r.get("industry"),
+            "roe": r.get("roe"),
+            "gpm": r.get("gpm"),
+            "cagr": r.get("cagr"),
+            "debt_ratio": r.get("debt_ratio"),
+            "current_ratio": r.get("current_ratio"),
+            "pe": r.get("pe"),
+            "pb": r.get("pb"),
+            "iv": r.get("iv"),
         }
 
     if engine:
@@ -116,6 +138,7 @@ async def get_quote_by_code(request: Request, code: str):
         return {
             "code": q.code,
             "name": getattr(q, "name", ""),
+            "stock_code": getattr(q, "stock_code", ""),
             "price": getattr(q, "price", 0),
             "change_pct": getattr(q, "change_pct", 0),
             "stock_price": getattr(q, "stock_price", 0),
@@ -133,6 +156,16 @@ async def get_quote_by_code(request: Request, code: str):
             "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
             "maturity_date": _iso(getattr(q, "maturity_date", None)),
             "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+            "rating": str(getattr(q, "rating", "") or "") or None,
+            "industry": getattr(q, "industry", None),
+            "roe": getattr(q, "roe", None),
+            "gpm": getattr(q, "gpm", None),
+            "cagr": getattr(q, "cagr", None),
+            "debt_ratio": getattr(q, "debt_ratio", None),
+            "current_ratio": getattr(q, "current_ratio", None),
+            "pe": getattr(q, "pe", None),
+            "pb": getattr(q, "pb", None),
+            "iv": getattr(q, "iv", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -157,6 +190,17 @@ async def get_quote_by_code(request: Request, code: str):
             "last_trade_date": _iso(r.get("last_trade_date")),
             "maturity_date": _iso(r.get("maturity_date")),
             "redemption_price": float(r.get("redemption_price", 0) or 0.0),
+            "rating": str(r.get("rating", "") or "") or None,
+            "stock_code": r.get("stock_code", ""),
+            "industry": r.get("industry"),
+            "roe": r.get("roe"),
+            "gpm": r.get("gpm"),
+            "cagr": r.get("cagr"),
+            "debt_ratio": r.get("debt_ratio"),
+            "current_ratio": r.get("current_ratio"),
+            "pe": r.get("pe"),
+            "pb": r.get("pb"),
+            "iv": r.get("iv"),
             "timestamp": str(r.get("timestamp", "")),
         }
 
@@ -182,6 +226,7 @@ async def get_exchangeable_bonds(request: Request):
         return {
             "code": q.code,
             "name": getattr(q, "name", ""),
+            "stock_code": getattr(q, "stock_code", ""),
             "price": getattr(q, "price", 0),
             "change_pct": getattr(q, "change_pct", 0),
             "stock_price": getattr(q, "stock_price", 0),
@@ -197,6 +242,10 @@ async def get_exchangeable_bonds(request: Request):
             "last_trade_date": _iso(getattr(q, "last_trade_date", None)),
             "maturity_date": _iso(getattr(q, "maturity_date", None)),
             "redemption_price": float(getattr(q, "redemption_price", 0) or 0.0),
+            "rating": str(getattr(q, "rating", "") or "") or None,
+            "industry": getattr(q, "industry", None),
+            "pe": getattr(q, "pe", None),
+            "pb": getattr(q, "pb", None),
         }
 
     if engine and engine.adapter:

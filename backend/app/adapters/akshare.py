@@ -205,8 +205,6 @@ class AKShareAdapter(DataSourceAdapter):
                 rating = str(row.get("信用评级", "")).strip() or None
                 bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating)
                 if bond:
-                    if len(bonds) < 3:
-                        logger.info(f"[AKShare] Debug bond: {bond.code} sc={bond.stock_code!r} rating={bond.rating!r}")
                     bonds.append(bond)
             except (KeyError, ValueError, TypeError) as e:
                 logger.debug(f"[AKShare] Skip row: {e}")
