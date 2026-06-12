@@ -73,7 +73,7 @@ class FactorDataSource:
                 from app.engine import data_enrich as _de
 
                 industry_pe: dict[str, list[float]] = {}
-                for sc, info in (_de._spot_map or {}).items():
+                for sc, info in list((_de._spot_map or {}).items()):
                     if not isinstance(info, dict):
                         continue
                     pe = info.get("pe")
@@ -85,7 +85,7 @@ class FactorDataSource:
                     industry_pe.setdefault(ind, []).append(float(pe))
 
                 industry_roe: dict[str, list[float]] = {}
-                for sc, info in (_de._fin_map or {}).items():
+                for sc, info in list((_de._fin_map or {}).items()):
                     if not isinstance(info, dict):
                         continue
                     roe = info.get("roe")
@@ -153,7 +153,7 @@ class FactorDataSource:
                 self._refresh_industry_pmi()
 
             industry_stats: dict[str, dict] = {}
-            for sc, info in (_de._spot_map or {}).items():
+            for sc, info in list((_de._spot_map or {}).items()):
                 if not isinstance(info, dict):
                     continue
                 pe = info.get("pe")
@@ -168,7 +168,7 @@ class FactorDataSource:
                     stats["change_pct"].append(float(ch))
                 stats["count"] += 1
 
-            for sc, info in (_de._fin_map or {}).items():
+            for sc, info in list((_de._fin_map or {}).items()):
                 if not isinstance(info, dict):
                     continue
                 roe = info.get("roe")
