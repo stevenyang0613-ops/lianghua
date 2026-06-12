@@ -52,6 +52,7 @@ const ScoreRanking = lazy(() => import('./pages/ScoreRanking'))
 const SyncSettings = lazy(() => import('./pages/SyncSettings'))
 const SonggangScore = lazy(() => import('./pages/SonggangScore'))
 const TimingSignal = lazy(() => import('./pages/TimingSignal'))
+const XuanjiIndex = lazy(() => import('./pages/XuanjiIndex'))
 const AnalyticsDashboard = lazy(() => import('./pages/AnalyticsDashboard'))
 const ThemeConfig = lazy(() => import('./pages/ThemeConfig'))
 const DataImportExport = lazy(() => import('./pages/DataImportExport'))
@@ -193,6 +194,7 @@ export default function App() {
         <Route path="/score-ranking" element={<ErrorBoundary><ScoreRanking /></ErrorBoundary>} />
         <Route path="/songgang-score" element={<ErrorBoundary><SonggangScore /></ErrorBoundary>} />
         <Route path="/timing-signal" element={<ErrorBoundary><TimingSignal /></ErrorBoundary>} />
+        <Route path="/xuanji-index" element={<ErrorBoundary><XuanjiIndex /></ErrorBoundary>} />
         <Route path="/sync" element={<ErrorBoundary><SyncSettings /></ErrorBoundary>} />
         <Route path="/analytics" element={<ErrorBoundary><AnalyticsDashboard /></ErrorBoundary>} />
         <Route path="/theme-config" element={<ErrorBoundary><ThemeConfig /></ErrorBoundary>} />

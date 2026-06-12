@@ -27,6 +27,7 @@ import {
   AppstoreOutlined,
   TrophyOutlined,
   CloudSyncOutlined,
+  CrownOutlined,
 } from '@ant-design/icons'
 
 const menuItems = [
@@ -38,6 +39,7 @@ const menuItems = [
   { key: '/score-ranking', icon: <TrophyOutlined />, label: '评分排名' },
   { key: '/songgang-score', icon: <StarOutlined />, label: '七维详情分析' },
   { key: '/timing-signal', icon: <ThunderboltOutlined />, label: '多维度择时' },
+  { key: '/xuanji-index', icon: <CrownOutlined />, label: '璇玑十二因子' },
   { key: '/backtest', icon: <ExperimentOutlined />, label: '回测中心' },
   { key: '/trade', icon: <DollarOutlined />, label: '交易终端' },
   { key: '/trade-log', icon: <HistoryOutlined />, label: '交易日志' },
