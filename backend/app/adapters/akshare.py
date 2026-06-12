@@ -377,6 +377,7 @@ class AKShareAdapter(DataSourceAdapter):
             return ConvertibleQuote(
                 code=code,
                 name=name,
+                stock_code=str(row.get("正股代码", "")).strip(),
                 price=price,
                 change_pct=change_pct,
                 stock_price=stock_price,

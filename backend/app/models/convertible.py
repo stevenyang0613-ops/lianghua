@@ -19,6 +19,7 @@ class ConvertibleQuote(BaseModel):
     """可转债实时行情"""
     code: str = Field(..., description="转债代码")
     name: str = Field("", description="转债简称")
+    stock_code: str = Field("", description="正股代码")
     price: float = Field(0.0, description="最新价")
     change_pct: float = Field(0.0, description="涨跌幅(%)")
     stock_price: float = Field(0.0, description="正股价")
