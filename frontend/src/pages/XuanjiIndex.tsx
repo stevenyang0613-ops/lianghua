@@ -5,7 +5,6 @@
  * 12因子: 双低/HV/动量/YTM/期限/质量ROE/质量GPM/质量CAGR/估值PE/估值PB/事件/Delta
  * 5态市场: 极端牛/温和牛/震荡/温和熊/极端熊
  * Alpha源: A1-A12共12个alpha源
- * 目标: 中性年化12.8% / 乐观21.2% / 探索上限24%
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
@@ -103,6 +102,7 @@ export default function XuanjiIndex() {
   const [rankingLoading, setRankingLoading] = useState(false)
   const [rankingData, setRankingData] = useState<XuanjiItem[]>([])
   const [rankingInfo, setRankingInfo] = useState<any>(null)
+const [rankParams, setRankParams] = useState<any>(null)
   const [topN, setTopN] = useState(savedConfig.topN)
   const [marketState, setMarketState] = useState(savedConfig.marketState)
   const [holdCount, setHoldCount] = useState(savedConfig.holdCount)
@@ -119,8 +119,14 @@ export default function XuanjiIndex() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null)
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
-  const [btStartDate, setBtStartDate] = useState('2024-01-01')
-  const [btEndDate, setBtEndDate] = useState('2025-12-31')
+  const [btStartDate, setBtStartDate] = useState(() => {
+    const d = new Date(); d.setFullYear(d.getFullYear() - 2)
+    return d.toISOString().slice(0, 10)
+  })
+  const [btEndDate, setBtEndDate] = useState(() => {
+    const d = new Date()
+    return d.toISOString().slice(0, 10)
+  })
 
   // Single bond detail
   const [detailVisible, setDetailVisible] = useState(false)
@@ -181,6 +187,7 @@ export default function XuanjiIndex() {
         weights: result.market_weights,
         factorNames: result.factor_names,
       })
+      setRankParams(result.params)
     } catch (e: any) {
       message.error(`加载排名失败: ${e.message}`)
       setRankingData([])
@@ -485,7 +492,7 @@ export default function XuanjiIndex() {
               <Tag color="purple" style={{ marginLeft: 8 }}>v3.0</Tag>
             </Title>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              12因子 × 5态市场 × 12 Alpha源 | 中性12.8% / 乐观21.2% / 探索24%
+              12因子 × 5态市场 × 12 Alpha源
             </Text>
           </Col>
           <Col>
@@ -551,12 +558,12 @@ export default function XuanjiIndex() {
                 <Row gutter={16} style={{ marginBottom: 16 }}>
                   <Col span={3}><Statistic title="筛选池" value={rankingInfo?.total || 0} suffix="只" /></Col>
                   <Col span={3}><Statistic title="返回" value={rankingInfo?.returned || 0} suffix="只" /></Col>
-                  <Col span={3}><Statistic title="三层漏斗" value="168→125→74→50" valueStyle={{ fontSize: 14 }} /></Col>
-                  <Col span={3}><Statistic title="中性年化" value="12.8%" valueStyle={{ color: '#52c41a' }} /></Col>
-                  <Col span={3}><Statistic title="乐观年化" value="21.2%" valueStyle={{ color: '#1677ff' }} /></Col>
+                  <Col span={3}><Statistic title="市场状态" value={rankingInfo?.actual ? (MARKET_STATES.find(s => s.value === rankingInfo.actual)?.label || rankingInfo.actual) : '-'} /></Col>
+                  <Col span={3}><Statistic title="波动率调权" value={rankParams?.vol_adjust?.toFixed(2) || '-'} suffix="×" /></Col>
+                  <Col span={3}><Statistic title="溢价上限" value={rankParams?.max_premium || '-'} suffix="%" /></Col>
+                  <Col span={3}><Statistic title="价格区间" value={rankParams ? `${rankParams.min_price}-${rankParams.max_price}` : '-'} /></Col>
                   <Col span={3}><Statistic title="IC衰减" value="×0.85" /></Col>
-                  <Col span={3}><Statistic title="回撤控制" value="<8%" valueStyle={{ color: '#fa8c16' }} /></Col>
-                  <Col span={3}><Statistic title="胜率目标" value=">55%" valueStyle={{ color: '#722ed1' }} /></Col>
+                  <Col span={3}><Statistic title="回撤控制" value="<8%" /></Col>
                 </Row>
 
                 <Row gutter={16} style={{ marginBottom: 16 }}>
@@ -663,7 +670,7 @@ export default function XuanjiIndex() {
               <>
                 <Alert
                   message="12个Alpha源叠加 (A1-A12)"
-                  description={alphaSources?.total_alpha_potential || '+6.1~12.8%/年'}
+                  description={alphaSources?.total_alpha_potential || '(暂无数据)'}
                   type="success" showIcon style={{ marginBottom: 16 }}
                 />
                 <Row gutter={[16, 16]}>
@@ -835,8 +842,8 @@ export default function XuanjiIndex() {
                   <Col span={4}><Statistic title="候选总数" value={deltaCandidates.length} suffix="只" /></Col>
                   <Col span={4}><Statistic title="平均IV-HV" value={deltaCandidates.length > 0 ? (deltaCandidates.reduce((s, c) => s + c.iv_hv_diff, 0) / deltaCandidates.length).toFixed(1) : '0'} suffix="%" valueStyle={{ color: '#52c41a' }} /></Col>
                   <Col span={4}><Statistic title="最大IV-HV" value={deltaCandidates.length > 0 ? Math.max(...deltaCandidates.map(c => c.iv_hv_diff)).toFixed(1) : '0'} suffix="%" valueStyle={{ color: '#ff4d4f' }} /></Col>
-                  <Col span={4}><Statistic title="对冲α" value="+0.5~1.5%/年" valueStyle={{ color: '#722ed1' }} /></Col>
-                  <Col span={4}><Statistic title="回撤改善" value="-2~4%" valueStyle={{ color: '#52c41a' }} /></Col>
+                  <Col span={4}><Statistic title="对冲α" value={deltaCandidates.length > 0 ? `${(deltaCandidates[0]?.iv_hv_diff || 0).toFixed(1)}bp` : '-'} valueStyle={{ color: '#722ed1' }} /></Col>
+                  <Col span={4}><Statistic title="回撤改善" value={greeksData ? `${(greeksData.summary.theta_mean * 365 * 100).toFixed(1)}bp/年` : '-'} valueStyle={{ color: '#52c41a' }} /></Col>
                   <Col span={4}><Button onClick={loadDeltaCandidates}>刷新候选</Button></Col>
                 </Row>
                 <Table
@@ -909,14 +916,11 @@ export default function XuanjiIndex() {
                 <Divider>策略能力对比</Divider>
                 <Table
                   dataSource={[
-                    { key: '1', metric: '因子数量', xuanji: '12', multi: '5', songgang: '11(7+4)' },
+                    { key: '1', metric: '因子数量', xuanji: '12', multi: '5', songgang: '11' },
                     { key: '2', metric: '市场状态', xuanji: '5态自适应', multi: '静态', songgang: '静态' },
-                    { key: '3', metric: '波动率调权', xuanji: '✓', multi: '✗', songgang: '✗' },
-                    { key: '4', metric: 'Greeks分解', xuanji: '✓', multi: '✗', songgang: '✗' },
-                    { key: '5', metric: 'Delta对冲', xuanji: '✓', multi: '✗', songgang: '✗' },
-                    { key: '6', metric: '事件驱动', xuanji: '✓', multi: '✗', songgang: '✗' },
-                    { key: '7', metric: '中性年化', xuanji: '12.8%', multi: '8-10%', songgang: '10-12%' },
-                    { key: '8', metric: '乐观年化', xuanji: '21.2%', multi: '12-15%', songgang: '15-18%' },
+                    { key: '3', metric: '选中重叠%', xuanji: `100%`, multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.overlap_with_sg?.toFixed(0) + '%' || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.overlap_with_mf?.toFixed(0) + '%' || '-' },
+                    { key: '4', metric: '平均价格', xuanji: strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_price?.toFixed(1) || '-', multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_price?.toFixed(1) || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_price?.toFixed(1) || '-' },
+                    { key: '5', metric: '平均评分', xuanji: strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_score?.toFixed(3) || '-', multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_score?.toFixed(3) || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_score?.toFixed(3) || '-' },
                   ]}
                   size="small" pagination={false}
                   columns={[

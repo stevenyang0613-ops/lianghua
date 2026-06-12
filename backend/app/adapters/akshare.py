@@ -111,6 +111,19 @@ class AKShareAdapter(DataSourceAdapter):
         except Exception as e:
             logger.warning(f"[AKShare] bond_zh_cov_info_ths failed: {e}")
 
+        # 4. 正股涨跌幅: stock_zh_a_spot_em (A股实时行情)
+        stock_chg_map: dict[str, float] = {}
+        try:
+            df_stock = ak.stock_zh_a_spot_em()
+            for _, r in df_stock.iterrows():
+                s_code = str(r.get("代码", "")).strip()
+                chg = self._safe_float(r.get("涨跌幅", 0))
+                if s_code:
+                    stock_chg_map[s_code] = chg
+            logger.info(f"[AKShare] Fetched stock change data: {len(stock_chg_map)} stocks")
+        except Exception as e:
+            logger.warning(f"[AKShare] stock_zh_a_spot_em failed: {e}")
+
         # 4. 赎回/退市/可交换债 统一从 JSL bond_cb_redeem_jsl 拉取
         eb_bonds: list[ConvertibleQuote] = []
         # 赎回信息表: code -> {is_called, call_status, last_trade_date, redemption_price, maturity_date}
@@ -160,13 +173,15 @@ class AKShareAdapter(DataSourceAdapter):
                 change_pct = spot.get("change_pct", 0.0)
                 raw_amount = spot.get("amount", 0.0)
                 volume = round(raw_amount / 100000000, 4) if raw_amount > 0 else 0.0
+                eb_stock_code = str(r.get("正股代码", "")).strip()
+                stock_change_pct = stock_chg_map.get(eb_stock_code, 0.0)
                 eb_bonds.append(ConvertibleQuote(
                     code=code,
                     name=name,
                     price=price,
                     change_pct=change_pct,
                     stock_price=stock_price,
-                    stock_change_pct=0.0,
+                    stock_change_pct=stock_change_pct,
                     conversion_price=conversion_price,
                     conversion_value=conversion_value,
                     premium_ratio=premium_ratio,
@@ -197,7 +212,8 @@ class AKShareAdapter(DataSourceAdapter):
                     continue
                 if self._is_exchangeable_bond(code):
                     continue
-                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code))
+                rating = str(row.get("信用评级", "")).strip() or None
+                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating, stock_chg_map)
                 if bond:
                     bonds.append(bond)
             except (KeyError, ValueError, TypeError) as e:
@@ -303,7 +319,9 @@ class AKShareAdapter(DataSourceAdapter):
             return None
 
     def _row_to_quote(self, row: pd.Series, spot_map: dict, maturity_map: dict,
-                      redeem_info: Optional[dict] = None) -> Optional[ConvertibleQuote]:
+                      redeem_info: Optional[dict] = None,
+                      rating: Optional[str] = None,
+                      stock_chg_map: Optional[dict] = None) -> Optional[ConvertibleQuote]:
         """将主数据行与补充数据合并为 Quote 对象，过滤退市和到期转债"""
         try:
             code = str(row.get("债券代码", row.get("代码", ""))).strip()
@@ -362,7 +380,9 @@ class AKShareAdapter(DataSourceAdapter):
                 price=price,
                 change_pct=change_pct,
                 stock_price=stock_price,
-                stock_change_pct=0.0,
+                stock_change_pct=(stock_chg_map or {}).get(
+                    str(row.get("正股代码", "")).strip(), 0.0
+                ),
                 conversion_price=conversion_price,
                 conversion_value=conversion_value,
                 premium_ratio=premium_ratio,
@@ -374,6 +394,7 @@ class AKShareAdapter(DataSourceAdapter):
                 last_trade_date=ri.get("last_trade_date"),
                 maturity_date=maturity,
                 redemption_price=float(ri.get("redemption_price", 0.0) or 0.0),
+                rating=rating or str(row.get("信用评级", ""))[:10] or None,
             )
         except (ValueError, TypeError, ZeroDivisionError):
             return None

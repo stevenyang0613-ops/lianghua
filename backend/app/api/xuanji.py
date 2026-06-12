@@ -93,7 +93,7 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     score_hv = _normalize_rank(df['hv'].fillna(30), ascending=True)
 
     if 'change_pct' in df.columns:
-        df['momentum_5d'] = df.groupby('code')['price'].pct_change(5).fillna(0) if 'code' in df.columns else df.get('change_pct', 0) * 0.01
+        df['momentum_5d'] = df['change_pct'].fillna(0) * 0.01
     else:
         df['momentum_5d'] = 0
     score_momentum = _normalize_rank(df['momentum_5d'].fillna(0), ascending=False)
@@ -103,28 +103,69 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     else:
         score_ytm = pd.Series(0.5, index=df.index)
 
-    score_quality = pd.Series(0.5, index=df.index)
-    for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True)]:
-        if col in df.columns:
-            col_data = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            score_quality = score_quality * 0.7 + _normalize_rank(col_data, ascending=asc) * 0.3
+    score_quality = pd.Series(0, index=df.index)
+    has_quality_data = any(col in df.columns and df[col].notna().any() for col in ['roe', 'gpm', 'cagr', 'debt_ratio'])
+    if has_quality_data:
+        sub_score = pd.Series(0.5, index=df.index)
+        for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True)]:
+            if col in df.columns and df[col].notna().any():
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(df[col].median() if df[col].notna().any() else 0)
+                sub_score = sub_score * 0.7 + _normalize_rank(col_data, ascending=asc) * 0.3
+            else:
+                sub_score = sub_score * 0.7 + 0.5 * 0.3
+        score_quality = sub_score
 
-    score_valuation = pd.Series(0.5, index=df.index)
-    for col, asc in [('pe', True), ('pb', True)]:
-        if col in df.columns:
-            col_data = pd.to_numeric(df[col], errors='coerce').fillna(50)
-            score_valuation = score_valuation * 0.6 + _normalize_rank(col_data, ascending=asc) * 0.4
+    score_valuation = pd.Series(0, index=df.index)
+    has_val_data = any(col in df.columns and df[col].notna().any() for col in ['pe', 'pb'])
+    if has_val_data:
+        sub_score = pd.Series(0.5, index=df.index)
+        for col, asc in [('pe', True), ('pb', True)]:
+            if col in df.columns and df[col].notna().any():
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(df[col].median() if df[col].notna().any() else 50)
+                sub_score = sub_score * 0.6 + _normalize_rank(col_data, ascending=asc) * 0.4
+            else:
+                sub_score = sub_score * 0.6 + 0.5 * 0.4
+        score_valuation = sub_score
 
-    score_event = pd.Series(0.5, index=df.index)
-    for col in ['buyback_amount', 'mgmt_buy_price']:
-        if col in df.columns:
-            col_data = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            score_event = score_event * 0.7 + _normalize_rank(col_data, ascending=False) * 0.3
+    score_event = pd.Series(0, index=df.index)
+    has_event_data = any(col in df.columns and df[col].notna().any() for col in ['buyback_amount', 'mgmt_buy_price'])
+    if has_event_data:
+        sub_score = pd.Series(0.5, index=df.index)
+        for col in ['buyback_amount', 'mgmt_buy_price']:
+            if col in df.columns and df[col].notna().any():
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                sub_score = sub_score * 0.7 + _normalize_rank(col_data, ascending=False) * 0.3
+            else:
+                sub_score = sub_score * 0.7 + 0.5 * 0.3
+        score_event = sub_score
 
-    score_delta = pd.Series(0.5, index=df.index)
-    if 'iv' in df.columns and 'hv' in df.columns:
+    score_delta = pd.Series(0, index=df.index)
+    score_delta_available = 'iv' in df.columns and df['iv'].notna().any() and 'hv' in df.columns
+    if score_delta_available:
         iv_hv_diff = (pd.to_numeric(df['iv'], errors='coerce').fillna(30) - df['hv']).clip(lower=0)
         score_delta = _normalize_rank(iv_hv_diff, ascending=False)
+
+    # Redistribute weights: only factors with real data get their weight
+    active_weights = {}
+    active_weights['dual_low'] = weights['dual_low']
+    active_weights['momentum'] = weights['momentum']
+    active_weights['hv'] = weights['hv']
+    active_weights['ytm'] = weights['ytm']
+    if has_quality_data:
+        active_weights['quality'] = weights['quality']
+    if has_val_data:
+        active_weights['valuation'] = weights['valuation']
+    if has_event_data:
+        active_weights['event'] = weights['event']
+    if score_delta_available:
+        active_weights['delta'] = weights['delta']
+
+    total_w = sum(active_weights.values())
+    if total_w > 0:
+        for k in active_weights:
+            active_weights[k] /= total_w
+    else:
+        active_weights = {'dual_low': 0.4, 'momentum': 0.2, 'hv': 0.2, 'ytm': 0.2}
 
     hv_median = df['hv'].median() if 'hv' in df.columns else 30
     if hv_median == 0 or pd.isna(hv_median):
@@ -132,14 +173,14 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     vol_factor = 1.0 / (1.0 + (df['hv'] / hv_median - 1.0).clip(lower=0) * (1 - vol_adjust)) if 'hv' in df.columns else 1.0
 
     composite = (
-        score_dual_low * weights['dual_low'] +
-        score_momentum * weights['momentum'] +
-        score_hv * weights['hv'] +
-        score_quality * weights['quality'] +
-        score_valuation * weights['valuation'] +
-        score_ytm * weights['ytm'] +
-        score_event * weights['event'] +
-        score_delta * weights['delta']
+        score_dual_low * active_weights.get('dual_low', 0) +
+        score_momentum * active_weights.get('momentum', 0) +
+        score_hv * active_weights.get('hv', 0) +
+        score_quality * active_weights.get('quality', 0) +
+        score_valuation * active_weights.get('valuation', 0) +
+        score_ytm * active_weights.get('ytm', 0) +
+        score_event * active_weights.get('event', 0) +
+        score_delta * active_weights.get('delta', 0)
     ) * vol_factor
 
     df['score'] = composite.clip(0, 1)
@@ -326,8 +367,13 @@ async def get_xuanji_single(
             df['hv'] = 30.0
         df['hv'] = df['hv'].fillna(30).clip(10, 100)
 
-        weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
-        df = _compute_xuanji_scores(df, market_state)
+        # Support auto-detect for single bond
+        actual_state = market_state if market_state != 'auto' else _detect_market_state(df)
+        if actual_state == 'auto':
+            actual_state = 'neutral'
+
+        weights = MARKET_WEIGHTS.get(actual_state, MARKET_WEIGHTS['neutral'])
+        df = _compute_xuanji_scores(df, actual_state)
         row = df.iloc[0]
 
         factor_scores = {
@@ -435,7 +481,7 @@ async def get_delta_candidates(
                         "delta": round(min(0.95, max(0.05,
                             float(b.conversion_value or b.price * 0.9) / b.price
                             if b.price > 0 else 0.5)), 4),
-                        "alpha_potential": "+2%/年",
+                        "alpha_potential": None,
                     })
             except Exception:
                 continue
@@ -513,38 +559,33 @@ async def get_alpha_sources():
     """12个Alpha源信息"""
     return {
         "sources": [
-            {"id": "A1", "name": "AI因子", "range": "+1.5~2.5%", "category": "智能", "status": "active",
+            {"id": "A1", "name": "AI因子", "range": None, "category": "智能", "status": "active",
              "implementation": "XGBoost/LSTM"},
-            {"id": "A2", "name": "统计套利", "range": "+1~2%", "category": "套利", "status": "active",
+            {"id": "A2", "name": "统计套利", "range": None, "category": "套利", "status": "active",
              "implementation": "配对交易"},
-            {"id": "A3", "name": "CTA趋势", "range": "+0.5~1.5%", "category": "趋势", "status": "active",
+            {"id": "A3", "name": "CTA趋势", "range": None, "category": "趋势", "status": "active",
              "implementation": "20/60均线"},
-            {"id": "A4", "name": "T+0高频", "range": "+0.3~0.8%", "category": "高频", "status": "active",
+            {"id": "A4", "name": "T+0高频", "range": None, "category": "高频", "status": "active",
              "implementation": "三段执行"},
-            {"id": "A5", "name": "事件驱动", "range": "+1~2%", "category": "事件", "status": "active",
+            {"id": "A5", "name": "事件驱动", "range": None, "category": "事件", "status": "active",
              "implementation": "下修/强赎/回购"},
-            {"id": "A6", "name": "正股质量", "range": "+0.5~1%", "category": "基本面", "status": "active",
+            {"id": "A6", "name": "正股质量", "range": None, "category": "基本面", "status": "active",
              "implementation": "ROE/GPM/CAGR/负债率/流动比"},
-            {"id": "A7", "name": "估值因子", "range": "+0.5~1%", "category": "估值", "status": "active",
+            {"id": "A7", "name": "估值因子", "range": None, "category": "估值", "status": "active",
              "implementation": "PE/PB/IV-HV"},
-            {"id": "A8", "name": "多时帧动量", "range": "+0.3~0.8%", "category": "动量", "status": "active",
+            {"id": "A8", "name": "多时帧动量", "range": None, "category": "动量", "status": "active",
              "implementation": "5/10/20/60日复合"},
-            {"id": "A9", "name": "Delta对冲", "range": "+0.5~1.5%", "category": "波动率", "status": "active",
+            {"id": "A9", "name": "Delta对冲", "range": None, "category": "波动率", "status": "active",
              "implementation": "23只候选"},
-            {"id": "A10", "name": "尾部hedge", "range": "回撤-2~4%", "category": "风控", "status": "active",
+            {"id": "A10", "name": "尾部hedge", "range": None, "category": "风控", "status": "active",
              "implementation": "OTM看跌"},
-            {"id": "A11", "name": "Greeks分解", "range": "精度提升", "category": "选券", "status": "active",
+            {"id": "A11", "name": "Greeks分解", "range": None, "category": "选券", "status": "active",
              "implementation": "δ/γ/ν/θ近似"},
-            {"id": "A12", "name": "5态市场", "range": "+0.3~0.5%", "category": "择时", "status": "active",
+            {"id": "A12", "name": "5态市场", "range": None, "category": "择时", "status": "active",
              "implementation": "权重自适应"},
         ],
-        "total_alpha_potential": "+6.1~12.8%/年",
-        "return_path": [
-            {"version": "v1.0", "neutral": "5-8%", "optimistic": "7-10%"},
-            {"version": "v2.2", "neutral": "9.7%", "optimistic": "17.4%"},
-            {"version": "v3.0", "neutral": "12.8%", "optimistic": "21.2%"},
-            {"version": "探索上限", "neutral": "17-24%", "optimistic": "24-30%"},
-        ],
+        "total_alpha_potential": None,
+        "return_path": None,
     }
 
 
@@ -593,73 +634,90 @@ async def stress_test(
 
         # 场景1: 牛市(+15%)
         bull_top = df.nlargest(top_n, 'score').copy()
-        bull_return = (bull_top['score'].mean() * 20 + np.random.uniform(8, 12))
+        bull_hv = float(bull_top['hv'].mean()) if len(bull_top) > 0 else 30
+        bull_dd = -abs(float(bull_top['score'].mean()) * bull_hv / 100 * 0.5) if len(bull_top) > 0 else -5.0
+        bull_win = min(85, max(40, int(bull_top['score'].mean() * 60 + 25)))
+        bull_return = float(bull_top['score'].mean()) * 15 - bull_hv * 0.05
 
         # 场景2: 熊市(-15%)
-        bear_top = df.nsmallest(top_n // 2, 'score').copy()  # 选评分低的防御
-        bear_return = -(df['score'].mean() * 8 + np.random.uniform(3, 7))
+        bear_top = df.nsmallest(top_n // 2, 'score').copy()
+        bear_hv = float(bear_top['hv'].mean()) if len(bear_top) > 0 else 30
+        bear_dd = -abs(float(bear_top['score'].mean()) * bear_hv / 100) if len(bear_top) > 0 else -10.0
+        bear_win = min(60, max(20, int((1 - bear_top['score'].mean()) * 40 + 15))) if len(bear_top) > 0 else 40
+        bear_return = -(1 - float(bear_top['score'].mean())) * 12 - bear_hv * 0.03
 
         # 场景3: 暴跌(-25%)
         crash_top = df[df['hv'] < df['hv'].quantile(0.3)].nlargest(top_n // 2, 'score')
-        crash_return = -(df['score'].mean() * 15 + np.random.uniform(5, 10))
+        crash_hv = float(crash_top['hv'].mean()) if len(crash_top) > 0 else 30
+        crash_dd = -abs(float(crash_top['score'].mean()) * crash_hv / 100 * 1.2) if len(crash_top) > 0 else -15.0
+        crash_win = min(50, max(10, int(crash_top['score'].mean() * 30 + 10))) if len(crash_top) > 0 else 25
+        crash_return = -(1 - float(crash_top['score'].mean())) * 20 - crash_hv * 0.05
 
         # 场景4: 震荡(±5%)
         neutral_top = df[(df['hv'] > 15) & (df['hv'] < 35)].nlargest(top_n, 'score')
-        neutral_return = df['score'].mean() * 8 + np.random.uniform(-2, 4)
+        neu_hv = float(neutral_top['hv'].mean()) if len(neutral_top) > 0 else 25
+        neu_dd = -abs(float(neutral_top['score'].mean()) * 3) if len(neutral_top) > 0 else -4.0
+        neu_win = min(70, max(30, int(neutral_top['score'].mean() * 45 + 25))) if len(neutral_top) > 0 else 50
+        neu_return = float(neutral_top['score'].mean()) * 8 - neu_hv * 0.02
 
         # 场景5: 利率上行(+50bp)
-        rate_up_return = -(df['ytm'].mean() * 0.5 + np.random.uniform(1, 3))
+        rate_hv = float(df['hv'].mean()) if len(df) > 0 else 30
+        rate_dd = -abs(float(df['ytm'].mean()) * 0.5 + 2) if len(df) > 0 else -5.0
+        rate_win = 35
+        rate_return = -float(df['ytm'].mean()) * 0.5 - rate_hv * 0.01
 
         # 场景6: 信用风险爆发
-        credit_risk_return = -(df['premium_ratio'].mean() * 0.15 + np.random.uniform(5, 10))
+        credit_dd = -18.0
+        credit_win = 20
+        credit_return = -float(df['premium_ratio'].mean()) * 0.15 - float(df['hv'].mean()) * 0.05
 
         scenarios = [
             {
                 "name": "牛市行情",
                 "description": "正股普涨+15%, 转债跟涨",
                 "expected_return": round(bull_return, 2),
-                "max_drawdown": -2.5,
-                "win_rate": 75,
+                "max_drawdown": round(bull_dd, 2),
+                "win_rate": bull_win,
                 "selected_count": len(bull_top),
             },
             {
                 "name": "熊市行情",
                 "description": "正股普跌-15%, 防御性转债",
                 "expected_return": round(bear_return, 2),
-                "max_drawdown": -8.0,
-                "win_rate": 45,
+                "max_drawdown": round(bear_dd, 2),
+                "win_rate": bear_win,
                 "selected_count": len(bear_top),
             },
             {
                 "name": "暴跌行情",
                 "description": "正股暴跌-25%, 低HV转债优势",
                 "expected_return": round(crash_return, 2),
-                "max_drawdown": -15.0,
-                "win_rate": 30,
+                "max_drawdown": round(crash_dd, 2),
+                "win_rate": crash_win,
                 "selected_count": len(crash_top),
             },
             {
                 "name": "震荡行情",
                 "description": "正股±5%, 结构性机会",
-                "expected_return": round(neutral_return, 2),
-                "max_drawdown": -4.0,
-                "win_rate": 55,
+                "expected_return": round(neu_return, 2),
+                "max_drawdown": round(neu_dd, 2),
+                "win_rate": neu_win,
                 "selected_count": len(neutral_top),
             },
             {
                 "name": "利率上行+50bp",
                 "description": "纯债替代品承压",
-                "expected_return": round(rate_up_return, 2),
-                "max_drawdown": -5.0,
-                "win_rate": 35,
+                "expected_return": round(rate_return, 2),
+                "max_drawdown": round(rate_dd, 2),
+                "win_rate": rate_win,
                 "selected_count": 0,
             },
             {
                 "name": "信用风险爆发",
                 "description": "违约事件冲击市场",
-                "expected_return": round(credit_risk_return, 2),
-                "max_drawdown": -18.0,
-                "win_rate": 20,
+                "expected_return": round(credit_return, 2),
+                "max_drawdown": round(credit_dd, 2),
+                "win_rate": credit_win,
                 "selected_count": 0,
             },
         ]
@@ -792,7 +850,7 @@ async def factor_correlation(
             df['hv'] = 30.0
         df['hv'] = df['hv'].fillna(30).clip(10, 100)
 
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80)]
+        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180)]
         if df.empty:
             return {"correlations": []}
 
@@ -867,7 +925,6 @@ async def strategy_comparison(
         xuanji_avg_price = float(xuanji_top['price'].mean())
 
         # 策略2: 多因子 (5因子)
-        mf_weights = {"dual_low": 0.4, "premium": 0.2, "momentum": 0.2, "volume": 0.1, "price": 0.1}
         mf_score = (
             _normalize_rank(xuanji_df['dual_low'], True) * 0.4 +
             _normalize_rank(xuanji_df['premium_ratio'], True) * 0.2 +
@@ -877,23 +934,23 @@ async def strategy_comparison(
         )
         xuanji_df['mf_score'] = mf_score
         mf_top = xuanji_df.nlargest(top_n, 'mf_score')
-        mf_avg_score = float(mf_top['mf_score'].mean())
-        mf_avg_price = float(mf_top['price'].mean())
+        mf_avg_score = float(mf_top['mf_score'].mean()) if len(mf_top) > 0 else 0
+        mf_avg_price = float(mf_top['price'].mean()) if len(mf_top) > 0 else 0
 
-        # 策略3: 松岗七维 (简化: 7维+4维)
+        # 策略3: 松岗七维 (简化近似)
         sg_score = (
-            _normalize_rank(xuanji_df['change_pct'], False) * 0.165 +  # 短期动量
-            _normalize_rank(xuanji_df['volume'], False) * 0.099 +  # 板块情绪
-            _normalize_rank(xuanji_df['hv'], True) * 0.099 +  # 波动率
-            _normalize_rank(xuanji_df['price'], True) * 0.066 +  # 估值
-            _normalize_rank(xuanji_df['ytm'], False) * 0.108 +  # 条款价值
-            _normalize_rank(xuanji_df['volume'], False) * 0.09 +  # 流动性
-            _normalize_rank(xuanji_df['ytm'], False) * 0.081  # 信用评分
+            _normalize_rank(xuanji_df['change_pct'], False) * 0.165 +
+            _normalize_rank(xuanji_df['premium_ratio'], True) * 0.099 +
+            _normalize_rank(xuanji_df['hv'], True) * 0.099 +
+            _normalize_rank(xuanji_df['price'], True) * 0.066 +
+            _normalize_rank(xuanji_df['remaining_years'].fillna(3), True) * 0.108 +
+            _normalize_rank(xuanji_df['volume'], False) * 0.09 +
+            _normalize_rank((100 - xuanji_df['premium_ratio']).clip(lower=0), False) * 0.081
         )
         xuanji_df['sg_score'] = sg_score
         sg_top = xuanji_df.nlargest(top_n, 'sg_score')
-        sg_avg_score = float(sg_top['sg_score'].mean())
-        sg_avg_price = float(sg_top['price'].mean())
+        sg_avg_score = float(sg_top['sg_score'].mean()) if len(sg_top) > 0 else 0
+        sg_avg_price = float(sg_top['price'].mean()) if len(sg_top) > 0 else 0
 
         # 重叠度分析
         xuanji_codes = set(xuanji_top['code'].tolist())
@@ -962,13 +1019,7 @@ async def strategy_summary():
             "market_states": list(MARKET_WEIGHTS.keys()),
             "market_state_count": len(MARKET_WEIGHTS),
         },
-        "target_returns": {
-            "neutral": "12.8%",
-            "optimistic": "21.2%",
-            "exploration_ceiling": "24%",
-            "v1_baseline": "5-8%",
-            "v22_progress": "9.7%",
-        },
+        "target_returns": None,
         "key_features": {
             "auto_market_detect": True,
             "volatility_adjustment": True,
