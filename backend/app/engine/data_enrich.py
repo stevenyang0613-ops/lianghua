@@ -121,10 +121,12 @@ def get_stock_spot(stock_code: str) -> dict:
 
 
 def get_all_stock_change_pct() -> dict[str, float]:
+    with _cache_lock:
+        snap = dict(_spot_map)
     return {
         code: info.get("change_pct")
-        for code, info in _spot_map.items()
-        if info.get("change_pct") is not None
+        for code, info in snap.items()
+        if isinstance(info, dict) and info.get("change_pct") is not None
     }
 
 
@@ -561,9 +563,32 @@ def _refresh_spot_cache():
             }
             result[code] = entry
 
-        _set_global_map("_spot_map", result)
-        _save_cache(_SPOT_CACHE, result)
-        logger.info(f"[DataEnrich] Stock spot: {len(result)} stocks, {len(pe_map)} PE, {len(pb_map)} PB, {len(tr_map)} turnover")
+        if pe_map and len(pe_map) >= len(all_codes) * 0.1:
+            _set_global_map("_spot_map", result)
+            _save_cache(_SPOT_CACHE, result)
+            logger.info(f"[DataEnrich] Stock spot: {len(result)} stocks, {len(pe_map)} PE, {len(pb_map)} PB, {len(tr_map)} turnover")
+        else:
+            logger.warning(f"[DataEnrich] Stock spot refresh poor quality ({len(pe_map)} PE / {len(all_codes)} stocks), merging with existing cache")
+            if not _spot_map:
+                _load_spot_cache()
+            with _cache_lock:
+                existing = dict(_spot_map) if _spot_map else {}
+            merged = {}
+            for code in all_codes:
+                old = existing.get(code, {})
+                new = result.get(code, {})
+                merged[code] = {
+                    "pe": new.get("pe") if new.get("pe") is not None else old.get("pe"),
+                    "pb": new.get("pb") if new.get("pb") is not None else old.get("pb"),
+                    "change_pct": new.get("change_pct") if new.get("change_pct") is not None else old.get("change_pct"),
+                    "price": new.get("price") if new.get("price") is not None else old.get("price"),
+                    "volume": new.get("volume") if new.get("volume") is not None else old.get("volume"),
+                    "turnover_rate": new.get("turnover_rate") if new.get("turnover_rate") is not None else old.get("turnover_rate"),
+                }
+            _set_global_map("_spot_map", merged)
+            _save_cache(_SPOT_CACHE, merged)
+            merged_pe = sum(1 for v in merged.values() if isinstance(v, dict) and v.get("pe") is not None)
+            logger.info(f"[DataEnrich] Stock spot merged: {len(merged)} stocks, {merged_pe} PE (from cache)")
     except Exception as e:
         logger.warning(f"[DataEnrich] Stock spot refresh failed: {e}")
         _load_spot_cache()
@@ -687,10 +712,12 @@ def _refresh_fin_cache():
 
         _set_global_map("_fin_map", result)
         _save_cache(_FIN_CACHE, result)
-        cagr_count = sum(1 for v in result.values() if v.get("cagr") is not None)
+        cagr_count = sum(1 for v in result.values() if isinstance(v, dict) and v.get("cagr") is not None)
         logger.info(f"[DataEnrich] Financial: {len(result)} stocks, {cagr_count} with CAGR")
     except Exception as e:
-        logger.warning(f"[DataEnrich] Financial refresh failed: {e}")
+        logger.warning(f"[DataEnrich] Financial refresh failed: {e}", exc_info=True)
+        if not _fin_map:
+            _load_fin_cache()
 
 
 def _refresh_debt_cache():
@@ -701,6 +728,10 @@ def _refresh_debt_cache():
         month = now.tm_mon
         fin_date = f"{year-1}1231" if month >= 10 else f"{year-2}1231"
         df = ak.stock_zcfz_em(date=fin_date)
+        if df is None or len(df) == 0:
+            logger.warning(f"[DataEnrich] zcfz returned empty df for {fin_date}, skipping")
+            return
+        logger.info(f"[DataEnrich] zcfz fetched {len(df)} rows")
         result = {}
         for _, r in df.iterrows():
             code = str(r.get("股票代码", "")).strip()
@@ -723,16 +754,18 @@ def _refresh_debt_cache():
                     if 0 < cr < 50 and cr == cr:
                         entry["current_ratio"] = round(cr, 2)
 
-            if entry:
-                result[code] = entry
+        if entry:
+            result[code] = entry
 
         _set_global_map("_debt_map", result)
         _save_cache(_DEBT_CACHE, result)
-        dr = sum(1 for v in result.values() if "debt_ratio" in v)
-        cr = sum(1 for v in result.values() if "current_ratio" in v)
+        dr = sum(1 for v in result.values() if isinstance(v, dict) and "debt_ratio" in v)
+        cr = sum(1 for v in result.values() if isinstance(v, dict) and "current_ratio" in v)
         logger.info(f"[DataEnrich] Debt: {len(result)} stocks, {dr} dr, {cr} cr")
     except Exception as e:
-        logger.warning(f"[DataEnrich] Debt refresh failed: {e}")
+        logger.warning(f"[DataEnrich] Debt refresh failed: {e}", exc_info=True)
+        if not _debt_map:
+            _load_debt_cache()
 
 
 def _refresh_volatility_cache():
@@ -779,6 +812,8 @@ def _refresh_volatility_cache():
         logger.info(f"[DataEnrich] Volatility: {len(result)} stocks")
     except Exception as e:
         logger.warning(f"[DataEnrich] Volatility refresh failed: {e}")
+        if not _vol_map:
+            _load_vol_cache()
 
 
 def _refresh_buyback_cache():
@@ -800,6 +835,8 @@ def _refresh_buyback_cache():
         logger.info(f"[DataEnrich] Buyback: {len(result)} stocks")
     except Exception as e:
         logger.warning(f"[DataEnrich] Buyback refresh failed: {e}")
+        if not _buyback_map:
+            _load_buyback_cache()
 
 
 def _refresh_mgmt_cache():
@@ -818,6 +855,8 @@ def _refresh_mgmt_cache():
         logger.info(f"[DataEnrich] Mgmt buy price: {len(result)} stocks")
     except Exception as e:
         logger.warning(f"[DataEnrich] Mgmt buy price refresh failed: {e}")
+        if not _mgmt_map:
+            _load_mgmt_cache()
 
 
 # ==================== enrich 入口 ====================
@@ -829,11 +868,12 @@ async def enrich_quotes(bonds: list) -> list:
 
     # 在锁内对所有缓存做一次性快照，避免后台刷新与 enrich 读之间的竞态
     with _cache_lock:
-        spot_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _spot_map.items()}
-        industry_snapshot = _industry_map.copy()
-        fin_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _fin_map.items()}
-        fund_flow_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _fund_flow_map.items()}
-        debt_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _debt_map.items()}
+        with _cache_lock:
+            spot_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _spot_map.items()}
+            industry_snapshot = dict(_industry_map)
+            fin_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _fin_map.items()}
+            fund_flow_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _fund_flow_map.items()}
+            debt_snapshot = {k: v.copy() if isinstance(v, dict) else v for k, v in _debt_map.items()}
         vol_snapshot = _vol_map.copy()
         buyback_snapshot = _buyback_map.copy()
         mgmt_snapshot = _mgmt_map.copy()
