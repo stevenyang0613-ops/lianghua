@@ -28,6 +28,7 @@ def _fix_ssl_certs():
 
 _fix_ssl_certs()
 
+import math
 import asyncio
 import logging
 import sys
@@ -40,6 +41,20 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+
+
+class SafeJSONResponse(JSONResponse):
+    """自动将 NaN/Infinity 转为 None 的 JSON 响应"""
+    def render(self, content: any) -> bytes:
+        import json
+        return json.dumps(content, ensure_ascii=False, allow_nan=False,
+                          default=_safe_json_default).encode(self.charset)
+
+
+def _safe_json_default(obj):
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 from app.config import settings
 from app.api.router import router
@@ -364,7 +379,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"{settings.app_name} shutdown complete")
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app = FastAPI(title=settings.app_name, lifespan=lifespan, default_response_class=SafeJSONResponse)
 
 if HAS_RATE_LIMIT and limiter:
     app.state.limiter = limiter
