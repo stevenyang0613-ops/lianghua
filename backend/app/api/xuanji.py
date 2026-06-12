@@ -672,8 +672,8 @@ def get_alpha_sources():
                     total_bonds = len(quotes)
                     premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
                     avg_premium = sum(premiums) / len(premiums) if premiums else 0.0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[alpha-sources] market_engine fallback failed: {e}")
 
         if stock_count == 0 and _de._spot_map:
             stock_count = len(_de._spot_map)
@@ -683,6 +683,8 @@ def get_alpha_sources():
                 dec = sum(1 for v in vals if v < -0.5)
                 ad_ratio = adv / dec if dec > 0 else 1.0
                 avg_chg = sum(vals) / len(vals)
+
+        logger.info(f"[alpha-sources] total_bonds={total_bonds} stock_count={stock_count} ad_ratio={ad_ratio:.2f} avg_chg={avg_chg:.2f}")
 
         if total_bonds > 0:
             ranges["A1"] = f"+{max(0.8, 2.0 - avg_premium * 0.02):.1f}~{2.5 - avg_premium * 0.01:.1f}%"
@@ -822,7 +824,7 @@ async def stress_test(
         neutral_top = neutral_candidates.nlargest(top_n, 'score') if len(neutral_candidates) > 0 else df
         neu_mean_score = _safe_float(neutral_top['score'].mean(), 0.4)
         neu_mean_hv = _safe_float(neutral_top['hv'].mean(), 20)
-        neu_dd = -abs(neu_mean_score * 3)
+        neu_dd = -abs((1 - neu_mean_score) * 3)
         neu_win = int(min(70, max(30, neu_mean_score * 45 + 25)))
         neu_return = neu_mean_score * 8 - neu_mean_hv * 0.02
 
@@ -1218,8 +1220,8 @@ async def strategy_summary(request: Request):
                         avg_score = float(top['score'].mean())
                         avg_hv = float(top['hv'].mean()) if 'hv' in top else 25.0
                         avg_premium = float(top['premium_ratio'].mean())
-                        neutral_yield = max(0.5, avg_score * 15.0)
-                        optimistic_yield = neutral_yield * 1.6 + avg_hv * 0.3
+                        neutral_yield = max(0.5, avg_score * 12.0 + 2.0)
+                        optimistic_yield = neutral_yield * 1.5 + avg_hv * 0.2
                         target_returns["neutral"] = f"{neutral_yield:.1f}%"
                         target_returns["optimistic"] = f"{optimistic_yield:.1f}%"
                         target_returns["exploration_ceiling"] = f"{optimistic_yield * 1.15:.1f}%"
