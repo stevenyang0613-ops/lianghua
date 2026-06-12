@@ -202,6 +202,27 @@ def _refresh_fund_flow_cache():
         logger.warning(f"[DataEnrich] Fund flow refresh failed: {e}")
 
 
+def _refresh_fin_cache():
+    global _fin_map
+    try:
+        logger.info("[DataEnrich] Refreshing financial data...")
+        df = ak.stock_yjbb_em(date="20251231")
+        result = {}
+        for _, r in df.iterrows():
+            code = str(r.get("股票代码", "")).strip()
+            if not code:
+                continue
+            result[code] = {
+                "roe": _sf(r.get("净资产收益率")),
+                "gpm": _sf(r.get("营业收入同比增长率")),
+            }
+        _fin_map = result
+        _save_cache(_FIN_CACHE, result)
+        logger.info(f"[DataEnrich] Financial: {len(result)} stocks")
+    except Exception as e:
+        logger.warning(f"[DataEnrich] Financial refresh failed: {e}")
+
+
 def _sf(v, default=None) -> Optional[float]:
     if v is None or v == "" or v == "nan":
         return default
