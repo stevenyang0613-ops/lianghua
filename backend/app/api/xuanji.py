@@ -228,6 +228,7 @@ async def get_xuanji_ranking(
             row = {
                 "code": b.code,
                 "name": b.name,
+                "stock_code": getattr(b, 'stock_code', ''),
                 "price": b.price,
                 "premium_ratio": b.premium_ratio,
                 "volume": b.volume or 0,
