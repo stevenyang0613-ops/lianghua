@@ -49,4 +49,7 @@ class ConvertibleQuote(BaseModel):
     iv: Optional[float] = Field(None, description="隐含波动率(%)")
     buyback_amount: Optional[float] = Field(None, description="回购金额(亿元)")
     mgmt_buy_price: Optional[float] = Field(None, description="管理层增持价")
+    turnover_rate: Optional[float] = Field(None, description="正股换手率(%)")
+    net_capital_flow: Optional[float] = Field(None, description="主力资金净流入(万元)")
+    net_capital_flow_pct: Optional[float] = Field(None, description="主力资金净流入占比(%)")
     timestamp: datetime = Field(default_factory=datetime.now)

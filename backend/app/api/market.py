@@ -65,6 +65,9 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "pe": getattr(q, "pe", None),
             "pb": getattr(q, "pb", None),
             "iv": getattr(q, "iv", None),
+            "turnover_rate": getattr(q, "turnover_rate", None),
+            "net_capital_flow": getattr(q, "net_capital_flow", None),
+            "net_capital_flow_pct": getattr(q, "net_capital_flow_pct", None),
         }
 
     def row_to_dict(r: dict) -> dict:
@@ -166,6 +169,9 @@ async def get_quote_by_code(request: Request, code: str):
             "pe": getattr(q, "pe", None),
             "pb": getattr(q, "pb", None),
             "iv": getattr(q, "iv", None),
+            "turnover_rate": getattr(q, "turnover_rate", None),
+            "net_capital_flow": getattr(q, "net_capital_flow", None),
+            "net_capital_flow_pct": getattr(q, "net_capital_flow_pct", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
