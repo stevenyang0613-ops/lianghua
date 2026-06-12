@@ -71,6 +71,16 @@ def get_stock_spot(stock_code: str) -> dict:
     return _spot_map.get(stock_code, {})
 
 
+def get_all_stock_change_pct() -> dict[str, float]:
+    """返回所有缓存的 stock_code -> change_pct 映射 (供正股涨跌幅填充)"""
+    global _spot_map
+    return {
+        code: info.get("change_pct")
+        for code, info in _spot_map.items()
+        if info.get("change_pct") is not None
+    }
+
+
 def get_financial(code: str) -> dict:
     global _fin_map
     return _fin_map.get(code, {})
