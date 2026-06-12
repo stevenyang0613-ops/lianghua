@@ -594,6 +594,13 @@ async def xuanji_health():
     return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "3.0"}
 
 
+def _safe_float(v, default=0.0):
+    try:
+        r = float(v)
+        return r if not (np.isnan(r) or np.isinf(r)) else default
+    except (TypeError, ValueError):
+        return default
+
 @router.get("/stress-test")
 async def stress_test(
     request: Request,
@@ -634,42 +641,51 @@ async def stress_test(
 
         # 场景1: 牛市(+15%)
         bull_top = df.nlargest(top_n, 'score').copy()
-        bull_hv = float(bull_top['hv'].mean()) if len(bull_top) > 0 else 30
-        bull_dd = -abs(float(bull_top['score'].mean()) * bull_hv / 100 * 0.5) if len(bull_top) > 0 else -5.0
-        bull_win = min(85, max(40, int(bull_top['score'].mean() * 60 + 25)))
-        bull_return = float(bull_top['score'].mean()) * 15 - bull_hv * 0.05
+        bull_mean_score = _safe_float(bull_top['score'].mean(), 0.5)
+        bull_mean_hv = _safe_float(bull_top['hv'].mean(), 20)
+        bull_dd = -abs(bull_mean_score * bull_mean_hv / 100 * 0.5)
+        bull_win = int(min(85, max(40, bull_mean_score * 60 + 25)))
+        bull_return = bull_mean_score * 15 - bull_mean_hv * 0.05
 
         # 场景2: 熊市(-15%)
         bear_top = df.nsmallest(top_n // 2, 'score').copy()
-        bear_hv = float(bear_top['hv'].mean()) if len(bear_top) > 0 else 30
-        bear_dd = -abs(float(bear_top['score'].mean()) * bear_hv / 100) if len(bear_top) > 0 else -10.0
-        bear_win = min(60, max(20, int((1 - bear_top['score'].mean()) * 40 + 15))) if len(bear_top) > 0 else 40
-        bear_return = -(1 - float(bear_top['score'].mean())) * 12 - bear_hv * 0.03
+        bear_mean_score = _safe_float(bear_top['score'].mean(), 0.3)
+        bear_mean_hv = _safe_float(bear_top['hv'].mean(), 20)
+        bear_dd = -abs(bear_mean_score * bear_mean_hv / 100)
+        bear_win = int(min(60, max(20, (1 - bear_mean_score) * 40 + 15)))
+        bear_return = -(1 - bear_mean_score) * 12 - bear_mean_hv * 0.03
 
         # 场景3: 暴跌(-25%)
-        crash_top = df[df['hv'] < df['hv'].quantile(0.3)].nlargest(top_n // 2, 'score')
-        crash_hv = float(crash_top['hv'].mean()) if len(crash_top) > 0 else 30
-        crash_dd = -abs(float(crash_top['score'].mean()) * crash_hv / 100 * 1.2) if len(crash_top) > 0 else -15.0
-        crash_win = min(50, max(10, int(crash_top['score'].mean() * 30 + 10))) if len(crash_top) > 0 else 25
-        crash_return = -(1 - float(crash_top['score'].mean())) * 20 - crash_hv * 0.05
+        crash_candidates = df[df['hv'] < df['hv'].quantile(0.3)] if len(df) > 0 else df
+        crash_top = crash_candidates.nlargest(min(top_n // 2, len(crash_candidates)), 'score') if len(crash_candidates) > 0 else df
+        crash_mean_score = _safe_float(crash_top['score'].mean(), 0.2)
+        crash_mean_hv = _safe_float(crash_top['hv'].mean(), 20)
+        crash_dd = -abs(crash_mean_score * crash_mean_hv / 100 * 1.2)
+        crash_win = int(min(50, max(10, crash_mean_score * 30 + 10)))
+        crash_return = -(1 - crash_mean_score) * 20 - crash_mean_hv * 0.05
 
         # 场景4: 震荡(±5%)
-        neutral_top = df[(df['hv'] > 15) & (df['hv'] < 35)].nlargest(top_n, 'score')
-        neu_hv = float(neutral_top['hv'].mean()) if len(neutral_top) > 0 else 25
-        neu_dd = -abs(float(neutral_top['score'].mean()) * 3) if len(neutral_top) > 0 else -4.0
-        neu_win = min(70, max(30, int(neutral_top['score'].mean() * 45 + 25))) if len(neutral_top) > 0 else 50
-        neu_return = float(neutral_top['score'].mean()) * 8 - neu_hv * 0.02
+        neutral_candidates = df[(df['hv'] > 5) & (df['hv'] < 50)] if len(df) > 0 else df
+        neutral_top = neutral_candidates.nlargest(top_n, 'score') if len(neutral_candidates) > 0 else df
+        neu_mean_score = _safe_float(neutral_top['score'].mean(), 0.4)
+        neu_mean_hv = _safe_float(neutral_top['hv'].mean(), 20)
+        neu_dd = -abs(neu_mean_score * 3)
+        neu_win = int(min(70, max(30, neu_mean_score * 45 + 25)))
+        neu_return = neu_mean_score * 8 - neu_mean_hv * 0.02
 
         # 场景5: 利率上行(+50bp)
-        rate_hv = float(df['hv'].mean()) if len(df) > 0 else 30
-        rate_dd = -abs(float(df['ytm'].mean()) * 0.5 + 2) if len(df) > 0 else -5.0
+        rate_mean_ytm = _safe_float(df['ytm'].mean(), 1.0)
+        rate_mean_hv = _safe_float(df['hv'].mean(), 20)
+        rate_dd = -abs(rate_mean_ytm * 0.5 + 2)
         rate_win = 35
-        rate_return = -float(df['ytm'].mean()) * 0.5 - rate_hv * 0.01
+        rate_return = -rate_mean_ytm * 0.5 - rate_mean_hv * 0.01
 
         # 场景6: 信用风险爆发
+        credit_mean_premium = _safe_float(df['premium_ratio'].mean(), 30)
+        credit_mean_hv = _safe_float(df['hv'].mean(), 20)
         credit_dd = -18.0
         credit_win = 20
-        credit_return = -float(df['premium_ratio'].mean()) * 0.15 - float(df['hv'].mean()) * 0.05
+        credit_return = -credit_mean_premium * 0.15 - credit_mean_hv * 0.05
 
         scenarios = [
             {
