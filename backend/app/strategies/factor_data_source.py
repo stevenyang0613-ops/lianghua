@@ -65,61 +65,73 @@ class FactorDataSource:
     _industry_pmi_lock = threading.Lock()
 
     def _refresh_industry_pmi(self) -> dict[str, float]:
-        """从申万行业指数 + 制造业 PMI 推导行业景气度"""
-        if not ak:
-            return {}
+        """行业景气度：聚合 enrichment 行业缓存的 PE/PB/ROE 数据，辅以 PMI 基准"""
         with self._industry_pmi_lock:
             if time.time() - self._industry_pmi_ts < 3600 and self._industry_pmi_map:
                 return self._industry_pmi_map
             try:
-                base_pmi = 50.0
-                try:
-                    pmi_df = ak.macro_china_pmi()
-                    if pmi_df is not None and not pmi_df.empty:
-                        latest = pmi_df.iloc[0]
-                        for col in ['今值', '制造业PMI', 'value', 'pmi']:
-                            if col in latest.index:
-                                v = latest[col]
-                                if pd.notna(v) and isinstance(v, (int, float)) and 30 < v < 70:
-                                    base_pmi = float(v)
-                                    break
-                except Exception as e:
-                    logger.debug(f"[FactorDS] PMI 拉取失败, 使用基线: {e}")
+                from app.engine import data_enrich as _de
 
-                sw_df = ak.sw_index_third_info() if hasattr(ak, 'sw_index_third_info') else None
+                industry_pe: dict[str, list[float]] = {}
+                for sc, info in (_de._spot_map or {}).items():
+                    pe = info.get("pe")
+                    if pe is None or not (5 < float(pe) < 200):
+                        continue
+                    ind = _de._industry_map.get(str(sc).strip())
+                    if not ind:
+                        continue
+                    industry_pe.setdefault(ind, []).append(float(pe))
+
+                industry_roe: dict[str, list[float]] = {}
+                for sc, info in (_de._fin_map or {}).items():
+                    roe = info.get("roe")
+                    if roe is None:
+                        continue
+                    ind = _de._industry_map.get(str(sc).strip())
+                    if not ind:
+                        continue
+                    industry_roe.setdefault(ind, []).append(float(roe))
+
                 result: dict[str, float] = {}
-                if sw_df is not None and not sw_df.empty:
-                    industry_codes = sw_df['行业代码'].astype(str).unique() if '行业代码' in sw_df.columns else []
-                    import random
-                    for code in industry_codes[:50]:
-                        try:
-                            hist = ak.sw_index_third_info(index_code=code) if False else None
-                        except Exception:
-                            hist = None
-                        row = sw_df[sw_df['行业代码'].astype(str) == str(code)].iloc[0]
-                        name = str(row.get('行业名称', code))
-                        pe = row.get('静态市盈率-加权平均', None)
-                        if pe is not None and pd.notna(pe) and isinstance(pe, (int, float)):
-                            offset = max(-5.0, min(5.0, (50.0 - float(pe)) * 0.1))
-                            result[name] = round(base_pmi + offset, 2)
+                for ind, pes in industry_pe.items():
+                    avg_pe = sum(pes) / len(pes)
+                    roes = industry_roe.get(ind, [])
+                    avg_roe = sum(roes) / len(roes) if roes else 0.0
+                    pe_score = max(0, min(50, 50 - (avg_pe - 30) * 0.5))
+                    roe_score = max(0, min(50, avg_roe * 2))
+                    result[ind] = round(50 + (pe_score + roe_score - 50) * 0.2, 2)
+
+                if not result and ak:
+                    base_pmi = 50.0
+                    try:
+                        pmi_df = ak.macro_china_pmi()
+                        if pmi_df is not None and not pmi_df.empty:
+                            for col in ['今值', '制造业PMI', 'value']:
+                                if col in pmi_df.columns:
+                                    v = pmi_df.iloc[0][col]
+                                    if pd.notna(v) and 30 < float(v) < 70:
+                                        base_pmi = float(v)
+                                        break
+                    except Exception:
+                        pass
+                    result = {"default": base_pmi}
+
                 self._industry_pmi_map = result
                 self._industry_pmi_ts = time.time()
-                logger.info(f"[FactorDS] 行业景气度: {len(result)} 个行业, base_pmi={base_pmi}")
+                logger.info(f"[FactorDS] 行业景气度: {len(result)} 个行业 (聚合 enrichment)")
                 return result
             except Exception as e:
-                logger.warning(f"[FactorDS] 行业 PMI 刷新失败: {e}")
+                logger.warning(f"[FactorDS] 行业景气度刷新失败: {e}")
                 return self._industry_pmi_map
 
     def get_industry_pmi(self, industry: str) -> Optional[float]:
-        """
-        获取行业景气度评分
-
-        数据来源：申万行业指数 + 制造业 PMI
-        """
+        """获取行业景气度评分 (基于 enrichment 缓存的 PE/ROE 聚合)"""
         if not industry:
             return None
         if not self._industry_pmi_map:
             self._refresh_industry_pmi()
+        if industry in self._industry_pmi_map:
+            return self._industry_pmi_map[industry]
         for k, v in self._industry_pmi_map.items():
             if industry in k or k in industry:
                 return v
@@ -127,35 +139,55 @@ class FactorDataSource:
 
     def get_industry_ranking(self, date: str = None) -> pd.DataFrame:
         """
-        获取行业景气度排名（来自申万一级行业涨跌幅）
+        获取行业景气度排名（基于 enrichment 行业缓存聚合）
 
-        返回：DataFrame with columns [industry, rank, score, trend]
+        返回：DataFrame with columns [industry, rank, score, trend, pe, roe, stock_count]
         """
-        if not ak:
-            return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
         try:
+            from app.engine import data_enrich as _de
             if not self._industry_pmi_map:
                 self._refresh_industry_pmi()
 
-            sw_df = ak.sw_index_first_info()
-            if sw_df is None or sw_df.empty:
-                return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
+            industry_stats: dict[str, dict] = {}
+            for sc, info in (_de._spot_map or {}).items():
+                pe = info.get("pe")
+                ind = _de._industry_map.get(str(sc).strip())
+                if not ind:
+                    continue
+                stats = industry_stats.setdefault(ind, {"pe": [], "change_pct": [], "count": 0})
+                if pe is not None and 5 < float(pe) < 200:
+                    stats["pe"].append(float(pe))
+                ch = info.get("change_pct")
+                if ch is not None:
+                    stats["change_pct"].append(float(ch))
+                stats["count"] += 1
+
+            for sc, info in (_de._fin_map or {}).items():
+                roe = info.get("roe")
+                ind = _de._industry_map.get(str(sc).strip())
+                if not ind or roe is None:
+                    continue
+                stats = industry_stats.setdefault(ind, {"pe": [], "change_pct": [], "count": 0})
+                stats.setdefault("roe", []).append(float(roe))
 
             scores = []
-            for _, row in sw_df.iterrows():
-                name = str(row.get('行业名称', row.get('名称', '')))
-                change_pct = row.get('涨跌幅', None) or row.get('今日涨跌幅', None)
-                if change_pct is None or pd.isna(change_pct):
-                    change_pct = 0.0
-                pmi = self.get_industry_pmi(name) or 50.0
-                score = max(0, min(100, (pmi - 50) * 5 + 50 + float(change_pct) * 3))
+            for name, s in industry_stats.items():
+                avg_pe = sum(s["pe"]) / len(s["pe"]) if s["pe"] else 30.0
+                avg_chg = sum(s["change_pct"]) / len(s["change_pct"]) if s["change_pct"] else 0.0
+                pmi = self._industry_pmi_map.get(name, 50.0)
+                score = max(0, min(100, pmi * 1.0 - (avg_pe - 25) * 0.3 + avg_chg * 2))
                 scores.append({
                     'industry': name,
                     'pmi': pmi,
+                    'pe': round(avg_pe, 2),
+                    'change_pct': round(avg_chg, 2),
+                    'stock_count': s["count"],
                     'score': round(score, 1),
-                    'change_pct': float(change_pct),
-                    'trend': 'up' if pmi > 52 else 'down' if pmi < 48 else 'neutral',
+                    'trend': 'up' if avg_chg > 0.5 else 'down' if avg_chg < -0.5 else 'neutral',
                 })
+
+            if not scores:
+                return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi', 'pe', 'change_pct', 'stock_count'])
 
             df = pd.DataFrame(scores)
             df = df.sort_values('score', ascending=False).reset_index(drop=True)
@@ -163,7 +195,7 @@ class FactorDataSource:
             return df
         except Exception as e:
             logger.warning(f"[FactorDS] 行业排名失败: {e}")
-            return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
+            return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi', 'pe', 'change_pct', 'stock_count'])
 
     # ==================== 股东数据 ====================
 
@@ -180,8 +212,7 @@ class FactorDataSource:
                 return
             try:
                 from datetime import datetime
-                today = datetime.now().strftime("%Y%m%d")
-                for offset in range(7):
+                for offset in range(30):
                     date_str = (datetime.now() - timedelta(days=offset)).strftime("%Y%m%d")
                     try:
                         df = ak.stock_gpzy_pledge_ratio_em(date=date_str)
@@ -279,62 +310,38 @@ class FactorDataSource:
 
     def get_market_sentiment(self) -> dict:
         """
-        市场情绪指标（来自东方财富涨跌停 + 实时行情聚合）
+        市场情绪指标（基于 enrichment 缓存的 spot 数据实时聚合涨跌数）
         """
-        if not ak:
-            return {}
         with self._market_sentiment_lock:
             if time.time() - self._market_sentiment_ts < 60 and self._market_sentiment_cache:
                 return self._market_sentiment_cache
             try:
-                from datetime import datetime
-                today_str = datetime.now().strftime("%Y%m%d")
-                limit_up = 0
-                limit_down = 0
-                try:
-                    zt_df = ak.stock_zt_pool_em(date=today_str)
-                    if zt_df is not None and not zt_df.empty:
-                        limit_up = len(zt_df)
-                except Exception:
-                    pass
-                try:
-                    dt_df = ak.stock_zt_pool_dtgc_em(date=today_str)
-                    if dt_df is not None and not dt_df.empty:
-                        limit_down = len(dt_df)
-                except Exception:
-                    pass
-
+                from app.engine import data_enrich as _de
                 advance = 0
                 decline = 0
-                total_turnover = 0.0
+                flat = 0
+                total_change = 0.0
                 stock_count = 0
-                try:
-                    spot_df = ak.stock_zh_a_spot()
-                    if spot_df is not None and not spot_df.empty:
-                        for _, r in spot_df.iterrows():
-                            code = str(r.get('代码', ''))
-                            if not code or code.startswith('bj'):
-                                continue
-                            ch = r.get('涨跌幅', 0)
-                            try:
-                                ch = float(ch)
-                            except (ValueError, TypeError):
-                                continue
-                            if ch > 0:
-                                advance += 1
-                            elif ch < 0:
-                                decline += 1
-                            stock_count += 1
-                except Exception:
-                    pass
+                for sc, info in (_de._spot_map or {}).items():
+                    ch = info.get("change_pct")
+                    if ch is None:
+                        continue
+                    total_change += float(ch)
+                    if float(ch) > 0.5:
+                        advance += 1
+                    elif float(ch) < -0.5:
+                        decline += 1
+                    else:
+                        flat += 1
+                    stock_count += 1
 
                 result = {
                     'advance_decline_ratio': round(advance / decline, 2) if decline > 0 else 0.0,
-                    'limit_up_count': limit_up,
-                    'limit_down_count': limit_down,
                     'advance_count': advance,
                     'decline_count': decline,
+                    'flat_count': flat,
                     'stock_count': stock_count,
+                    'avg_change_pct': round(total_change / stock_count, 2) if stock_count > 0 else 0.0,
                 }
                 self._market_sentiment_cache = result
                 self._market_sentiment_ts = time.time()
