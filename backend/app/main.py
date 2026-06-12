@@ -47,14 +47,20 @@ class SafeJSONResponse(JSONResponse):
     """自动将 NaN/Infinity 转为 None 的 JSON 响应"""
     def render(self, content: any) -> bytes:
         import json
-        return json.dumps(content, ensure_ascii=False, allow_nan=False,
-                          default=_safe_json_default).encode(self.charset)
+        cleaned = _clean_nan(content)
+        return json.dumps(cleaned, ensure_ascii=False, allow_nan=False).encode(self.charset)
 
 
-def _safe_json_default(obj):
-    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-        return None
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+def _clean_nan(obj):
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean_nan(v) for v in obj]
+    return obj
 
 from app.config import settings
 from app.api.router import router
