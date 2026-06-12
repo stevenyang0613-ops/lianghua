@@ -172,7 +172,7 @@ class FactorDataSource:
 
             scores = []
             for name, s in industry_stats.items():
-                avg_pe = sum(s["pe"]) / len(s["pe"]) if s["pe"] else 30.0
+                avg_pe = sum(s["pe"]) / len(s["pe"]) if s["pe"] else 25.0
                 avg_chg = sum(s["change_pct"]) / len(s["change_pct"]) if s["change_pct"] else 0.0
                 pmi = self._industry_pmi_map.get(name, 50.0)
                 score = max(0, min(100, pmi * 1.0 - (avg_pe - 25) * 0.3 + avg_chg * 2))
@@ -321,18 +321,29 @@ class FactorDataSource:
                 decline = 0
                 flat = 0
                 total_change = 0.0
+                valid_change_count = 0
                 stock_count = 0
                 for sc, info in (_de._spot_map or {}).items():
                     ch = info.get("change_pct")
-                    if ch is None:
-                        continue
-                    total_change += float(ch)
-                    if float(ch) > 0.5:
-                        advance += 1
-                    elif float(ch) < -0.5:
-                        decline += 1
-                    else:
-                        flat += 1
+                    if ch is not None:
+                        try:
+                            ch_f = float(ch)
+                            if ch_f == ch_f:
+                                total_change += ch_f
+                                valid_change_count += 1
+                        except (ValueError, TypeError):
+                            pass
+                    if ch is not None and str(ch) != 'nan':
+                        try:
+                            fch = float(ch)
+                            if fch > 0.5:
+                                advance += 1
+                            elif fch < -0.5:
+                                decline += 1
+                            else:
+                                flat += 1
+                        except (ValueError, TypeError):
+                            pass
                     stock_count += 1
 
                 result = {
@@ -341,7 +352,7 @@ class FactorDataSource:
                     'decline_count': decline,
                     'flat_count': flat,
                     'stock_count': stock_count,
-                    'avg_change_pct': round(total_change / stock_count, 2) if stock_count > 0 else 0.0,
+                    'avg_change_pct': round(total_change / valid_change_count, 2) if valid_change_count > 0 else 0.0,
                 }
                 self._market_sentiment_cache = result
                 self._market_sentiment_ts = time.time()
