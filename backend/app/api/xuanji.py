@@ -618,6 +618,14 @@ def get_alpha_sources():
     try:
         from app.strategies.factor_data_source import FactorDataSource
         fds = FactorDataSource()
+        try:
+            fds._refresh_industry_pmi()
+        except Exception:
+            pass
+        try:
+            fds._refresh_pledge()
+        except Exception:
+            pass
         sentiment = fds.get_market_sentiment()
         ad_ratio = float(sentiment.get("advance_decline_ratio", 1.0) or 1.0)
         avg_chg = float(sentiment.get("avg_change_pct", 0.0) or 0.0)
@@ -1150,6 +1158,9 @@ def strategy_summary(request: Request):
                     "premium_ratio": float(getattr(b, 'premium_ratio', 0) or 0),
                     "ytm": float(getattr(b, 'ytm', 0) or 0),
                     "remaining_years": float(getattr(b, 'remaining_years', 3) or 3),
+                    "dual_low": float(getattr(b, 'dual_low', 0) or 0),
+                    "change_pct": float(getattr(b, 'change_pct', 0) or 0),
+                    "volume": float(getattr(b, 'volume', 0) or 0),
                 } for b in bonds])
                 df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= 80) &
                         (df['price'] >= 80) & (df['price'] <= 180)]
