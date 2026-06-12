@@ -1,12 +1,12 @@
 """
 因子数据源模块
 
-接入外部数据源：
-- 行业PMI数据
+接入外部数据源（AKShare）：
+- 行业PMI/景气度数据 (macro_china_pmi + sw_index_third_info)
 - 行业景气度排名
-- 大股东质押率
-- 对外担保比例
-- 财务指标（资产负债率、流动比率、现金流）
+- 大股东质押率 (stock_gpzy_pledge_ratio_em)
+- 财务指标 (stock_zyjs_ths 个股主要指标)
+- 市场情绪指标 (ak.stock_market_activity_legu + stock_zt_pool_em)
 """
 
 from dataclasses import dataclass
@@ -15,8 +15,21 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import logging
+import threading
+import time
+
+try:
+    import akshare as ak
+except ImportError:
+    ak = None
 
 logger = logging.getLogger(__name__)
+
+_CACHE_DIR_FACTOR = None
+_INDUSTRY_PMI_FILE = "factor_industry_pmi.json"
+_FIN_INDICATOR_FILE = "factor_fin_indicator.json"
+_PLEDGE_FILE = "factor_pledge.json"
+_MARKET_SENTIMENT_FILE = "factor_market_sentiment.json"
 
 
 @dataclass
@@ -47,138 +60,324 @@ class FactorDataSource:
 
     # ==================== 行业数据 ====================
 
+    _industry_pmi_map: dict[str, float] = {}
+    _industry_pmi_ts: float = 0.0
+    _industry_pmi_lock = threading.Lock()
+
+    def _refresh_industry_pmi(self) -> dict[str, float]:
+        """从申万行业指数 + 制造业 PMI 推导行业景气度"""
+        if not ak:
+            return {}
+        with self._industry_pmi_lock:
+            if time.time() - self._industry_pmi_ts < 3600 and self._industry_pmi_map:
+                return self._industry_pmi_map
+            try:
+                base_pmi = 50.0
+                try:
+                    pmi_df = ak.macro_china_pmi()
+                    if pmi_df is not None and not pmi_df.empty:
+                        latest = pmi_df.iloc[0]
+                        for col in ['今值', '制造业PMI', 'value', 'pmi']:
+                            if col in latest.index:
+                                v = latest[col]
+                                if pd.notna(v) and isinstance(v, (int, float)) and 30 < v < 70:
+                                    base_pmi = float(v)
+                                    break
+                except Exception as e:
+                    logger.debug(f"[FactorDS] PMI 拉取失败, 使用基线: {e}")
+
+                sw_df = ak.sw_index_third_info() if hasattr(ak, 'sw_index_third_info') else None
+                result: dict[str, float] = {}
+                if sw_df is not None and not sw_df.empty:
+                    industry_codes = sw_df['行业代码'].astype(str).unique() if '行业代码' in sw_df.columns else []
+                    import random
+                    for code in industry_codes[:50]:
+                        try:
+                            hist = ak.sw_index_third_info(index_code=code) if False else None
+                        except Exception:
+                            hist = None
+                        row = sw_df[sw_df['行业代码'].astype(str) == str(code)].iloc[0]
+                        name = str(row.get('行业名称', code))
+                        pe = row.get('静态市盈率-加权平均', None)
+                        if pe is not None and pd.notna(pe) and isinstance(pe, (int, float)):
+                            offset = max(-5.0, min(5.0, (50.0 - float(pe)) * 0.1))
+                            result[name] = round(base_pmi + offset, 2)
+                self._industry_pmi_map = result
+                self._industry_pmi_ts = time.time()
+                logger.info(f"[FactorDS] 行业景气度: {len(result)} 个行业, base_pmi={base_pmi}")
+                return result
+            except Exception as e:
+                logger.warning(f"[FactorDS] 行业 PMI 刷新失败: {e}")
+                return self._industry_pmi_map
+
     def get_industry_pmi(self, industry: str) -> Optional[float]:
         """
-        获取行业PMI数据
+        获取行业景气度评分
 
-        数据来源：国家统计局、财新PMI
+        数据来源：申万行业指数 + 制造业 PMI
         """
-        # 实际实现需要接入真实数据源
-        # 这里使用模拟数据
-        industry_pmi_map = {
-            '电子': 52.5,
-            '计算机': 54.2,
-            '通信': 51.8,
-            '医药': 56.3,
-            '化工': 49.5,
-            '钢铁': 48.2,
-            '有色': 50.1,
-            '建材': 47.8,
-            '机械': 51.5,
-            '汽车': 53.2,
-            '家电': 55.1,
-            '食品饮料': 58.2,
-            '纺织服装': 50.5,
-            '银行': 62.5,
-            '非银金融': 60.8,
-            '房地产': 42.5,
-            '建筑装饰': 45.2,
-        }
-        return industry_pmi_map.get(industry, 50.0)
+        if not industry:
+            return None
+        if not self._industry_pmi_map:
+            self._refresh_industry_pmi()
+        for k, v in self._industry_pmi_map.items():
+            if industry in k or k in industry:
+                return v
+        return 50.0
 
     def get_industry_ranking(self, date: str = None) -> pd.DataFrame:
         """
-        获取行业景气度排名
+        获取行业景气度排名（来自申万一级行业涨跌幅）
 
         返回：DataFrame with columns [industry, rank, score, trend]
         """
-        industries = [
-            '电子', '计算机', '通信', '医药', '化工',
-            '钢铁', '有色', '建材', '机械', '汽车',
-            '家电', '食品饮料', '纺织服装', '银行', '非银金融',
-            '房地产', '建筑装饰',
-        ]
+        if not ak:
+            return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
+        try:
+            if not self._industry_pmi_map:
+                self._refresh_industry_pmi()
 
-        # 基于PMI模拟景气度评分
-        scores = []
-        for ind in industries:
-            pmi = self.get_industry_pmi(ind)
-            score = (pmi - 50) * 5 + 50  # 转换为0-100评分
-            scores.append({
-                'industry': ind,
-                'pmi': pmi,
-                'score': round(score, 1),
-                'trend': 'up' if pmi > 52 else 'down' if pmi < 48 else 'neutral',
-            })
+            sw_df = ak.sw_index_first_info()
+            if sw_df is None or sw_df.empty:
+                return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
 
-        df = pd.DataFrame(scores)
-        df = df.sort_values('score', ascending=False).reset_index(drop=True)
-        df['rank'] = df.index + 1
+            scores = []
+            for _, row in sw_df.iterrows():
+                name = str(row.get('行业名称', row.get('名称', '')))
+                change_pct = row.get('涨跌幅', None) or row.get('今日涨跌幅', None)
+                if change_pct is None or pd.isna(change_pct):
+                    change_pct = 0.0
+                pmi = self.get_industry_pmi(name) or 50.0
+                score = max(0, min(100, (pmi - 50) * 5 + 50 + float(change_pct) * 3))
+                scores.append({
+                    'industry': name,
+                    'pmi': pmi,
+                    'score': round(score, 1),
+                    'change_pct': float(change_pct),
+                    'trend': 'up' if pmi > 52 else 'down' if pmi < 48 else 'neutral',
+                })
 
-        return df
+            df = pd.DataFrame(scores)
+            df = df.sort_values('score', ascending=False).reset_index(drop=True)
+            df['rank'] = df.index + 1
+            return df
+        except Exception as e:
+            logger.warning(f"[FactorDS] 行业排名失败: {e}")
+            return pd.DataFrame(columns=['industry', 'rank', 'score', 'trend', 'pmi'])
 
     # ==================== 股东数据 ====================
 
+    _pledge_map: dict[str, float] = {}
+    _pledge_ts: float = 0.0
+    _pledge_lock = threading.Lock()
+
+    def _refresh_pledge(self):
+        """从东方财富全市场质押数据刷新"""
+        if not ak or not hasattr(ak, 'stock_gpzy_pledge_ratio_em'):
+            return
+        with self._pledge_lock:
+            if time.time() - self._pledge_ts < 3600 and self._pledge_map:
+                return
+            try:
+                from datetime import datetime
+                today = datetime.now().strftime("%Y%m%d")
+                for offset in range(7):
+                    date_str = (datetime.now() - timedelta(days=offset)).strftime("%Y%m%d")
+                    try:
+                        df = ak.stock_gpzy_pledge_ratio_em(date=date_str)
+                        if df is not None and not df.empty:
+                            for _, r in df.iterrows():
+                                code = str(r.get("股票代码", "")).strip()
+                                pct = r.get("质押比例", None)
+                                if code and pct is not None and pd.notna(pct):
+                                    try:
+                                        self._pledge_map[code] = float(pct)
+                                    except (ValueError, TypeError):
+                                        pass
+                            break
+                    except Exception:
+                        continue
+                self._pledge_ts = time.time()
+                logger.info(f"[FactorDS] 质押比例: {len(self._pledge_map)} 股票")
+            except Exception as e:
+                logger.warning(f"[FactorDS] 质押数据刷新失败: {e}")
+
     def get_shareholder_pledge_ratio(self, code: str) -> Optional[float]:
         """
-        获取大股东质押率
-
-        数据来源：中国证券登记结算公司、公告数据
+        获取大股东质押率(%)
+        数据来源：东方财富 stock_gpzy_pledge_ratio_em
         """
-        # 实际实现需要接入真实数据源
-        # 这里使用模拟数据
-        # 返回质押股份/总股本比例
-        return 25.0  # 模拟25%质押率
+        if not code:
+            return None
+        if not self._pledge_map:
+            self._refresh_pledge()
+        for prefix in (code, code[2:] if code.startswith(('sh', 'sz', 'bj')) else code):
+            if prefix in self._pledge_map:
+                return self._pledge_map[prefix]
+        return None
 
     def get_guarantee_ratio(self, code: str) -> Optional[float]:
         """
-        获取对外担保比例
-
-        数据来源：公司公告、财务报表
+        获取对外担保比例(%)
+        数据来源：上市公司临时公告(ak.stock_company_notice_report_em)
         """
-        # 实际实现需要接入真实数据源
-        # 返回担保金额/净资产比例
-        return 15.0  # 模拟15%担保比例
+        if not code or not ak or not hasattr(ak, 'stock_company_notice_report_em'):
+            return None
+        try:
+            from app.services.enrichment_finance import fetch_guarantee_ratio
+            return fetch_guarantee_ratio(code)
+        except Exception:
+            return None
 
     # ==================== 财务指标 ====================
 
     def get_financial_indicators(self, code: str) -> dict:
         """
-        获取财务指标
-
-        返回：资产负债率、流动比率、现金流等
+        获取财务指标（来自同花顺个股主要指标 stock_zyjs_ths）
         """
-        # 实际实现需要接入Wind/同花顺等数据源
-        # 这里使用模拟数据
-        return {
-            'asset_liability_ratio': 55.0,  # 资产负债率%
-            'current_ratio': 1.5,            # 流动比率
-            'quick_ratio': 1.2,              # 速动比率
-            'operating_cashflow': 500000000, # 经营现金流（元）
-            'interest_bearing_debt': 2000000000,  # 有息负债（元）
-            'net_profit_growth': 15.0,       # 净利润增长率%
-            'roe': 12.5,                     # ROE%
-            'gross_margin': 35.0,            # 毛利率%
-        }
+        if not code or not ak:
+            return {}
+        clean = code[2:] if code.startswith(('sh', 'sz', 'bj')) else code
+        try:
+            df = ak.stock_zyjs_ths(symbol=clean)
+            if df is None or df.empty:
+                return {}
+            result = {}
+            for _, r in df.iterrows():
+                name = str(r.get('指标', ''))
+                value = r.get('值', None)
+                if value is None or pd.isna(value):
+                    continue
+                try:
+                    fv = float(value)
+                except (ValueError, TypeError):
+                    continue
+                if '资产负债率' in name:
+                    result['asset_liability_ratio'] = fv
+                elif name in ('流动比率',):
+                    result['current_ratio'] = fv
+                elif name in ('速动比率',):
+                    result['quick_ratio'] = fv
+                elif '经营现金流' in name or '经营活动现金流' in name:
+                    result['operating_cashflow'] = fv
+                elif 'ROE' in name or '净资产收益率' in name:
+                    result['roe'] = fv
+                elif '毛利率' in name:
+                    result['gross_margin'] = fv
+                elif '净利润' in name and '增长' in name:
+                    result['net_profit_growth'] = fv
+            return result
+        except Exception as e:
+            logger.debug(f"[FactorDS] {code} 财务指标拉取失败: {e}")
+            return {}
 
     # ==================== 市场数据 ====================
 
+    _market_sentiment_cache: dict = {}
+    _market_sentiment_ts: float = 0.0
+    _market_sentiment_lock = threading.Lock()
+
     def get_market_sentiment(self) -> dict:
         """
-        获取市场情绪指标
+        市场情绪指标（来自东方财富涨跌停 + 实时行情聚合）
         """
-        # 实际实现需要接入真实数据源
-        return {
-            'advance_decline_ratio': 1.2,    # 涨跌比
-            'limit_up_count': 50,            # 涨停数
-            'limit_down_count': 10,          # 跌停数
-            'turnover_rate': 3.5,            # 换手率%
-            'new_high_count': 100,           # 创新高数
-            'new_low_count': 30,             # 创新低数
-        }
+        if not ak:
+            return {}
+        with self._market_sentiment_lock:
+            if time.time() - self._market_sentiment_ts < 60 and self._market_sentiment_cache:
+                return self._market_sentiment_cache
+            try:
+                from datetime import datetime
+                today_str = datetime.now().strftime("%Y%m%d")
+                limit_up = 0
+                limit_down = 0
+                try:
+                    zt_df = ak.stock_zt_pool_em(date=today_str)
+                    if zt_df is not None and not zt_df.empty:
+                        limit_up = len(zt_df)
+                except Exception:
+                    pass
+                try:
+                    dt_df = ak.stock_zt_pool_dtgc_em(date=today_str)
+                    if dt_df is not None and not dt_df.empty:
+                        limit_down = len(dt_df)
+                except Exception:
+                    pass
+
+                advance = 0
+                decline = 0
+                total_turnover = 0.0
+                stock_count = 0
+                try:
+                    spot_df = ak.stock_zh_a_spot()
+                    if spot_df is not None and not spot_df.empty:
+                        for _, r in spot_df.iterrows():
+                            code = str(r.get('代码', ''))
+                            if not code or code.startswith('bj'):
+                                continue
+                            ch = r.get('涨跌幅', 0)
+                            try:
+                                ch = float(ch)
+                            except (ValueError, TypeError):
+                                continue
+                            if ch > 0:
+                                advance += 1
+                            elif ch < 0:
+                                decline += 1
+                            stock_count += 1
+                except Exception:
+                    pass
+
+                result = {
+                    'advance_decline_ratio': round(advance / decline, 2) if decline > 0 else 0.0,
+                    'limit_up_count': limit_up,
+                    'limit_down_count': limit_down,
+                    'advance_count': advance,
+                    'decline_count': decline,
+                    'stock_count': stock_count,
+                }
+                self._market_sentiment_cache = result
+                self._market_sentiment_ts = time.time()
+                return result
+            except Exception as e:
+                logger.warning(f"[FactorDS] 市场情绪刷新失败: {e}")
+                return self._market_sentiment_cache
 
     def get_bond_market_stats(self) -> dict:
         """
-        获取转债市场统计
+        转债市场统计（从当前内存中的 quotes 实时聚合）
         """
-        return {
-            'total_count': 500,              # 转债总数
-            'avg_premium': 35.5,             # 平均溢价率%
-            'median_premium': 28.0,          # 中位数溢价率%
-            'avg_price': 120.5,              # 平均价格
-            'total_volume': 50000000000,     # 总成交额
-            'new_issue_count': 5,            # 新发数量
-        }
+        try:
+            from app.main import market_engine
+            quotes = []
+            if market_engine is not None:
+                try:
+                    quotes = list(market_engine.get_quotes() or [])
+                except Exception:
+                    quotes = []
+            if not quotes:
+                return {
+                    'total_count': 0,
+                    'avg_premium': 0.0,
+                    'median_premium': 0.0,
+                    'avg_price': 0.0,
+                    'total_volume': 0.0,
+                }
+            premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
+            prices = [float(getattr(q, 'price', 0) or 0) for q in quotes]
+            volumes = [float(getattr(q, 'volume', 0) or 0) for q in quotes]
+            sorted_p = sorted(premiums)
+            median = sorted_p[len(sorted_p) // 2] if sorted_p else 0.0
+            return {
+                'total_count': len(quotes),
+                'avg_premium': round(sum(premiums) / len(premiums), 2) if premiums else 0.0,
+                'median_premium': round(median, 2),
+                'avg_price': round(sum(prices) / len(prices), 2) if prices else 0.0,
+                'total_volume': round(sum(volumes), 2),
+            }
+        except Exception as e:
+            logger.debug(f"[FactorDS] 转债市场统计失败: {e}")
+            return {}
 
     # ==================== 因子计算 ====================
 
