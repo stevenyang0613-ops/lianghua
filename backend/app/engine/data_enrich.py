@@ -66,7 +66,7 @@ def _save_cache(path, data: dict):
     try:
         data["_ts"] = time.time()
         with open(path, "w") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False, default=str)
     except Exception as e:
         logger.debug(f"[DataEnrich] Cache save failed: {e}")
 
@@ -105,6 +105,16 @@ def get_fund_flow(code: str) -> dict:
     return _fund_flow_map.get(code, {})
 
 
+def _inject_spot_data(data: dict[str, dict]):
+    """由外部注入现货行情数据（避免重复请求 API）"""
+    global _spot_map, _spot_loaded
+    if data:
+        _spot_map = data
+        _spot_loaded = True
+        _save_cache(_SPOT_CACHE, data)
+        logger.info(f"[DataEnrich] Injected {len(data)} stock spot records from external")
+
+
 def get_debt_info(stock_code: str) -> dict:
     global _debt_map
     return _debt_map.get(stock_code, {})
@@ -135,8 +145,8 @@ def _load_spot_cache():
     if _spot_loaded:
         return
     cached = _load_cache(_SPOT_CACHE)
-    if _fresh(_SPOT_CACHE_TTL, cached):
-        _spot_map = cached
+    if cached:
+        _spot_map = {k: v for k, v in cached.items() if k != "_ts"}
     _spot_loaded = True
 
 
@@ -145,8 +155,8 @@ def _load_fin_cache():
     if _fin_loaded:
         return
     cached = _load_cache(_FIN_CACHE)
-    if _fresh(_FIN_CACHE_TTL, cached):
-        _fin_map = cached
+    if cached:
+        _fin_map = {k: v for k, v in cached.items() if k != "_ts"}
     _fin_loaded = True
 
 
@@ -155,7 +165,7 @@ def _load_fund_flow_cache():
     if _fund_flow_loaded:
         return
     cached = _load_cache(_FUND_FLOW_CACHE)
-    if _fresh(_FUND_FLOW_CACHE_TTL, cached):
+    if cached:
         _fund_flow_map = {k: v for k, v in cached.items() if k != "_ts"}
     _fund_flow_loaded = True
 
@@ -223,6 +233,9 @@ def _build_industry_cache():
 
 def _refresh_spot_cache():
     global _spot_map
+    if _spot_loaded and _spot_map:
+        logger.debug("[DataEnrich] Spot cache already loaded from external, skipping refresh")
+        return
     for attempt in range(3):
         try:
             logger.info(f"[DataEnrich] Refreshing stock spot (PE/PB/turnover) attempt {attempt+1}...")
@@ -319,7 +332,7 @@ def _refresh_fin_cache():
                 "profit_yoy": _sf(r.get("净利润-同比增长")),
             }
 
-            cur_rev = _sf(r.get("营业总收入-营业收入"))
+            cur_rev = _sf(r.get("营业总收入-营业总收入"))
             if cur_rev and cur_rev > 0 and code in old_rev:
                 try:
                     cagr = (math.pow(cur_rev / old_rev[code], 1.0 / 3.0) - 1) * 100
@@ -374,11 +387,12 @@ def _refresh_debt_cache():
             if debt_ratio is not None:
                 entry["debt_ratio"] = debt_ratio
 
-            if total_debt > 0:
+            if total_debt > 0 and cash + receivables + inventory >= 0:
                 approx_current_assets = cash + receivables + inventory
-                approx_current_ratio = approx_current_assets / (total_debt * 0.65)
-                if 0 < approx_current_ratio < 50:
-                    entry["current_ratio"] = round(approx_current_ratio, 2)
+                if approx_current_assets > 0:
+                    approx_current_ratio = approx_current_assets / (total_debt * 0.65)
+                    if 0 < approx_current_ratio < 50 and approx_current_ratio == approx_current_ratio:
+                        entry["current_ratio"] = round(approx_current_ratio, 2)
 
             if entry:
                 result[code] = entry
