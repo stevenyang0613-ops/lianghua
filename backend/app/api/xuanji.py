@@ -50,6 +50,7 @@ def _cleanup_cache():
 
 def _compute_hv_estimate(df: pd.DataFrame) -> pd.DataFrame:
     """计算历史波动率(HV) - 优先使用90日真实波动率，后备使用单日涨跌幅年化近似"""
+    df = df.copy()
     if df.empty:
         return df
 
@@ -69,7 +70,7 @@ def _compute_hv_estimate(df: pd.DataFrame) -> pd.DataFrame:
     # 对剩余没有HV的行，使用单日涨跌幅年化近似
     hv_missing = df['hv'].isna() | (df['hv'] <= 0) if 'hv' in df.columns else pd.Series(True, index=df.index)
     if hv_missing.any() and 'change_pct' in df.columns:
-        df.loc[hv_missing, 'hv'] = (df.loc[hv_missing, 'change_pct'].abs() * np.sqrt(252) * 0.6).clip(lower=3, upper=80)
+        df.loc[hv_missing, 'hv'] = (df.loc[hv_missing, 'change_pct'].abs() * np.sqrt(252) * 0.8).clip(lower=3, upper=80)
     if 'hv' not in df.columns:
         df['hv'] = 20.0
     df['hv'] = df['hv'].fillna(20.0).clip(lower=3, upper=80)
@@ -103,14 +104,15 @@ def _normalize_rank(series: pd.Series, ascending: bool = True) -> pd.Series:
     max_r = ranks.max()
     if pd.isna(max_r) or max_r <= 1:
         return pd.Series(0.5, index=series.index)
-    return (ranks - 1) / (max_r - 1)
+    return (max_r - ranks) / (max_r - 1)
 
 
 def _detect_market_state(df: pd.DataFrame) -> str:
     if df.empty:
         return "neutral"
     median_price = df['price'].median()
-    median_premium = df.get('premium_ratio', pd.Series([30])).median()
+    premium_col = 'premium_ratio' if 'premium_ratio' in df.columns else None
+    median_premium = df[premium_col].median() if premium_col and df[premium_col].notna().any() else 30.0
     if median_price > 140 and median_premium < 15:
         return "extreme_bull"
     if median_price > 125 and median_premium < 35:
@@ -133,10 +135,9 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     score_hv = _normalize_rank(df['hv'].fillna(hv_median if hv_median > 0 else 0), ascending=True)
 
     if 'change_pct' in df.columns:
-        df['momentum_5d'] = df['change_pct'].fillna(0) * 0.01
+        score_momentum = _normalize_rank(df['change_pct'].fillna(0), ascending=False)
     else:
-        df['momentum_5d'] = 0
-    score_momentum = _normalize_rank(df['momentum_5d'].fillna(0), ascending=False)
+        score_momentum = pd.Series(0.5, index=df.index)
 
     if 'ytm' in df.columns:
         score_ytm = _normalize_rank(df['ytm'].fillna(0), ascending=False)
@@ -285,7 +286,8 @@ async def get_xuanji_ranking(
             }
             for opt_col in ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
                             'buyback_amount', 'mgmt_buy_price', 'current_ratio',
-                            'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct']:
+                            'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
+                            'outstanding_scale']:
                 if hasattr(b, opt_col):
                     row[opt_col] = getattr(b, opt_col, None)
             rows.append(row)
@@ -386,6 +388,9 @@ async def get_xuanji_single(
     request: Request,
     code: str,
     market_state: str = Query("mild_bull"),
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
 ):
     """单只转债的璇玑十二因子详细评分 (基于全市场相对排名)"""
     try:
@@ -406,7 +411,9 @@ async def get_xuanji_single(
                 "conversion_value": b.conversion_value, "stock_price": b.stock_price,
             }
             for opt_col in ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
-                            'buyback_amount', 'mgmt_buy_price']:
+                            'buyback_amount', 'mgmt_buy_price', 'current_ratio',
+                            'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
+                            'outstanding_scale']:
                 if hasattr(b, opt_col):
                     row[opt_col] = getattr(b, opt_col, None)
             rows.append(row)
@@ -415,7 +422,7 @@ async def get_xuanji_single(
         df = _compute_hv_estimate(df)
 
         # Filter (consistent with ranking endpoint)
-        df = df[(df['premium_ratio'] <= 80) & (df['price'] >= 80) & (df['price'] <= 180) & (df['price'] > 0)]
+        df = df[(df['premium_ratio'] <= max_premium) & (df['price'] >= min_price) & (df['price'] <= max_price) & (df['price'] > 0)]
         if df.empty:
             raise HTTPException(status_code=404, detail="筛选后无有效数据")
 
@@ -790,16 +797,15 @@ async def stress_test(
         bull_top = df.nlargest(top_n, 'score').copy()
         bull_mean_score = _safe_float(bull_top['score'].mean(), 0.5)
         bull_mean_hv = _safe_float(bull_top['hv'].mean(), 20)
-        bull_dd = -abs(bull_mean_score * bull_mean_hv / 100 * 0.5)
+        bull_dd = -abs((1 - bull_mean_score) * bull_mean_hv / 100 * 0.5)
         bull_win = int(min(85, max(40, bull_mean_score * 60 + 25)))
         bull_return = bull_mean_score * 15 - bull_mean_hv * 0.05
 
-        # 场景2: 熊市(-15%)
         bear_top = df.nsmallest(top_n // 2, 'score').copy()
         bear_mean_score = _safe_float(bear_top['score'].mean(), 0.3)
         bear_mean_hv = _safe_float(bear_top['hv'].mean(), 20)
-        bear_dd = -abs(bear_mean_score * bear_mean_hv / 100)
-        bear_win = int(min(60, max(20, (1 - bear_mean_score) * 40 + 15)))
+        bear_dd = -abs((1 - bear_mean_score) * bull_mean_hv / 100)
+        bear_win = int(min(60, max(20, bear_mean_score * 40 + 15)))
         bear_return = -(1 - bear_mean_score) * 12 - bear_mean_hv * 0.03
 
         # 场景3: 暴跌(-25%)
@@ -807,7 +813,7 @@ async def stress_test(
         crash_top = crash_candidates.nlargest(min(top_n // 2, len(crash_candidates)), 'score') if len(crash_candidates) > 0 else df
         crash_mean_score = _safe_float(crash_top['score'].mean(), 0.2)
         crash_mean_hv = _safe_float(crash_top['hv'].mean(), 20)
-        crash_dd = -abs(crash_mean_score * crash_mean_hv / 100 * 1.2)
+        crash_dd = -abs((1 - crash_mean_score) * crash_mean_hv / 100 * 1.2)
         crash_win = int(min(50, max(10, crash_mean_score * 30 + 10)))
         crash_return = -(1 - crash_mean_score) * 20 - crash_mean_hv * 0.05
 
@@ -944,6 +950,8 @@ async def factor_contribution(
         weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
         df = _compute_xuanji_scores(df, market_state)
 
+        active_weights = df.attrs.get('active_weights', weights)
+
         # 取TopN
         top_df = df.nlargest(top_n, 'score')
 
@@ -953,7 +961,7 @@ async def factor_contribution(
             col = f"score_{factor_key}"
             if col in top_df.columns:
                 mean_score = float(top_df[col].mean())
-                weight = float(weights.get(factor_key, 0))
+                weight = float(active_weights.get(factor_key, 0))
                 contribution = mean_score * weight
                 factor_contributions.append({
                     "factor": factor_key,
@@ -1125,6 +1133,10 @@ async def strategy_comparison(
         mf_codes = set(mf_top['code'].tolist())
         sg_codes = set(sg_top['code'].tolist())
 
+        xuanji_count = max(len(xuanji_codes), 1)
+        mf_count = max(len(mf_codes), 1)
+        sg_count = max(len(sg_codes), 1)
+
         return {
             "top_n": top_n,
             "total_bonds": len(df),
@@ -1138,8 +1150,8 @@ async def strategy_comparison(
                     "avg_price": round(xuanji_avg_price, 2),
                     "selected": len(xuanji_top),
                     "overlap_with_xuanji": 100,
-                    "overlap_with_mf": round(len(xuanji_codes & mf_codes) / top_n * 100, 1),
-                    "overlap_with_sg": round(len(xuanji_codes & sg_codes) / top_n * 100, 1),
+                    "overlap_with_mf": round(len(xuanji_codes & mf_codes) / xuanji_count * 100, 1),
+                    "overlap_with_sg": round(len(xuanji_codes & sg_codes) / xuanji_count * 100, 1),
                 },
                 {
                     "id": "multi_factor",
@@ -1149,9 +1161,9 @@ async def strategy_comparison(
                     "avg_score": round(mf_avg_score, 4),
                     "avg_price": round(mf_avg_price, 2),
                     "selected": len(mf_top),
-                    "overlap_with_xuanji": round(len(mf_codes & xuanji_codes) / top_n * 100, 1),
+                    "overlap_with_xuanji": round(len(mf_codes & xuanji_codes) / mf_count * 100, 1),
                     "overlap_with_mf": 100,
-                    "overlap_with_sg": round(len(mf_codes & sg_codes) / top_n * 100, 1),
+                    "overlap_with_sg": round(len(mf_codes & sg_codes) / mf_count * 100, 1),
                 },
                 {
                     "id": "songgang_seven",
@@ -1161,8 +1173,8 @@ async def strategy_comparison(
                     "avg_score": round(sg_avg_score, 4),
                     "avg_price": round(sg_avg_price, 2),
                     "selected": len(sg_top),
-                    "overlap_with_xuanji": round(len(sg_codes & xuanji_codes) / top_n * 100, 1),
-                    "overlap_with_mf": round(len(sg_codes & mf_codes) / top_n * 100, 1),
+                    "overlap_with_xuanji": round(len(sg_codes & xuanji_codes) / sg_count * 100, 1),
+                    "overlap_with_mf": round(len(sg_codes & mf_codes) / sg_count * 100, 1),
                     "overlap_with_sg": 100,
                 },
             ]
@@ -1192,6 +1204,9 @@ async def strategy_summary(request: Request):
                     "premium_ratio": float(getattr(b, 'premium_ratio', 0) or 0),
                     "ytm": float(getattr(b, 'ytm', 0) or 0),
                     "remaining_years": float(getattr(b, 'remaining_years', 3) or 3),
+                    "dual_low": float(getattr(b, 'dual_low', 0) or 0),
+                    "change_pct": float(getattr(b, 'change_pct', 0) or 0),
+                    "volume": float(getattr(b, 'volume', 0) or 0),
                 } for b in bonds])
                 df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= 80) &
                         (df['price'] >= 80) & (df['price'] <= 180)]
