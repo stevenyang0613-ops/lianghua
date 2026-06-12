@@ -213,7 +213,7 @@ class AKShareAdapter(DataSourceAdapter):
                 if self._is_exchangeable_bond(code):
                     continue
                 rating = str(row.get("信用评级", "")).strip() or None
-                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating)
+                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating, stock_chg_map)
                 if bond:
                     bonds.append(bond)
             except (KeyError, ValueError, TypeError) as e:
@@ -320,7 +320,8 @@ class AKShareAdapter(DataSourceAdapter):
 
     def _row_to_quote(self, row: pd.Series, spot_map: dict, maturity_map: dict,
                       redeem_info: Optional[dict] = None,
-                      rating: Optional[str] = None) -> Optional[ConvertibleQuote]:
+                      rating: Optional[str] = None,
+                      stock_chg_map: Optional[dict] = None) -> Optional[ConvertibleQuote]:
         """将主数据行与补充数据合并为 Quote 对象，过滤退市和到期转债"""
         try:
             code = str(row.get("债券代码", row.get("代码", ""))).strip()
