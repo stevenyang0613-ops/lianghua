@@ -49,16 +49,30 @@ def _cleanup_cache():
 
 
 def _compute_hv_estimate(df: pd.DataFrame) -> pd.DataFrame:
-    """估算历史波动率(HV) - 基于单日涨跌幅的年化近似
-    
-    真实HV应基于20日滚动标准差计算。此处使用|change_pct|年化*0.6作为近似，
-    0.6近似E[|Z|]修正系数，将绝对值换算为标准差估计。
-    """
-    if 'change_pct' in df.columns:
-        df['hv'] = (df['change_pct'].abs() * np.sqrt(252) * 0.6).clip(lower=3, upper=80)
-    else:
+    """计算历史波动率(HV) - 优先使用90日真实波动率，后备使用单日涨跌幅年化近似"""
+    if df.empty:
+        return df
+
+    # 优先使用 data_enrich 缓存的90日真实波动率
+    if 'stock_code' in df.columns:
+        try:
+            from app.engine.data_enrich import get_volatility
+            for idx, row in df.iterrows():
+                stock_code = str(row.get('stock_code', '')).strip()
+                if stock_code:
+                    real_vol = get_volatility(stock_code)
+                    if real_vol is not None and real_vol > 0:
+                        df.at[idx, 'hv'] = real_vol
+        except Exception:
+            pass
+
+    # 对剩余没有HV的行，使用单日涨跌幅年化近似
+    hv_missing = df['hv'].isna() | (df['hv'] <= 0) if 'hv' in df.columns else pd.Series(True, index=df.index)
+    if hv_missing.any() and 'change_pct' in df.columns:
+        df.loc[hv_missing, 'hv'] = (df.loc[hv_missing, 'change_pct'].abs() * np.sqrt(252) * 0.6).clip(lower=3, upper=80)
+    if 'hv' not in df.columns:
         df['hv'] = 20.0
-    df['hv'] = df['hv'].fillna(20.0)
+    df['hv'] = df['hv'].fillna(20.0).clip(lower=3, upper=80)
     return df
 
 
@@ -220,6 +234,7 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     df['score_event'] = score_event
     df['score_delta'] = score_delta
     df['vol_factor'] = vol_factor
+    df.attrs['active_weights'] = active_weights
     return df
 
 
@@ -617,6 +632,10 @@ def get_alpha_sources():
     ranges: dict[str, str] = {}
     try:
         from app.strategies.factor_data_source import FactorDataSource
+        from app.engine import data_enrich as _de
+        _de._load_industry_cache()
+        _de._load_spot_cache()
+        _de._load_fin_cache()
         fds = FactorDataSource()
         try:
             fds._refresh_industry_pmi()
@@ -637,6 +656,26 @@ def get_alpha_sources():
         stats = fds.get_bond_market_stats()
         total_bonds = int(stats.get("total_count", 0) or 0)
         avg_premium = float(stats.get("avg_premium", 0.0) or 0.0)
+
+        if total_bonds == 0:
+            try:
+                from app.main import market_engine
+                quotes = market_engine.get_quotes() if market_engine else []
+                if quotes and len(quotes) > 0:
+                    total_bonds = len(quotes)
+                    premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
+                    avg_premium = sum(premiums) / len(premiums) if premiums else 0.0
+            except Exception:
+                pass
+
+        if stock_count == 0 and _de._spot_map:
+            stock_count = len(_de._spot_map)
+            vals = [info.get("change_pct") for info in _de._spot_map.values() if info.get("change_pct") is not None]
+            if vals:
+                adv = sum(1 for v in vals if v > 0.5)
+                dec = sum(1 for v in vals if v < -0.5)
+                ad_ratio = adv / dec if dec > 0 else 1.0
+                avg_chg = sum(vals) / len(vals)
 
         if total_bonds > 0:
             ranges["A1"] = f"+{max(0.8, 2.0 - avg_premium * 0.02):.1f}~{2.5 - avg_premium * 0.01:.1f}%"
@@ -688,10 +727,16 @@ def get_alpha_sources():
     except Exception:
         total_alpha_potential = "+6.1~12.8%/年"
 
+    return_path = [
+        {"version": "v1.0", "neutral": "5-8%", "optimistic": "7-10%"},
+        {"version": "v2.2", "neutral": "9.7%", "optimistic": "17.4%"},
+        {"version": "v3.0", "neutral": total_alpha_potential.replace("/年", "").replace("+", ""), "optimistic": "21.2%"},
+    ]
+
     return {
         "sources": sources,
         "total_alpha_potential": total_alpha_potential,
-        "return_path": "已迁移至 /api/v1/xuanji/summary (target_returns)",
+        "return_path": [],
     }
 
 
@@ -1128,9 +1173,8 @@ async def strategy_comparison(
 
 
 @router.get("/summary")
-def strategy_summary(request: Request):
+async def strategy_summary(request: Request):
     """策略总览: 一页式展示所有关键指标 (target_returns 基于实时行情估算)"""
-    import asyncio
     target_returns = {
         "neutral": None,
         "optimistic": None,
@@ -1140,17 +1184,7 @@ def strategy_summary(request: Request):
     try:
         engine = getattr(request.app.state, "engine", None)
         if engine is not None:
-            bonds = asyncio.run_coroutine_threadsafe(
-                engine.get_all_quotes(),
-                engine._loop if hasattr(engine, '_loop') else asyncio.get_event_loop()
-            ).result(timeout=15) if hasattr(engine, '_loop') else None
-            if not bonds:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    bonds = loop.run_until_complete(engine.get_all_quotes())
-                finally:
-                    loop.close()
+            bonds = await engine.get_all_quotes()
             if bonds:
                 df = pd.DataFrame([{
                     "code": b.code,
@@ -1158,9 +1192,6 @@ def strategy_summary(request: Request):
                     "premium_ratio": float(getattr(b, 'premium_ratio', 0) or 0),
                     "ytm": float(getattr(b, 'ytm', 0) or 0),
                     "remaining_years": float(getattr(b, 'remaining_years', 3) or 3),
-                    "dual_low": float(getattr(b, 'dual_low', 0) or 0),
-                    "change_pct": float(getattr(b, 'change_pct', 0) or 0),
-                    "volume": float(getattr(b, 'volume', 0) or 0),
                 } for b in bonds])
                 df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= 80) &
                         (df['price'] >= 80) & (df['price'] <= 180)]
