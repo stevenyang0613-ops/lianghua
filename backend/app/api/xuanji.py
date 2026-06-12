@@ -634,7 +634,7 @@ def get_market_weights():
 
 
 @router.get("/alpha-sources")
-def get_alpha_sources():
+def get_alpha_sources(request: Request):
     """12个Alpha源信息 (range 字段由相应模块从当前数据动态估算)"""
     ranges: dict[str, str] = {}
     try:
@@ -666,12 +666,22 @@ def get_alpha_sources():
 
         if total_bonds == 0:
             try:
-                from app.main import market_engine
-                quotes = market_engine.get_quotes() if market_engine else []
-                if quotes and len(quotes) > 0:
-                    total_bonds = len(quotes)
-                    premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
-                    avg_premium = sum(premiums) / len(premiums) if premiums else 0.0
+                engine = getattr(request.app.state, "engine", None)
+                if engine is not None:
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    try:
+                        quotes = loop.run_until_complete(engine.get_all_quotes())
+                    except Exception:
+                        quotes = []
+                    if quotes and len(quotes) > 0:
+                        total_bonds = len(quotes)
+                        premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
+                        avg_premium = sum(premiums) / len(premiums) if premiums else 0.0
             except Exception as e:
                 logger.debug(f"[alpha-sources] market_engine fallback failed: {e}")
 
