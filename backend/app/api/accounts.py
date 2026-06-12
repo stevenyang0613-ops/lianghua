@@ -2,7 +2,7 @@
 账户管理 API
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
@@ -40,6 +40,7 @@ class Account(BaseModel):
     account: str
     status: AccountStatus
     tags: List[str]
+    cash: float = 0.0
     createdAt: datetime
     updatedAt: datetime
 
@@ -95,6 +96,7 @@ async def add_account(account: AccountCreate):
         account=account.account,
         status=AccountStatus.active,
         tags=account.tags,
+        cash=0.0,
         createdAt=now,
         updatedAt=now,
     )
@@ -121,20 +123,57 @@ async def delete_account(account_id: str):
     return {"message": "Account deleted"}
 
 @router.post("/{account_id}/sync")
-async def sync_balance(account_id: str):
-    """同步账户资金"""
+async def sync_balance(account_id: str, request: Request = None):
+    """同步账户资金
+
+    若账户有真实持仓列表（positions 字段），从 market_engine 拉取最新行情重算市值与盈亏；
+    否则保持原始资金不变。
+    """
     if account_id not in accounts_db:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # 模拟同步
+    account = accounts_db[account_id]
+    positions = positions_db.get(account_id, [])
+
+    engine = None
+    if request is not None:
+        engine = getattr(request.app.state, "engine", None)
+
+    market_value = 0.0
+    profit_today = 0.0
+    profit_total = 0.0
+
+    if engine and positions:
+        for pos in positions:
+            try:
+                symbol = pos.symbol
+                q = await engine.get_quote(symbol) if hasattr(engine, 'get_quote') else None
+                if q is not None:
+                    current_price = float(getattr(q, 'price', 0) or 0)
+                    cost_price = float(pos.costPrice or 0)
+                    qty = float(pos.quantity or 0)
+                    market_value += current_price * qty
+                    change_pct = float(getattr(q, 'change_pct', 0) or 0)
+                    if change_pct != 0:
+                        prev_price = current_price / (1 + change_pct / 100)
+                        profit_today += (current_price - prev_price) * qty
+                    profit_total += (current_price - cost_price) * qty
+            except Exception:
+                continue
+    else:
+        market_value = sum(
+            float(p.costPrice or 0) * float(p.quantity or 0) for p in positions
+        )
+
+    available_cash = float(account.cash or 0) - market_value * 0.1
     balances_db[account_id] = AccountBalance(
         accountId=account_id,
-        totalAsset=100000.0 + (hash(account_id) % 100000),
-        availableCash=50000.0,
-        marketValue=40000.0,
-        frozenCash=10000.0,
-        profitToday=1000.0,
-        profitTotal=5000.0,
+        totalAsset=round(float(account.cash or 0) + market_value, 2),
+        availableCash=round(max(0, available_cash), 2),
+        marketValue=round(market_value, 2),
+        frozenCash=round(market_value * 0.1, 2),
+        profitToday=round(profit_today, 2),
+        profitTotal=round(profit_total, 2),
         updatedAt=datetime.utcnow(),
     )
     return balances_db[account_id]
@@ -145,20 +184,19 @@ async def get_positions(account_id: str):
     if account_id not in accounts_db:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # 模拟持仓数据
-    return [
-        Position(
-            accountId=account_id,
-            symbol="128001",
-            name="测试转债",
-            quantity=1000,
-            availableQuantity=1000,
-            costPrice=100.5,
-            currentPrice=105.2,
-            profit=4700.0,
-            profitPercent=4.67,
-        )
-    ]
+    return list(positions_db.get(account_id, []))
+
+
+@router.post("/{account_id}/positions", response_model=Position)
+async def add_position(account_id: str, position: Position):
+    """添加账户持仓（手动录入或券商同步后入库）"""
+    if account_id not in accounts_db:
+        raise HTTPException(status_code=404, detail="Account not found")
+    position.accountId = account_id
+    if position.profitPercent is None and position.costPrice:
+        position.profitPercent = (position.currentPrice - position.costPrice) / position.costPrice * 100
+    positions_db.setdefault(account_id, []).append(position)
+    return position
 
 @router.post("/groups", response_model=AccountGroup)
 async def create_group(name: str, accountIds: List[str], riskConfig: dict, allocationStrategy: str):

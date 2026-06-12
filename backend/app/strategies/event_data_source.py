@@ -6,6 +6,8 @@
 - 强赎公告
 - 回售公告
 - 其他重要公告
+
+数据来源：东方财富 stock_notice_report（每日全市场公告，含可转债/正股动态）
 """
 
 from dataclasses import dataclass, field
@@ -15,6 +17,12 @@ from enum import Enum
 import asyncio
 import re
 import logging
+import time
+
+try:
+    import akshare as ak
+except ImportError:
+    ak = None
 
 logger = logging.getLogger(__name__)
 
@@ -278,25 +286,32 @@ class EventDataSource:
                 await asyncio.sleep(60)  # 错误后等待1分钟
 
     async def _check_new_announcements(self) -> None:
-        """检查新公告（模拟实现）"""
-        # 实际实现需要接入巨潮资讯、交易所公告等数据源
-        # 这里是模拟示例
-
-        # 模拟：检测到下修公告
-        # event = BondEvent(
-        #     event_id="123456_downside_proposal_20260515",
-        #     event_type=EventType.DOWNSIDE_PROPOSAL,
-        #     code="123456",
-        #     name="示例转债",
-        #     title="关于向下修正转股价格的公告",
-        #     content="...",
-        #     publish_time=datetime.now().isoformat(),
-        #     source="cninfo",
-        #     impact_score=2.5,
-        #     action="buy",
-        #     details={'conversion_price': 15.5},
-        # )
-        # await self.broadcast(event)
+        """从东方财富 stock_notice_report 拉取当日可转债相关公告"""
+        if not ak or not hasattr(ak, 'stock_notice_report'):
+            return
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            today = datetime.now().strftime("%Y%m%d")
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                df = await loop.run_in_executor(ex, lambda: ak.stock_notice_report(symbol='全部', date=today))
+            if df is None or df.empty:
+                return
+            for _, row in df.iterrows():
+                title = str(row.get('公告标题', ''))
+                code = str(row.get('代码', ''))
+                name = str(row.get('名称', ''))
+                publish_time = str(row.get('公告日期', ''))
+                if not any(kw in title for kw in self._config.keywords):
+                    continue
+                if not (code.startswith('1') or code.startswith('5')):
+                    continue
+                content = title
+                event = self._parse_announcement(content, code, name, title, publish_time, 'eastmoney')
+                if event:
+                    await self.broadcast(event)
+        except Exception as e:
+            logger.debug(f"[EventSource] 公告拉取失败: {e}")
         pass
 
     def stop_monitoring(self) -> None:
