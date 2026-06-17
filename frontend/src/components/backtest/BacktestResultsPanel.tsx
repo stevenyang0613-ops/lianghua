@@ -106,17 +106,17 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
       {/* 绩效指标卡片 */}
       <Card title="绩效指标" size="small" style={{ marginBottom: 12 }}>
         <Row gutter={[16, 16]}>
-          <Col span={6}>
+          <Col span={8}>
             <Statistic title="总收益率" value={result.metrics.total_return_pct} suffix="%" precision={2}
               valueStyle={{ color: result.metrics.total_return_pct >= 0 ? '#cf1322' : '#389e0d' }} />
           </Col>
-          <Col span={6}>
+          <Col span={8}>
             <Statistic title="年化收益率" value={result.metrics.annual_return_pct} suffix="%" precision={2} />
           </Col>
-          <Col span={6}>
+          <Col span={8}>
             <Statistic title="最大回撤" value={result.metrics.max_drawdown_pct} suffix="%" precision={2} valueStyle={{ color: '#faad14' }} />
           </Col>
-          <Col span={6}>
+          <Col span={4}>
             <Statistic title="Sharpe" value={result.metrics.sharpe_ratio} precision={3} />
           </Col>
           <Col span={4}>
@@ -137,8 +137,18 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
           <Col span={4}>
             <Statistic title="Calmar" value={result.metrics.calmar_ratio} precision={2} />
           </Col>
+          <Col span={4}>
+            <Statistic title="Sortino" value={result.metrics.sortino_ratio} precision={3} />
+          </Col>
         </Row>
       </Card>
+
+      {/* 数据来源 */}
+      {result.strategy_name && (
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
+          数据来源: {result.strategy_name}
+        </Typography.Text>
+      )}
 
       {/* 净值曲线 */}
       <Card title="净值曲线" size="small" style={{ marginBottom: 12 }}>
@@ -146,6 +156,24 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
           <ReactEChartsCore echarts={echarts} option={equityOption} style={{ height: 300 }} />
         )}
       </Card>
+
+      {/* 月度收益 */}
+      {result.monthly_returns && result.monthly_returns.length > 0 && (
+        <Card title="月度收益" size="small" style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {result.monthly_returns.map((m, i) => (
+              <div key={i} style={{ 
+                padding: '4px 8px', 
+                borderRadius: 4, 
+                backgroundColor: m.return_pct >= 0 ? '#f6ffed' : '#fff2f0',
+                fontSize: 12 
+              }}>
+                {m.year}-{String(m.month).padStart(2, '0')}: {m.return_pct >= 0 ? '+' : ''}{m.return_pct.toFixed(1)}%
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* 交易明细 */}
       <Collapse ghost>

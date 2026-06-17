@@ -164,7 +164,8 @@ class AIAssistant:
         elif self.config.provider == LLMProvider.ANTHROPIC and ANTHROPIC_AVAILABLE:
             response = self._call_anthropic(messages, stream)
         else:
-            response = self._mock_response(message)
+            logger.warning("[AI] 没有可用的 LLM 提供者（需配置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）")
+            response = "AI 助手暂不可用：未配置任何 LLM API 密钥。"
 
         # 记录历史
         self._conversation_history.append({"role": "user", "content": message})
@@ -256,17 +257,6 @@ class AIAssistant:
         except Exception as e:
             logger.error(f"[AI] Anthropic调用失败: {e}")
             return f"抱歉，AI服务暂时不可用: {e}"
-
-    def _mock_response(self, message: str) -> str:
-        """模拟响应"""
-        return f"""这是一个模拟响应。在实际使用中，需要配置LLM API密钥。
-
-您的问题是: {message}
-
-建议:
-1. 配置OPENAI_API_KEY环境变量
-2. 或者配置ANTHROPIC_API_KEY环境变量
-3. 或者使用本地LLM模型"""
 
     def analyze_portfolio(self, portfolio: Dict) -> str:
         """分析组合"""

@@ -53,13 +53,13 @@ class MacroData:
     shibor_1m: float = 0.0
 
     # === 宏观 ===
-    pmi_current: float = 50.0
-    pmi_prev: float = 50.0
-    cpi: float = 2.0
+    pmi_current: float = 0.0
+    pmi_prev: float = 0.0
+    cpi: float = 0.0
     ppi: float = 0.0
-    m2_growth: float = 10.0
-    social_financing_growth: float = 10.0
-    gdp_growth: float = 5.0
+    m2_growth: float = 0.0
+    social_financing_growth: float = 0.0
+    gdp_growth: float = 0.0
 
     # === 转债市场 ===
     cb_median_premium: float = 0.0
@@ -79,8 +79,8 @@ class MacroData:
     stock_index_ma60: float = 0.0
     stock_pe_median: float = 0.0
     stock_pb_median: float = 0.0
-    stock_pe_percentile: float = 50.0
-    stock_pb_percentile: float = 50.0
+    stock_pe_percentile: float = 0.0
+    stock_pb_percentile: float = 0.0
 
     # === 资金流向 ===
     north_bound_net_flow: float = 0.0
@@ -88,7 +88,7 @@ class MacroData:
     margin_balance: float = 0.0
     margin_balance_change: float = 0.0
     margin_buy_ratio: float = 0.0
-    industry_net_inflow: float = 50.0
+    industry_net_inflow: float = 0.0
 
     # === 宏观扩展 ===
     industrial_output: float = 0.0
@@ -283,11 +283,11 @@ class MacroDataService:
         """计算数据完整度（覆盖全部关键字段）"""
         checks = [
             ("treasury_10y", data.treasury_10y_yield > 0, 0.06),
-            ("pmi", 0 < data.pmi_current < 100 and data.pmi_current != 50.0, 0.06),
-            ("cpi_ppi", data.cpi != 2.0 or data.ppi != 0.0, 0.04),
-            ("m2", data.m2_growth > 0 and data.m2_growth != 10.0, 0.05),
-            ("social_fin", data.social_financing_growth > 0 and data.social_financing_growth != 10.0, 0.04),
-            ("gdp", data.gdp_growth > 0 and data.gdp_growth != 5.0, 0.04),
+            ("pmi", 0 < data.pmi_current < 100, 0.06),
+            ("cpi_ppi", data.cpi > 0 or data.ppi != 0.0, 0.04),
+            ("m2", data.m2_growth > 0, 0.05),
+            ("social_fin", data.social_financing_growth > 0, 0.04),
+            ("gdp", data.gdp_growth > 0, 0.04),
             ("shibor", data.shibor_overnight > 0, 0.04),
             ("credit_spread", data.credit_spread_aa > 0, 0.04),
             ("market_stats", data.advance_count > 0 or data.decline_count > 0, 0.04),
@@ -297,7 +297,7 @@ class MacroDataService:
             ("north_bound", data.north_bound_net_flow != 0, 0.05),
             ("margin", data.margin_balance > 0, 0.05),
             ("main_force", data.main_force_net_flow != 0, 0.04),
-            ("industry_flow", data.industry_net_inflow != 50.0, 0.04),
+            ("industry_flow", data.industry_net_inflow != 0, 0.04),
             ("pe_pb", data.stock_pe_median > 0 and data.stock_pb_median > 0, 0.06),
             ("industrial", data.industrial_output != 0, 0.04),
             ("retail", data.retail_sales != 0, 0.04),

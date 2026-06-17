@@ -154,7 +154,7 @@ export function addToSyncQueue(key: string, data: unknown, operation: 'create' |
 
 export function getSyncQueue(): SyncQueueItem[] {
   const saved = localStorage.getItem(SYNC_QUEUE_KEY)
-  return savedJsonParse<SyncQueueItem[]>(saved, [])
+  return safeJsonParse<SyncQueueItem[]>(saved, [])
 }
 
 export function clearSyncQueue(): void {

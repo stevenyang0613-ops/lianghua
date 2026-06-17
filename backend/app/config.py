@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings
 
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = _BACKEND_DIR.parent
+_DEFAULT_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
     app_name: str = "LiangHua"
@@ -11,7 +15,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8765
     debug: bool = False
-    db_path: str = str(Path(__file__).parent.parent / "data" / "market.db")
+    db_path: str = str(Path.home() / ".lianghua" / "market.db")
     ws_ping_interval: int = 30
     market_refresh_interval: int = 60
     trading_refresh_interval: int = 10
@@ -37,17 +41,38 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
+    TAVILY_API_KEY: str = ""
+    GITHUB_TOKEN: str = ""
 
     # 券商 API
     EASTMONEY_API_KEY: str = ""
     HUATAI_API_KEY: str = ""
     HUATAI_API_SECRET: str = ""
 
+    # Tushare Pro (专业金融数据)
+    TUSHARE_TOKEN: str = ""
+
+    # AKShare 代理配置
+    AKSHARE_PROXY_GATEWAY: str = "101.201.173.125"
+    AKSHARE_PROXY_TOKEN: str = "20260614AE9RZAEJ"
+    AKSHARE_PROXY_ENABLED: bool = True
+    AKSHARE_PROXY_RETRY: int = 15
+
     # 日志
+    LOG_DIR: str = str(Path.home() / "Library" / "Logs" / "LiangHua")
+
+    # DuckDB
+    DUCKDB_VACUUM_INTERVAL_HOURS: int = 24
+
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/lianghua.log"
 
-    model_config = {"env_prefix": "LH_"}
+    model_config = {
+        "env_prefix": "LH_",
+        "env_file": str(_DEFAULT_ENV_FILE) if _DEFAULT_ENV_FILE.exists() else None,
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -182,15 +182,15 @@ class EnhancedMarketData:
     stock_index_ma60: float = 0.0        # 沪深300 60日均线
     stock_pe_median: float = 0.0         # 全市场PE中位数
     stock_pb_median: float = 0.0         # 全市场PB中位数
-    stock_pe_percentile: float = 50.0    # PE历史分位数(%)
-    stock_pb_percentile: float = 50.0    # PB历史分位数(%)
+    stock_pe_percentile: float = 0.0     # PE历史分位数(%)
+    stock_pb_percentile: float = 0.0     # PB历史分位数(%)
     
     # === 技术指标 ===
     ma_arrangement: str = "neutral"      # MA排列: bullish/bearish/neutral
     macd_signal: str = "neutral"         # MACD信号
-    rsi_14: float = 50.0                 # RSI(14)
-    bollinger_position: float = 0.5      # 布林带位置 0-1
-    volume_ratio: float = 1.0            # 量比
+    rsi_14: float = 0.0                  # RSI(14)
+    bollinger_position: float = 0.0      # 布林带位置 0-1
+    volume_ratio: float = 0.0            # 量比
     
     # === 筹码/资金 ===
     main_force_net_flow: float = 0.0     # 主力净流入(亿)
@@ -206,37 +206,37 @@ class EnhancedMarketData:
     term_spread: float = 0.0             # 期限利差(bp)
     
     # === 宏观 ===
-    pmi: float = -1.0                    # PMI当月（-1=无数据，50=荣枯线）
-    pmi_prev: float = -1.0               # PMI上月（-1=无数据）
-    cpi: float = 2.0                     # CPI当月同比(%)
+    pmi: float = 0.0                     # PMI当月（0=无数据，50=荣枯线）
+    pmi_prev: float = 0.0                # PMI上月（0=无数据）
+    cpi: float = 0.0                     # CPI当月同比(%)
     ppi: float = 0.0                     # PPI当月同比(%)
-    m2_growth: float = 10.0              # M2同比增速(%)
-    social_financing_growth: float = 10.0  # 社融同比增速(%)
-    industrial_output: float = 5.0       # 工业增加值同比(%)
-    retail_sales: float = 5.0            # 社零同比(%)
-    export_growth: float = 5.0           # 出口同比(%)
-    gdp_growth: float = 5.0              # GDP同比增速(%)
+    m2_growth: float = 0.0              # M2同比增速(%)
+    social_financing_growth: float = 0.0  # 社融同比增速(%)
+    industrial_output: float = 0.0       # 工业增加值同比(%)
+    retail_sales: float = 0.0            # 社零同比(%)
+    export_growth: float = 0.0           # 出口同比(%)
+    gdp_growth: float = 0.0              # GDP同比增速(%)
     
     # === 情绪 ===
-    advance_decline_ratio: float = 1.0   # 涨跌比
+    advance_decline_ratio: float = 0.0   # 涨跌比
     limit_up_count: int = 0              # 涨停数
     limit_down_count: int = 0            # 跌停数
     new_high_count: int = 0              # 60日新高数
     new_low_count: int = 0               # 60日新低数
-    pcr_ratio: float = 1.0               # 认沽/认购比
+    pcr_ratio: float = 0.0               # 认沽/认购比（0=无数据）
     vix_index: float = 0.0               # 波动率指数（0=无数据）
     new_accounts: float = 0.0            # 新增开户数(万)
     margin_buy_ratio: float = 0.0        # 融资买入占比(%)
     market_turnover: float = 0.0         # 全市场换手率(%)
     
     # === 消息/政策 ===
-    policy_signal_score: float = 50.0    # 政策信号评分 0-100
-    event_impact_score: float = 50.0     # 事件冲击评分 0-100
-    industry_cycle_score: float = 50.0   # 产业链景气评分 0-100
-    earnings_surprise_ratio: float = 0.5 # 盈利超预期比例
+    policy_signal_score: float = 50.0     # 政策信号评分 0-100
+    event_impact_score: float = 50.0      # 事件冲击评分 0-100
+    industry_cycle_score: float = 50.0    # 产业链景气评分 0-100
+    earnings_surprise_ratio: float = 0.0 # 盈利超预期比例
 
     # === 资金/流向专用字段 ===
-    industry_net_inflow_ratio: float = 50.0  # 行业净流入占比评分 0-100（与industry_cycle_score独立）
+    industry_net_inflow_ratio: float = 50.0  # 行业净流入占比评分 0-100
     
     # === 元数据 ===
     data_completeness: float = 0.0       # 数据完整度 0-1（默认0，需计算后才设置）
@@ -460,7 +460,7 @@ class EnhancedTimingModel:
         
         # 1.2 纯债YTM中位数评分
         ytm = data.cb_ytm_median
-        ytm_score = linear_score(ytm, -2, 5, invert=False)
+        ytm_score = safe_score(ytm, lambda v: linear_score(v, -2, 5, invert=False))
         sub_factors.append(FactorScore(
             name="纯债YTM中位数", score=ytm_score, weight=0.20,
             category="valuation", raw_value=ytm,
@@ -487,7 +487,7 @@ class EnhancedTimingModel:
         
         # 1.4 PE历史分位数评分
         pe_pct = data.stock_pe_percentile
-        pe_score = linear_score(pe_pct, 10, 90, invert=True)
+        pe_score = safe_score(pe_pct, lambda v: linear_score(v, 10, 90, invert=True))
         sub_factors.append(FactorScore(
             name="PE历史分位数", score=pe_score, weight=0.15,
             category="valuation", raw_value=pe_pct,
@@ -497,7 +497,7 @@ class EnhancedTimingModel:
         
         # 1.5 PB历史分位数评分
         pb_pct = data.stock_pb_percentile
-        pb_score = linear_score(pb_pct, 10, 90, invert=True)
+        pb_score = safe_score(pb_pct, lambda v: linear_score(v, 10, 90, invert=True))
         sub_factors.append(FactorScore(
             name="PB历史分位数", score=pb_score, weight=0.15,
             category="valuation", raw_value=pb_pct,
@@ -524,7 +524,7 @@ class EnhancedTimingModel:
         
         # 2.1 盈利超预期比例
         surprise = data.earnings_surprise_ratio
-        surprise_score = sigmoid_score(surprise, 0.5, steepness=4)
+        surprise_score = safe_score(surprise, lambda v: sigmoid_score(v, 0.5, steepness=4))
         sub_factors.append(FactorScore(
             name="盈利超预期比例", score=surprise_score, weight=0.25,
             category="fundamental", raw_value=surprise,
@@ -534,7 +534,7 @@ class EnhancedTimingModel:
         
         # 2.2 GDP增速贡献
         gdp = data.gdp_growth
-        gdp_score = sigmoid_score(gdp, 5.0, steepness=2)
+        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="GDP增速", score=gdp_score, weight=0.20,
             category="fundamental", raw_value=gdp,
@@ -544,7 +544,7 @@ class EnhancedTimingModel:
         
         # 2.3 工业增加值
         industrial = data.industrial_output
-        ind_score = sigmoid_score(industrial, 5.0, steepness=2)
+        ind_score = safe_score(industrial, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="工业增加值增速", score=ind_score, weight=0.20,
             category="fundamental", raw_value=industrial,
@@ -589,7 +589,7 @@ class EnhancedTimingModel:
         
         # 2.6 社零增速
         retail = data.retail_sales
-        retail_score = sigmoid_score(retail, 5.0, steepness=2)
+        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="社零增速", score=retail_score, weight=0.10,
             category="fundamental", raw_value=retail,
@@ -615,7 +615,7 @@ class EnhancedTimingModel:
         
         # 3.1 机构持仓变化
         inst = data.institutional_holding_change
-        inst_score = sigmoid_score(inst, 0, steepness=5)
+        inst_score = safe_score(inst, lambda v: sigmoid_score(v, 0, steepness=5))
         sub_factors.append(FactorScore(
             name="机构持仓变化", score=inst_score, weight=0.30,
             category="chip", raw_value=inst,
@@ -655,7 +655,7 @@ class EnhancedTimingModel:
         # 3.3 转债破面比例（间接反映大股东减持压力/恐慌情绪）
         if data.cb_count > 0 and data.cb_below_par_count >= 0:
             pledge_ratio = data.cb_below_par_count / data.cb_count * 100
-            pledge_score = linear_score(pledge_ratio, 5, 25, invert=True)
+            pledge_score = safe_score(pledge_ratio, lambda v: linear_score(v, 5, 25, invert=True))
             pledge_signal = "bullish" if pledge_ratio > 15 else "bearish" if pledge_ratio < 5 else "neutral"
             pledge_desc = f"低于面值转债占比{pledge_ratio:.1f}%，{'恐慌筹码出清' if pledge_ratio>15 else '关注' if pledge_ratio<5 else '正常'}"
         else:
@@ -773,7 +773,7 @@ class EnhancedTimingModel:
         
         # 4.6 行业资金流向（净流入行业占比）
         industry_flow = data.industry_net_inflow_ratio
-        ind_flow_score = sigmoid_score(industry_flow, 50, steepness=0.06)
+        ind_flow_score = safe_score(industry_flow, lambda v: sigmoid_score(v, 50, steepness=0.06))
         ind_flow_signal = "bullish" if industry_flow > 60 else "bearish" if industry_flow < 40 else "neutral"
         ind_flow_desc = f"行业净流入占比{industry_flow:.0f}分，{'多数行业净流入' if industry_flow>60 else '多数行业净流出' if industry_flow<40 else '分化'}"
         sub_factors.append(FactorScore(
@@ -886,7 +886,7 @@ class EnhancedTimingModel:
         
         # 5.6 M2增速
         m2 = data.m2_growth
-        m2_score = sigmoid_score(m2, 10, steepness=2)
+        m2_score = safe_score(m2, lambda v: sigmoid_score(v, 10, steepness=2))
         sub_factors.append(FactorScore(
             name="M2增速", score=m2_score, weight=0.12,
             category="liquidity", raw_value=m2,
@@ -896,7 +896,7 @@ class EnhancedTimingModel:
         
         # 5.7 社融增速
         sf = data.social_financing_growth
-        sf_score = sigmoid_score(sf, 10, steepness=2)
+        sf_score = safe_score(sf, lambda v: sigmoid_score(v, 10, steepness=2))
         sub_factors.append(FactorScore(
             name="社融增速", score=sf_score, weight=0.10,
             category="liquidity", raw_value=sf,
@@ -1058,7 +1058,7 @@ class EnhancedTimingModel:
         
         # 6.1 涨跌比
         ad_ratio = data.advance_decline_ratio
-        ad_score = sigmoid_score(ad_ratio, 1.0, steepness=3)
+        ad_score = safe_score(ad_ratio, lambda v: sigmoid_score(v, 1.0, steepness=3))
         sub_factors.append(FactorScore(
             name="涨跌比", score=ad_score, weight=0.20,
             category="sentiment", raw_value=ad_ratio,
@@ -1071,7 +1071,7 @@ class EnhancedTimingModel:
             up = max(data.limit_up_count, 1)
             down = max(data.limit_down_count, 1)
             ld_ratio = up / down
-            ld_score = sigmoid_score(ld_ratio, 2, steepness=1.5)
+            ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 2, steepness=1.5))
             ld_signal = "bullish" if ld_ratio > 3 else "bearish" if ld_ratio < 1 else "neutral"
             ld_desc = f"涨停{data.limit_up_count} vs 跌停{data.limit_down_count}"
         else:
@@ -1090,7 +1090,7 @@ class EnhancedTimingModel:
             nh = max(data.new_high_count, 1)
             nl = max(data.new_low_count, 1)
             hl_ratio = nh / nl
-            hl_score = sigmoid_score(hl_ratio, 1.5, steepness=2)
+            hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 1.5, steepness=2))
             hl_signal = "bullish" if hl_ratio > 2 else "bearish" if hl_ratio < 0.7 else "neutral"
             hl_desc = f"60日新高{data.new_high_count} vs 新低{data.new_low_count}"
         else:
@@ -1257,7 +1257,7 @@ class EnhancedTimingModel:
         sub_factors = []
         
         # 8.1 PMI 趋势评分（当月+上月确认）
-        if data.pmi < 0 or data.pmi_prev < 0:
+        if data.pmi <= 0 or data.pmi_prev <= 0:
             pmi_score = 50.0
             pmi_desc = "无PMI数据"
         elif data.pmi > 50 and data.pmi_prev > 50:
@@ -1272,7 +1272,7 @@ class EnhancedTimingModel:
         else:
             pmi_score = 15.0
             pmi_desc = "明显收缩"
-        if data.pmi < 0 or data.pmi_prev < 0:
+        if data.pmi <= 0 or data.pmi_prev <= 0:
             pmi_signal = "neutral"
         else:
             pmi_signal = "bullish" if data.pmi > 50 else "bearish" if data.pmi < 48 else "neutral"
@@ -1300,7 +1300,7 @@ class EnhancedTimingModel:
         
         # 8.3 出口增速
         export = data.export_growth
-        export_score = sigmoid_score(export, 5, steepness=1.5)
+        export_score = safe_score(export, lambda v: sigmoid_score(v, 5, steepness=1.5))
         sub_factors.append(FactorScore(
             name="出口增速", score=export_score, weight=0.15,
             category="macro", raw_value=export,
@@ -1310,7 +1310,7 @@ class EnhancedTimingModel:
         
         # 8.4 GDP增速
         gdp = data.gdp_growth
-        gdp_score = sigmoid_score(gdp, 5.0, steepness=2)
+        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="GDP增速", score=gdp_score, weight=0.20,
             category="macro", raw_value=gdp,
@@ -1320,7 +1320,7 @@ class EnhancedTimingModel:
         
         # 8.5 工业增加值
         io = data.industrial_output
-        io_score = sigmoid_score(io, 5.0, steepness=2)
+        io_score = safe_score(io, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="工业增加值", score=io_score, weight=0.15,
             category="macro", raw_value=io,
@@ -1330,7 +1330,7 @@ class EnhancedTimingModel:
         
         # 8.6 社零
         retail = data.retail_sales
-        retail_score = sigmoid_score(retail, 5.0, steepness=2)
+        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2))
         sub_factors.append(FactorScore(
             name="社零增速", score=retail_score, weight=0.10,
             category="macro", raw_value=retail,
@@ -1913,8 +1913,8 @@ def convert_from_legacy_data(
         data.cb_index_current = getattr(legacy_data, 'cb_index_current', 0) or 0
         data.cb_index_ma20 = getattr(legacy_data, 'cb_index_ma20', 0) or 0
         data.treasury_10y_yield = getattr(legacy_data, 'treasury_10y_yield', 0) or 0
-        data.pmi = getattr(legacy_data, 'pmi', 50) or 50
-        data.pmi_prev = getattr(legacy_data, 'pmi_prev', 50) or 50
+        data.pmi = getattr(legacy_data, 'pmi', 0) or 0
+        data.pmi_prev = getattr(legacy_data, 'pmi_prev', 0) or 0
     
     # 从 MacroData 补充（扩展版 V2.0）
     if macro_data:
@@ -1929,31 +1929,13 @@ def convert_from_legacy_data(
             val = getattr(macro_data, 'pmi_prev', 0)
             if val > 0:
                 data.pmi_prev = val
-        if data.cb_median_premium <= 0:
-            data.cb_median_premium = getattr(macro_data, 'cb_median_premium', 0) or 0
-        if data.cb_avg_daily_amount <= 0:
-            data.cb_avg_daily_amount = getattr(macro_data, 'cb_avg_daily_amount', 0) or 0
-        if data.cb_index_change == 0:
-            data.cb_index_change = getattr(macro_data, 'cb_index_change', 0) or 0
-        if data.cb_index_current <= 0:
-            data.cb_index_current = getattr(macro_data, 'cb_index_current', 0) or 0
-        if data.cb_index_ma20 <= 0:
-            data.cb_index_ma20 = getattr(macro_data, 'cb_index_ma20', 0) or 0
-        data.cb_index_ma60 = getattr(macro_data, 'cb_index_ma60', 0) or 0
-        data.cb_median_price = getattr(macro_data, 'cb_median_price', 0) or 0
-        data.cb_below_par_count = getattr(macro_data, 'cb_below_par_count', 0) or 0
-        data.cb_count = getattr(macro_data, 'cb_count', 0) or 0
         # Shibor / 流动性
         data.shibor_overnight = getattr(macro_data, 'shibor_overnight', 0) or 0
-        val = getattr(macro_data, 'cpi', 0)
-        data.cpi = val if val != 0 else 2.0
-        data.ppi = getattr(macro_data, 'ppi', 0)
-        val = getattr(macro_data, 'm2_growth', 0)
-        data.m2_growth = val if val > 0 else 10.0
-        val = getattr(macro_data, 'social_financing_growth', 0)
-        data.social_financing_growth = val if val > 0 else 10.0
-        val = getattr(macro_data, 'gdp_growth', 0)
-        data.gdp_growth = val if val > 0 else 5.0
+        data.cpi = getattr(macro_data, 'cpi', 0) or 0
+        data.ppi = getattr(macro_data, 'ppi', 0) or 0
+        data.m2_growth = getattr(macro_data, 'm2_growth', 0) or 0
+        data.social_financing_growth = getattr(macro_data, 'social_financing_growth', 0) or 0
+        data.gdp_growth = getattr(macro_data, 'gdp_growth', 0) or 0
         data.credit_spread = getattr(macro_data, 'credit_spread_aa', 0) or 0
         data.term_spread = (data.treasury_10y_yield - data.treasury_2y_yield) * 100 if data.treasury_10y_yield > 0 and data.treasury_2y_yield > 0 else 0
         # 市场情绪
@@ -1992,7 +1974,9 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'margin_buy_ratio', 0)
         if val > 0:
             data.margin_buy_ratio = val
-        data.industry_net_inflow_ratio = getattr(macro_data, 'industry_net_inflow', 50) or 50
+        val = getattr(macro_data, 'industry_net_inflow', 0)
+        if val > 0:
+            data.industry_net_inflow_ratio = val
         # 宏观扩展
         val = getattr(macro_data, 'industrial_output', 0)
         if val != 0:
@@ -2035,13 +2019,13 @@ def convert_from_legacy_data(
         if val > 0:
             data.earnings_surprise_ratio = val
         val = getattr(macro_data, 'policy_signal_score', 0)
-        if val > 0 and val != 50.0:
+        if val > 0:
             data.policy_signal_score = val
         val = getattr(macro_data, 'event_impact_score', 0)
-        if val > 0 and val != 50.0:
+        if val > 0:
             data.event_impact_score = val
         val = getattr(macro_data, 'industry_cycle_score', 0)
-        if val > 0 and val != 50.0:
+        if val > 0:
             data.industry_cycle_score = val
     
     # 从 bonds_df 计算补充指标
@@ -2079,28 +2063,28 @@ def convert_from_legacy_data(
         0.04 if data.cb_median_price > 0 else 0,
         0.03 if data.cb_count > 0 else 0,
         0.04 if data.shibor_overnight > 0 else 0,
-        0.04 if data.m2_growth > 0 and data.m2_growth != 10.0 else 0,
-        0.04 if data.cpi != 2.0 or data.ppi != 0.0 else 0,
-        0.03 if data.social_financing_growth > 0 and data.social_financing_growth != 10.0 else 0,
-        0.03 if data.gdp_growth > 0 and data.gdp_growth != 5.0 else 0,
+        0.04 if data.m2_growth > 0 else 0,
+        0.04 if data.cpi > 0 or data.ppi != 0 else 0,
+        0.03 if data.social_financing_growth > 0 else 0,
+        0.03 if data.gdp_growth > 0 else 0,
         0.04 if data.credit_spread > 0 else 0,
         0.03 if data.term_spread > 0 else 0,
         0.04 if data.north_bound_net_flow != 0 else 0,
         0.04 if data.main_force_net_flow != 0 else 0,
         0.03 if data.margin_balance_change != 0 else 0,
         0.03 if data.margin_buy_ratio > 0 else 0,
-        0.03 if data.industry_net_inflow_ratio != 50.0 else 0,
+        0.03 if data.industry_net_inflow_ratio > 0 else 0,
         0.04 if data.stock_pe_median > 0 and data.stock_pb_median > 0 else 0,
-        0.03 if data.industrial_output != 5.0 else 0,
-        0.03 if data.retail_sales != 5.0 else 0,
-        0.03 if data.export_growth != 5.0 else 0,
-        0.02 if data.pcr_ratio > 0 and data.pcr_ratio != 1.0 else 0,
-        0.02 if data.vix_index > 0 and data.vix_index != 20.0 else 0,
+        0.03 if data.industrial_output != 0 else 0,
+        0.03 if data.retail_sales != 0 else 0,
+        0.03 if data.export_growth != 0 else 0,
+        0.02 if data.pcr_ratio > 0 else 0,
+        0.02 if data.vix_index > 0 else 0,
         0.02 if data.new_accounts > 0 else 0,
-        0.03 if data.rsi_14 > 0 and data.rsi_14 != 50.0 else 0,
-        0.02 if data.bollinger_position > 0 and data.bollinger_position != 0.5 else 0,
-        0.02 if data.volume_ratio > 0 and data.volume_ratio != 1.0 else 0,
-        0.02 if data.advance_decline_ratio > 0 and data.advance_decline_ratio != 1.0 else 0,
+        0.03 if data.rsi_14 > 0 else 0,
+        0.02 if data.bollinger_position > 0 else 0,
+        0.02 if data.volume_ratio > 0 else 0,
+        0.02 if data.advance_decline_ratio > 0 else 0,
     ]))
     
     data.updated_at = datetime.now()

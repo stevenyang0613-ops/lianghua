@@ -480,23 +480,38 @@ class ClickHouseStorage(DataStorage):
                 conditions.append("date <= %(end_date)s")
                 params['end_date'] = end_date
 
-            # 代码过滤
+            # 代码过滤 - 使用命名占位符避免 SQL 注入
             if codes:
-                conditions.append(f"code IN ({','.join([f"'{c}'" for c in codes])})")
+                code_placeholders = ','.join([f"%(code_{i})s" for i in range(len(codes))])
+                conditions.append(f"code IN ({code_placeholders})")
+                for i, c in enumerate(codes):
+                    params[f"code_{i}"] = str(c).replace("'", "").replace('"', '')[:20]
 
-            # 其他过滤条件
+            # 其他过滤条件 - 防止 SQL 注入
             if filters:
+                _ALLOWED_FILTER_KEYS = {'date', 'code', 'name', 'price', 'volume', 'industry'}
                 for key, value in filters.items():
+                    if key not in _ALLOWED_FILTER_KEYS:
+                        continue
                     if isinstance(value, (list, tuple)):
-                        placeholders = ','.join([f"'{v}'" for v in value])
+                        placeholders = ','.join([f"%({key}_{i})s" for i in range(len(value))])
                         conditions.append(f"{key} IN ({placeholders})")
+                        for i, v in enumerate(value):
+                            params[f"{key}_{i}"] = str(v)[:100]
                     else:
-                        conditions.append(f"{key} = '{value}'")
+                        conditions.append(f"{key} = %({key}_v)s")
+                        params[f"{key}_v"] = str(value)[:100]
 
             where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-            # 限制条数
-            limit_clause = f" LIMIT {limit}" if limit else ""
+            # 限制条数 - 强制类型安全
+            try:
+                safe_limit = int(limit) if limit else None
+            except (TypeError, ValueError):
+                safe_limit = None
+            if safe_limit is not None and safe_limit < 0:
+                safe_limit = None
+            limit_clause = f" LIMIT {int(safe_limit)}" if safe_limit is not None and safe_limit > 0 else ""
 
             sql = f"SELECT * FROM {table_name}{where_clause} ORDER BY date, code{limit_clause}"
 

@@ -209,7 +209,7 @@ function VirtualTableInner<T>({
               col.sortOrder === 'desc' ? 'descending' :
               'none'
             }
-            title={col.title}
+            title={typeof col.title === 'string' ? col.title : undefined}
           >
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.title}</span>
             {renderSortIndicator(col)}

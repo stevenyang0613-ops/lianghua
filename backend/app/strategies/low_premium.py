@@ -20,6 +20,10 @@ class LowPremiumStrategy(Strategy):
 
     def on_init(self, data: pd.DataFrame) -> None:
         self._data = data.copy()
+        # Defensive: ensure required columns exist with safe defaults
+        if 'premium_ratio' not in self._data.columns:
+            self._data['premium_ratio'] = 15.0
+        self._data['premium_ratio'] = self._data['premium_ratio'].fillna(15.0)
         self._dates = sorted(self._data['date'].unique())
         self._date_data_map = {d: group for d, group in self._data.groupby('date')}
 

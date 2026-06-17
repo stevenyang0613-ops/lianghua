@@ -4,7 +4,7 @@
 import builtins
 import _pytest.assertion.rewrite as _ar
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 import bcrypt
@@ -19,7 +19,7 @@ def test_token() -> str:
     from app.config import settings
     from jose import jwt
     return jwt.encode(
-        {"sub": "testuser", "exp": datetime.utcnow() + timedelta(hours=1)},
+        {"sub": "testuser", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
         settings.JWT_SECRET_KEY,
         algorithm=settings.JWT_ALGORITHM,
     )

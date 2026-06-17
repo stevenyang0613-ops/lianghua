@@ -33,6 +33,7 @@ export default function Watchlist() {
       dataIndex: 'code',
       key: 'code',
       width: 80,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => String(a.code ?? '').localeCompare(String(b.code ?? '')),
       render: (code: string) => (
         <Space>
           <StarFilled style={{ color: '#faad14', fontSize: 12 }} />
@@ -40,12 +41,13 @@ export default function Watchlist() {
         </Space>
       ),
     },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 100 },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100, sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
     {
       title: '最新价',
       dataIndex: 'price',
       key: 'price',
       width: 90,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.price ?? 0) - (b.price ?? 0),
       render: (v: number, r: ConvertibleQuote) => (
         <span style={{ color: (r.change_pct ?? 0) > 0 ? '#cf1322' : (r.change_pct ?? 0) < 0 ? '#389e0d' : undefined, fontWeight: 600 }}>
           {fmt(v)}
@@ -57,6 +59,7 @@ export default function Watchlist() {
       dataIndex: 'change_pct',
       key: 'change_pct',
       width: 90,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.change_pct ?? 0) - (b.change_pct ?? 0),
       render: (v: number) => (
         <Tag color={(v ?? 0) > 0 ? 'red' : (v ?? 0) < 0 ? 'green' : undefined}>
           {(v ?? 0) > 0 ? '+' : ''}{fmt(v)}%
@@ -68,6 +71,7 @@ export default function Watchlist() {
       dataIndex: 'premium_ratio',
       key: 'premium_ratio',
       width: 90,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.premium_ratio ?? 0) - (b.premium_ratio ?? 0),
       render: (v: number) => <span>{fmt(v)}%</span>,
     },
     {
@@ -75,6 +79,7 @@ export default function Watchlist() {
       dataIndex: 'dual_low',
       key: 'dual_low',
       width: 80,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.dual_low ?? 0) - (b.dual_low ?? 0),
       render: (v: number) => (
         <Tag color={(v ?? 0) < 130 ? 'green' : (v ?? 0) > 180 ? 'red' : 'orange'}>
           {fmt(v)}
@@ -86,6 +91,7 @@ export default function Watchlist() {
       dataIndex: 'call_status',
       key: 'call_status',
       width: 90,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => String(a.call_status ?? '').localeCompare(String(b.call_status ?? '')),
       render: (v: string, r: ConvertibleQuote) => {
         if (r.is_called) return <Tag color="red">已公告强赎</Tag>
         if (v) return <Tag color="orange">{v}</Tag>
@@ -97,6 +103,7 @@ export default function Watchlist() {
       dataIndex: 'last_trade_date',
       key: 'last_trade_date',
       width: 110,
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => String(a.last_trade_date ?? '').localeCompare(String(b.last_trade_date ?? '')),
       render: (v: string) => v ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span> : <span style={{ color: '#bbb' }}>-</span>,
     },
     {

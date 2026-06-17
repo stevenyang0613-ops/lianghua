@@ -16,18 +16,19 @@ interface OfflineIndicatorProps {
 
 export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
   const [isOffline, setIsOffline] = useState(() => localStorage.getItem('offline_mode') === 'true')
-  const [cacheStatus, setCacheStatus] = useState<{ key: string; status: ReturnType<typeof getCacheStatus> }[]>([])
+  const [cacheStatus, setCacheStatus] = useState<{ key: string; status: Awaited<ReturnType<typeof getCacheStatus>> }[]>([])
 
   useEffect(() => {
-    const checkStatus = () => {
+    const checkStatus = async () => {
       setIsOffline(localStorage.getItem('offline_mode') === 'true')
 
       // 检查主要缓存的过期状态
       const mainCaches = ['market_quotes', 'analysis_dual-low-ranking', 'analysis_forced-redemption']
-      const statuses = mainCaches.map(key => ({
+      const statusPromises = mainCaches.map(async key => ({
         key,
-        status: getCacheStatus(key)
+        status: await getCacheStatus(key)
       }))
+      const statuses = await Promise.all(statusPromises)
       setCacheStatus(statuses)
     }
 

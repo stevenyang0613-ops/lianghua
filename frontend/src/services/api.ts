@@ -1,5 +1,5 @@
 import type { ConvertibleQuote } from '../types'
-import { saveToCache, getFromCache, getCacheExpiryStatus } from '../utils/dataCache'
+import { saveToCache, getFromCache, getCacheExpiryStatus, getCacheEntry, migrateLocalStorageCache } from '../utils/dataCache'
 import { getApiBase, setWsAuthToken } from '../utils/config'
 import { recordApiPerformance } from '../utils/performanceMonitor'
 import { withRetry } from '../utils/retryStrategy'
@@ -19,14 +19,13 @@ function isOfflineMode(): boolean {
   return localStorage.getItem('offline_mode') === 'true'
 }
 
-// 获取缓存过期状态
-export function getCacheStatus(cacheKey: string): { isExpired: boolean; remainingTime: string; expiredAgo: string } | null {
-  const cached = localStorage.getItem(`cache_${cacheKey}`)
-  if (!cached) return null
-
+// 获取缓存过期状态（从 IndexedDB 读取）
+export async function getCacheStatus(cacheKey: string): Promise<{ isExpired: boolean; remainingTime: string; expiredAgo: string } | null> {
+  // getFromCache 在过期时返回 null，所以直接从 IndexedDB 读取原始条目
   try {
-    const entry = JSON.parse(cached)
-    return getCacheExpiryStatus(entry.expiresAt || entry.timestamp + 3600000)
+    const raw = await getCacheEntry(cacheKey)
+    if (!raw) return null
+    return getCacheExpiryStatus(raw.expiresAt || raw.timestamp + 3600000)
   } catch {
     return null
   }
@@ -154,13 +153,9 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
       const duration = Date.now() - startTime
       recordApiPerformance(apiName, duration)
 
-      // 缓存数据
+      // 缓存数据（仅使用 IndexedDB，避免 localStorage 5MB 限制）
       if (cacheKey) {
         saveToCache(cacheKey, data, cacheTtl)
-        try {
-          localStorage.setItem(`cache_${cacheKey}`, JSON.stringify({ data, timestamp: Date.now(), expiresAt: Date.now() + cacheTtl }))
-          localStorage.setItem('cache_time', new Date().toLocaleString('zh-CN'))
-        } catch { /* ignore cache errors */ }
       }
 
       return data
@@ -179,26 +174,27 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
         console.log(`[API] Network error: using cached data for ${cacheKey}`)
         return cached
       }
-      // 尝试从 localStorage 读取
-      try {
-        const backup = localStorage.getItem(`cache_${cacheKey}`)
-        if (backup) {
-          console.log(`[API] Using localStorage backup for ${cacheKey}`)
-          const entry = JSON.parse(backup)
-          return (entry.data || entry) as T
-        }
-      } catch { /* ignore cache errors */ }
     }
     throw error
   }
 }
 
 export async function fetchAllQuotes(): Promise<{ total: number; bonds: ConvertibleQuote[]; updated_at: string }> {
+  // Try prefetched data from Electron main process first (zero network latency)
+  if (window.electronAPI?.getPrefetchedMarketData) {
+    try {
+      const prefetched = await window.electronAPI.getPrefetchedMarketData()
+      if (prefetched?.bonds && Array.isArray(prefetched.bonds) && prefetched.bonds.length > 0) {
+        console.log(`[API] Using prefetched market data: ${prefetched.bonds.length} bonds`)
+        return prefetched
+      }
+    } catch { /* fallback to HTTP */ }
+  }
   return fetchJSON(`${BASE}/market/quotes`, 'market_quotes', 5 * 60 * 1000) // 5分钟缓存
 }
 
 export async function fetchExchangeableBonds(): Promise<{ total: number; bonds: ConvertibleQuote[]; updated_at: string }> {
-  return fetchJSON(`${BASE}/market/exchangeable`, 'market_exchangeable', 5 * 60 * 1000)
+  return fetchJSON(`${BASE}/market/exchangeable`, 'exchangeable_bonds', 5 * 60 * 1000)
 }
 
 export async function fetchQuote(code: string): Promise<ConvertibleQuote> {
@@ -216,6 +212,7 @@ export interface BacktestConfig {
   slippage_pct: number
   min_commission: number
   risk_free_rate: number
+  initial_cash?: number
 }
 
 export interface OptimizationParamRange {
@@ -236,7 +233,7 @@ export interface OptimizationConfig {
 
 export interface BacktestRequest {
   strategy: string
-  params: Record<string, number>
+  params: Record<string, number | string>
   start_date: string
   end_date: string
   config?: BacktestConfig
@@ -258,7 +255,7 @@ export interface BacktestMetrics {
 
 export interface BacktestResult {
   strategy_name: string
-  strategy_params: Record<string, number>
+  strategy_params: Record<string, number | string>
   start_date: string
   end_date: string
   metrics: BacktestMetrics
@@ -280,7 +277,7 @@ export interface BacktestResult {
 }
 
 export interface OptimizationResultItem {
-  params: Record<string, number>
+  params: Record<string, number | string>
   total_return_pct: number
   annual_return_pct: number
   max_drawdown_pct: number
@@ -295,7 +292,7 @@ export interface OptimizationResult {
   strategy_name: string
   optimize_metric: string
   total_combinations: number
-  best_params: Record<string, number>
+  best_params: Record<string, number | string>
   best_metrics: BacktestMetrics | null
   top_results: OptimizationResultItem[]
   execution_time_ms: number
@@ -305,7 +302,7 @@ export interface StrategyInfo {
   id: string
   name: string
   description: string
-  params: { name: string; label: string; type: string; default: number; min_val?: number; max_val?: number }[]
+  params: { name: string; label: string; type: string; default: number; min_val?: number; max_val?: number; options?: string[]; description?: string }[]
 }
 
 export async function fetchStrategies(): Promise<StrategyInfo[]> {
@@ -317,8 +314,134 @@ export async function runBacktest(req: BacktestRequest): Promise<{ type: string;
   return postJSON<{ type: string; result: BacktestResult | OptimizationResult }>(BASE + '/backtest/run', req)
 }
 
-export async function runOptimization(req: BacktestRequest): Promise<{ success: boolean; result: OptimizationResult }> {
-  return postJSON<{ success: boolean; result: OptimizationResult }>(BASE + '/backtest/optimize', req)
+export async function runOptimization(req: BacktestRequest): Promise<{ success: boolean; data_source?: string; result: OptimizationResult }> {
+  return postJSON<{ success: boolean; data_source?: string; result: OptimizationResult }>(BASE + '/backtest/optimize', req)
+}
+
+export interface BacktestProgressEvent {
+  phase: string
+  pct: number
+  msg: string
+  type?: string
+  data_source?: string
+  result?: any
+}
+
+export function runBacktestStream(
+  req: BacktestRequest,
+  onProgress: (evt: BacktestProgressEvent) => void,
+  timeoutMs: number = 30 * 60 * 1000,
+): Promise<{ type: string; result: BacktestResult | OptimizationResult; data_source?: string }> {
+   return new Promise((resolve, reject) => {
+      const controller = new AbortController()
+      let _settled = false
+      let _reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+      const _cleanup = () => {
+        try { controller.abort() } catch { /* ignore */ }
+        if (_reader) {
+          try { _reader.cancel() } catch { /* ignore */ }
+          _reader = null
+        }
+      }
+      const _settle = (fn: (v: any) => void, val: any) => {
+        if (_settled) return
+        _settled = true
+        _cleanup()
+        fn(val)
+      }
+      let timeoutId = setTimeout(() => {
+        _settle(reject, new Error('回测请求超时, 请缩短日期范围或减少参数'))
+      }, timeoutMs)
+      const resetTimeout = () => {
+        if (_settled) return
+        clearTimeout(timeoutId)
+        timeoutId = setTimeout(() => {
+          _settle(reject, new Error('回测请求超时, 请缩短日期范围或减少参数'))
+        }, timeoutMs)
+      }
+
+     // Use IPC proxy or auth token like other API calls
+     const sseHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+     const wsToken = localStorage.getItem('ws_auth_token')
+     if (wsToken) {
+       sseHeaders['Authorization'] = `Bearer ${wsToken}`
+     }
+
+     const sseUrl = BASE + '/backtest/run-stream'
+
+     fetch(sseUrl, {
+      method: 'POST',
+      headers: sseHeaders,
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    }).then(resp => {
+      if (!resp.ok || !resp.body) {
+        clearTimeout(timeoutId)
+        // Try to extract error detail from response body
+        resp.text().then(text => {
+          let detail = `HTTP ${resp.status}`
+          try {
+            const json = JSON.parse(text)
+            if (json.detail) detail = json.detail
+          } catch { /* ignore */ }
+          _settle(reject, new Error(detail))
+        }).catch(() => _settle(reject, new Error(`HTTP ${resp.status}`)))
+        return
+      }
+      const reader = resp.body.getReader()
+      _reader = reader
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalResult: { type: string; result: BacktestResult | OptimizationResult; data_source?: string } | null = null
+
+      function pump(): Promise<void> {
+        return reader.read().then(({ done, value }) => {
+          if (done) {
+            clearTimeout(timeoutId)
+            if (finalResult) _settle(resolve, finalResult)
+            else _settle(reject, new Error('Stream ended without result'))
+            return
+          }
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          let hasData = false
+          for (const line of lines) {
+            if (line.startsWith(': ')) {
+              hasData = true
+              continue
+            }
+            if (!line.startsWith('data: ')) continue
+            hasData = true
+            try {
+              const evt: BacktestProgressEvent = JSON.parse(line.slice(6))
+              if (evt.phase === 'done' && evt.result) {
+                finalResult = { type: evt.type || 'backtest', result: evt.result, data_source: evt.data_source }
+              }
+              if (evt.phase === 'error') {
+                clearTimeout(timeoutId)
+                _settle(reject, new Error(evt.msg))
+                return
+              }
+              onProgress(evt)
+            } catch { /* skip malformed */ }
+          }
+          if (hasData) {
+            resetTimeout()
+          }
+          return pump()
+        })
+      }
+      pump().catch(e => { clearTimeout(timeoutId); _settle(reject, e) })
+    }).catch(e => {
+      clearTimeout(timeoutId)
+      // Provide more helpful error message for connection failures
+      const errMsg = e instanceof TypeError && e.message === 'Failed to fetch'
+        ? '无法连接到后端服务，请确认应用已正常启动'
+        : (e instanceof Error ? e.message : String(e))
+      _settle(reject, new Error(errMsg))
+    })
+  })
 }
 
 // ── 交易 API ──
@@ -501,23 +624,23 @@ function _buildParams(opts?: AnalysisQueryOpts): string {
 }
 
 export async function fetchForcedRedemption(opts?: AnalysisQueryOpts): Promise<{ total: number; high_risk_count: number; items: ForcedRedemptionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/forced-redemption${_buildParams(opts)}`)
+  return fetchJSON(`${BASE}/analysis/forced-redemption${_buildParams(opts)}`, 'analysis_forced_redemption')
 }
 
 export async function fetchDualLowRanking(opts?: AnalysisQueryOpts): Promise<{ total: number; items: DualLowItem[] }> {
-  return fetchJSON(`${BASE}/analysis/dual-low-ranking${_buildParams(opts)}`)
+  return fetchJSON(`${BASE}/analysis/dual-low-ranking${_buildParams(opts)}`, 'analysis_dual_low_ranking')
 }
 
 export async function fetchPulseScan(opts?: AnalysisQueryOpts): Promise<{ total: number; high_severity_count: number; items: PulseItem[] }> {
-  return fetchJSON(`${BASE}/analysis/pulse-scan${_buildParams(opts)}`)
+  return fetchJSON(`${BASE}/analysis/pulse-scan${_buildParams(opts)}`, 'analysis_pulse_scan')
 }
 
 export async function fetchRevisionProbability(opts?: AnalysisQueryOpts): Promise<{ total: number; high_probability_count: number; items: RevisionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/revision-probability${_buildParams(opts)}`)
+  return fetchJSON(`${BASE}/analysis/revision-probability${_buildParams(opts)}`, 'analysis_revision_probability')
 }
 
 export async function fetchStockCorrelation(opts?: AnalysisQueryOpts): Promise<{ total: number; strong_correlation_count: number; items: StockCorrelationItem[] }> {
-  return fetchJSON(`${BASE}/analysis/stock-correlation${_buildParams(opts)}`)
+  return fetchJSON(`${BASE}/analysis/stock-correlation${_buildParams(opts)}`, 'analysis_stock_correlation')
 }
 
 export function getAnalysisExportUrl(tabKey: string, opts?: AnalysisQueryOpts): string {
@@ -1571,6 +1694,7 @@ export interface XuanjiItem {
   rank: number
   code: string
   name: string
+  stock_code: string
   price: number
   premium_ratio: number
   dual_low: number
@@ -1581,6 +1705,27 @@ export interface XuanjiItem {
   hv: number
   industry: string
   rating: string
+  pe: number | null
+  pb: number | null
+  roe: number | null
+  gpm: number | null
+  cagr: number | null
+  debt_ratio: number | null
+  current_ratio: number | null
+  iv: number | null
+  turnover_rate: number | null
+  net_capital_flow: number | null
+  net_capital_flow_pct: number | null
+  buyback_amount: number | null
+  mgmt_buy_price: number | null
+  outstanding_scale: number | null
+  pledge_ratio: number | null
+  momentum_5d: number | null
+  momentum_10d: number | null
+  momentum_20d: number | null
+  momentum_60d: number | null
+  event_score: number | null
+  event_detail: string | null
   score: number
   score_dual_low: number
   score_momentum: number
@@ -1590,10 +1735,12 @@ export interface XuanjiItem {
   score_ytm: number
   score_event: number
   score_delta: number
+  score_remaining_years: number
 }
 
 export interface XuanjiRankingResponse {
   total: number
+  total_unfiltered?: number
   returned: number
   market_state_requested: string
   market_state_detected: string
@@ -1602,6 +1749,7 @@ export interface XuanjiRankingResponse {
   factor_names: Record<string, string>
   params: Record<string, any>
   items: XuanjiItem[]
+  cached?: boolean
 }
 
 export interface XuanjiGreeks {
@@ -1610,6 +1758,7 @@ export interface XuanjiGreeks {
   vega: number
   theta: number
   iv: number
+  iv_source: string
 }
 
 export interface XuanjiSingleResponse {
@@ -1621,6 +1770,8 @@ export interface XuanjiSingleResponse {
   factor_scores: Record<string, XuanjiFactorScore>
   composite_score: number
   vol_factor: number
+  rank_in_universe: number
+  total_in_universe: number
   basic_info: Record<string, any>
   greeks: XuanjiGreeks
 }
@@ -1628,13 +1779,17 @@ export interface XuanjiSingleResponse {
 export interface XuanjiDeltaCandidate {
   code: string
   name: string
+  stock_code: string
+  industry: string
   iv: number
   hv: number
   iv_hv_diff: number
   premium_ratio: number
   price: number
   delta: number
-  alpha_potential: string
+  alpha_potential: string | null
+  iv_source: string
+  hv_source: string
 }
 
 export interface XuanjiDeltaResponse {
@@ -1682,7 +1837,7 @@ export interface XuanjiAlphaSource {
 export interface XuanjiAlphaResponse {
   sources: XuanjiAlphaSource[]
   total_alpha_potential: string
-  return_path: Array<{ version: string; neutral: string; optimistic: string }>
+  return_path: Array<{ version: string; neutral: string; optimistic: string }> | string
 }
 
 export async function fetchXuanjiRanking(
@@ -1701,11 +1856,18 @@ export async function fetchXuanjiRanking(
     max_price: String(maxPrice),
     vol_adjust: String(volAdjust),
   })
-  return fetchJSON<XuanjiRankingResponse>(`${BASE}/xuanji/ranking?${params.toString()}`)
+  return fetchJSON<XuanjiRankingResponse>(`${BASE}/xuanji/ranking?${params.toString()}`, `xuanji_ranking_${params.toString().slice(0, 40)}`, 3 * 60 * 1000)
 }
 
-export async function fetchXuanjiSingle(code: string, marketState: string = 'mild_bull'): Promise<XuanjiSingleResponse> {
-  return fetchJSON<XuanjiSingleResponse>(`${BASE}/xuanji/single/${code}?market_state=${marketState}`)
+export async function fetchXuanjiSingle(code: string, marketState: string = 'mild_bull', maxPremium: number = 80, minPrice: number = 80, maxPrice: number = 180, volAdjust: number = 0.85): Promise<XuanjiSingleResponse> {
+  const params = new URLSearchParams({
+    market_state: marketState,
+    max_premium: String(maxPremium),
+    min_price: String(minPrice),
+    max_price: String(maxPrice),
+    vol_adjust: String(volAdjust),
+  })
+  return fetchJSON<XuanjiSingleResponse>(`${BASE}/xuanji/single/${code}?${params.toString()}`, `xuanji_single_${code}`, 3 * 60 * 1000)
 }
 
 export async function fetchXuanjiDeltaCandidates(
@@ -1720,19 +1882,19 @@ export async function fetchXuanjiDeltaCandidates(
     premium_high: String(premiumHigh),
     top_n: String(topN),
   })
-  return fetchJSON<XuanjiDeltaResponse>(`${BASE}/xuanji/delta-candidates?${params.toString()}`)
+  return fetchJSON<XuanjiDeltaResponse>(`${BASE}/xuanji/delta-candidates?${params.toString()}`, 'xuanji_delta_candidates', 3 * 60 * 1000)
 }
 
 export async function fetchXuanjiGreeks(): Promise<XuanjiGreeksSummary> {
-  return fetchJSON<XuanjiGreeksSummary>(`${BASE}/xuanji/greeks`)
+  return fetchJSON<XuanjiGreeksSummary>(`${BASE}/xuanji/greeks`, 'xuanji_greeks', 10 * 60 * 1000)
 }
 
 export async function fetchXuanjiMarketWeights(): Promise<XuanjiMarketWeightsResponse> {
-  return fetchJSON<XuanjiMarketWeightsResponse>(`${BASE}/xuanji/market-weights`)
+  return fetchJSON<XuanjiMarketWeightsResponse>(`${BASE}/xuanji/market-weights`, 'xuanji_market_weights', 10 * 60 * 1000)
 }
 
 export async function fetchXuanjiAlphaSources(): Promise<XuanjiAlphaResponse> {
-  return fetchJSON<XuanjiAlphaResponse>(`${BASE}/xuanji/alpha-sources`)
+  return fetchJSON<XuanjiAlphaResponse>(`${BASE}/xuanji/alpha-sources`, 'xuanji_alpha_sources', 10 * 60 * 1000)
 }
 
 export interface XuanjiStressScenario {
@@ -1747,6 +1909,7 @@ export interface XuanjiStressScenario {
 export interface XuanjiStressResponse {
   market_state: string
   total_bonds: number
+  total_unfiltered?: number
   scenarios: XuanjiStressScenario[]
   summary: {
     avg_return: number
@@ -1757,7 +1920,7 @@ export interface XuanjiStressResponse {
 }
 
 export async function fetchXuanjiStressTest(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiStressResponse> {
-  return fetchJSON<XuanjiStressResponse>(`${BASE}/xuanji/stress-test?top_n=${topN}&market_state=${marketState}`)
+  return fetchJSON<XuanjiStressResponse>(`${BASE}/xuanji/stress-test?top_n=${topN}&market_state=${marketState}`, `xuanji_stress_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiFactorContribution {
@@ -1774,6 +1937,7 @@ export interface XuanjiFactorContributionResponse {
   top_n: number
   factors: XuanjiFactorContribution[]
   total_score: number
+  total_unfiltered?: number
   selection: {
     count: number
     avg_price: number
@@ -1784,7 +1948,7 @@ export interface XuanjiFactorContributionResponse {
 }
 
 export async function fetchXuanjiFactorContribution(topN: number = 20, marketState: string = 'mild_bull'): Promise<XuanjiFactorContributionResponse> {
-  return fetchJSON<XuanjiFactorContributionResponse>(`${BASE}/xuanji/factor-contribution?top_n=${topN}&market_state=${marketState}`)
+  return fetchJSON<XuanjiFactorContributionResponse>(`${BASE}/xuanji/factor-contribution?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_contrib_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiFactorCorrelation {
@@ -1800,11 +1964,12 @@ export interface XuanjiFactorCorrelationResponse {
   top_n: number
   total_pairs: number
   high_redundancy_pairs: number
+  total_unfiltered?: number
   correlations: XuanjiFactorCorrelation[]
 }
 
 export async function fetchXuanjiFactorCorrelation(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiFactorCorrelationResponse> {
-  return fetchJSON<XuanjiFactorCorrelationResponse>(`${BASE}/xuanji/factor-correlation?top_n=${topN}&market_state=${marketState}`)
+  return fetchJSON<XuanjiFactorCorrelationResponse>(`${BASE}/xuanji/factor-correlation?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_corr_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiStrategyCompare {
@@ -1823,11 +1988,12 @@ export interface XuanjiStrategyCompare {
 export interface XuanjiComparisonResponse {
   top_n: number
   total_bonds: number
+  total_unfiltered?: number
   strategies: XuanjiStrategyCompare[]
 }
 
-export async function fetchXuanjiComparison(topN: number = 50): Promise<XuanjiComparisonResponse> {
-  return fetchJSON<XuanjiComparisonResponse>(`${BASE}/xuanji/comparison?top_n=${topN}`)
+export async function fetchXuanjiComparison(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiComparisonResponse> {
+  return fetchJSON<XuanjiComparisonResponse>(`${BASE}/xuanji/comparison?top_n=${topN}&market_state=${marketState}`, `xuanji_comparison_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiSummary {
@@ -1838,5 +2004,476 @@ export interface XuanjiSummary {
 }
 
 export async function fetchXuanjiSummary(): Promise<XuanjiSummary> {
-  return fetchJSON<XuanjiSummary>(`${BASE}/xuanji/summary`)
+  return fetchJSON<XuanjiSummary>(`${BASE}/xuanji/summary`, 'xuanji_summary', 10 * 60 * 1000)
 }
+
+export async function fetchXuanjiHealth(): Promise<{ status: string; strategy: string; version: string }> {
+  return fetchJSON(`${BASE}/xuanji/health`)
+}
+
+export async function fetchXuanjiDataSourceHealth(): Promise<any> {
+  return fetchJSON(`${BASE}/xuanji/data-source-health`, 'xuanji_ds_health', 10 * 60 * 1000)
+}
+
+export async function fetchXuanjiIcirHistory(): Promise<any> {
+  return fetchJSON(`${BASE}/xuanji/icir-history`, 'xuanji_icir', 5 * 60 * 1000)
+}
+
+export async function postXuanjiCustomRanking(params: {
+  weights: Record<string, number>
+  top_n?: number
+  market_state?: string
+  max_premium?: number
+  min_price?: number
+  max_price?: number
+}): Promise<any> {
+  return postJSON(`${BASE}/xuanji/custom-ranking`, params)
+}
+
+// ── Industry / Sector rotation ─────────────────────────────────────
+
+export interface IndustryAgg {
+  industry: string
+  bond_count: number
+  avg_change_pct: number
+  avg_stock_change_pct: number
+  avg_premium_ratio: number
+  avg_dual_low: number
+  avg_ytm: number
+  avg_roe: number
+  avg_pe: number
+  avg_pb: number
+  avg_gpm: number
+  avg_debt_ratio: number
+  avg_turnover_rate: number
+  avg_cagr: number
+  avg_pledge_ratio: number
+  avg_momentum_5d: number
+  avg_momentum_10d: number
+  avg_momentum_20d: number
+  avg_momentum_60d: number
+  momentum_dispersion: number
+  net_capital_flow: number
+  net_super_flow: number
+  net_big_flow: number
+  avg_iv: number
+  total_volume: number
+  up_count: number
+  down_count: number
+}
+
+export interface IndustriesResponse {
+  industries: IndustryAgg[]
+  total_bonds: number
+  total_industries: number
+}
+
+export async function fetchIndustries(): Promise<IndustriesResponse> {
+  return fetchJSON<IndustriesResponse>(`${BASE}/market/industries`, 'industries', 30000)
+}
+
+// ── Concept distribution ──────────────────────────────────────────
+
+export interface ConceptAgg {
+  concept: string
+  bond_count: number
+  avg_change_pct: number
+  avg_stock_change_pct: number
+  avg_premium_ratio: number
+  avg_dual_low: number
+  avg_ytm: number
+  avg_roe: number
+  avg_pe: number
+  avg_pb: number
+  avg_gpm: number
+  avg_debt_ratio: number
+  avg_turnover_rate: number
+  avg_cagr: number
+  avg_pledge_ratio: number
+  avg_momentum_5d: number
+  avg_momentum_10d: number
+  avg_momentum_20d: number
+  avg_momentum_60d: number
+  momentum_dispersion: number
+  net_capital_flow: number
+  net_super_flow: number
+  net_big_flow: number
+  avg_iv: number
+  total_volume: number
+  up_count: number
+  down_count: number
+  top_bonds: { code: string; name: string; price: number; change_pct: number; premium_ratio: number; dual_low: number }[]
+}
+
+export interface ConceptsResponse {
+  concepts: ConceptAgg[]
+  total_bonds: number
+  total_concepts: number
+  sources: string[]
+}
+
+export async function fetchConcepts(): Promise<ConceptsResponse> {
+  return fetchJSON<ConceptsResponse>(`${BASE}/market/concepts`, 'concepts', 30000)
+}
+
+// ── ETF / Sector mapping ───────────────────────────────────────────
+
+export interface SectorEtf {
+  sw_code: string
+  etf_code: string
+  etf_name: string
+  sector: string
+}
+
+export const SECTOR_ETF_MAP: SectorEtf[] = [
+  { sw_code: '801010', etf_code: '159919', etf_name: '沪深300ETF', sector: '金融' },
+  { sw_code: '801020', etf_code: '510500', etf_name: '中证500ETF', sector: '周期' },
+  { sw_code: '801030', etf_code: '159915', etf_name: '创业板ETF', sector: '成长' },
+  { sw_code: '801040', etf_code: '510880', etf_name: '红利ETF', sector: '红利' },
+  { sw_code: '801050', etf_code: '515050', etf_name: '科技ETF', sector: '科技' },
+  { sw_code: '801060', etf_code: '512880', etf_name: '证券ETF', sector: '金融' },
+  { sw_code: '801070', etf_code: '512070', etf_name: '非银ETF', sector: '非银金融' },
+  { sw_code: '801080', etf_code: '512690', etf_name: '酒ETF', sector: '消费' },
+  { sw_code: '801090', etf_code: '512010', etf_name: '医药ETF', sector: '医药' },
+  { sw_code: '801100', etf_code: '516160', etf_name: '新能源ETF', sector: '新能源' },
+  { sw_code: '801110', etf_code: '515800', etf_name: '800ETF', sector: '宽基' },
+  { sw_code: '801120', etf_code: '515220', etf_name: '煤炭ETF', sector: '能源' },
+  { sw_code: '801130', etf_code: '512100', etf_name: '1000ETF', sector: '小盘' },
+  { sw_code: '801140', etf_code: '516510', etf_name: '云计算ETF', sector: '云计算' },
+  { sw_code: '801150', etf_code: '515030', etf_name: '新汽车ETF', sector: '汽车' },
+  { sw_code: '801160', etf_code: '512660', etf_name: '军工ETF', sector: '军工' },
+  { sw_code: '801170', etf_code: '515790', etf_name: '光伏ETF', sector: '光伏' },
+  { sw_code: '801180', etf_code: '516110', etf_name: '汽车ETF', sector: '汽车' },
+  { sw_code: '801190', etf_code: '512580', etf_name: '碳中和ETF', sector: '碳中和' },
+  { sw_code: '801200', etf_code: '562800', etf_name: '稀有金属ETF', sector: '稀有金属' },
+]
+
+// ── Stock Industry Rotation ───────────────────────────────────────────
+
+export interface StockIndustryItem {
+  stock_code: string
+  stock_name: string
+  stock_price: number
+  stock_change_pct: number
+  pe: number
+  pb: number
+  roe: number
+  gpm: number
+  momentum_5d: number
+  momentum_10d: number
+  momentum_20d: number
+  momentum_60d: number
+  turnover_rate: number
+  net_capital_flow: number
+  debt_ratio: number
+  iv: number
+  pledge_ratio: number
+  cagr: number
+}
+
+export interface StockIndustryAgg {
+  industry: string
+  stock_count: number
+  avg_stock_change_pct: number
+  avg_stock_price: number
+  avg_momentum_5d: number
+  avg_momentum_10d: number
+  avg_momentum_20d: number
+  avg_momentum_60d: number
+  momentum_dispersion: number
+  avg_roe: number
+  avg_pe: number
+  avg_pb: number
+  avg_gpm: number
+  avg_debt_ratio: number
+  avg_turnover_rate: number
+  net_capital_flow: number
+  net_capital_flow_pct: number
+  net_super_flow: number
+  net_big_flow: number
+  avg_iv: number
+  avg_pledge_ratio: number
+  avg_cagr: number
+  total_volume: number
+  up_count: number
+  down_count: number
+  stocks: StockIndustryItem[]
+}
+
+export interface StockIndustriesResponse {
+  industries: StockIndustryAgg[]
+  total_stocks: number
+  total_industries: number
+}
+
+export async function fetchStockIndustries(): Promise<StockIndustriesResponse> {
+  return fetchJSON<StockIndustriesResponse>(`${BASE}/market/stock-industries`, 'stock-industries', 30000)
+}
+
+// ── Extended data sources (北向/融资融券/龙虎榜/大宗/股东/业绩/解禁) ────────
+
+export interface NorthSummary {
+  type: string
+  change: number
+  fund_flow: number
+  super_flow: number
+  big_flow: number
+  _summary: boolean
+}
+
+export interface NorthStock {
+  code: string
+  name: string
+  type: string
+  change_pct: number
+  hold_shares: number
+  hold_market_cap: number
+  hold_ratio: number
+  add_shares: number
+  add_market_cap: number
+}
+
+export interface NorthResponse {
+  summary: NorthSummary[]
+  stocks: NorthStock[]
+  total: number
+}
+
+export async function fetchNorthCapital(): Promise<NorthResponse> {
+  return fetchJSON<NorthResponse>(`${BASE}/market/north-capital`, 'north', 60000)
+}
+
+export interface MarginStock {
+  code: string
+  name: string
+  rzye: number
+  rzmre: number
+  rzrqye: number
+  rqyl: number
+}
+
+export interface MarginResponse {
+  stocks: MarginStock[]
+  summary: any[]
+  total: number
+}
+
+export async function fetchMarginStocks(): Promise<MarginResponse> {
+  return fetchJSON<MarginResponse>(`${BASE}/market/margin-stocks`, 'margin', 60000)
+}
+
+export interface LhbStock {
+  code: string
+  name: string
+  times: number
+  buy_amt: number
+  sell_amt: number
+  net_buy_amt: number
+}
+
+export interface LhbResponse {
+  stocks: LhbStock[]
+  total: number
+}
+
+export async function fetchLhb(): Promise<LhbResponse> {
+  return fetchJSON<LhbResponse>(`${BASE}/market/lhb`, 'lhb', 60000)
+}
+
+export interface BlockTradeStock {
+  code: string
+  name: string
+  total_amt: number
+  trade_count: number
+  avg_discount: number
+  max_price: number
+  min_price: number
+}
+
+export interface BlockTradeResponse {
+  stocks: BlockTradeStock[]
+  total: number
+}
+
+export async function fetchBlockTrade(): Promise<BlockTradeResponse> {
+  return fetchJSON<BlockTradeResponse>(`${BASE}/market/block-trade`, 'block_trade', 60000)
+}
+
+export interface HolderNumStock {
+  code: string
+  name: string
+  holder_num: number
+  stat_date: string
+  avg_hold_shares: number
+  change_pct: number
+}
+
+export interface HolderNumResponse {
+  stocks: HolderNumStock[]
+  total: number
+}
+
+export async function fetchHolderNum(): Promise<HolderNumResponse> {
+  return fetchJSON<HolderNumResponse>(`${BASE}/market/holder-num`, 'holder_num', 60000)
+}
+
+export interface EarningsForecastStock {
+  code: string
+  name: string
+  period: string
+  forecast_type: string
+  change_pct_min: number
+  change_pct_max: number
+  summary: string
+  announce_date: string
+}
+
+export interface EarningsForecastResponse {
+  stocks: EarningsForecastStock[]
+  total: number
+}
+
+export async function fetchEarningsForecast(): Promise<EarningsForecastResponse> {
+  return fetchJSON<EarningsForecastResponse>(`${BASE}/market/earnings-forecast`, 'earnings_forecast', 60000)
+}
+
+export interface EarningsExpressStock {
+  code: string
+  name: string
+  period: string
+  revenue: number
+  revenue_yoy: number
+  net_profit: number
+  net_profit_yoy: number
+  eps: number
+  roe: number
+  announce_date: string
+}
+
+export interface EarningsExpressResponse {
+  stocks: EarningsExpressStock[]
+  total: number
+}
+
+export async function fetchEarningsExpress(): Promise<EarningsExpressResponse> {
+  return fetchJSON<EarningsExpressResponse>(`${BASE}/market/earnings-express`, 'earnings_express', 60000)
+}
+
+export interface RestrictedReleaseEvent {
+  code: string
+  name: string
+  release_date: string
+  release_shares: number
+  release_market_cap: number
+  release_ratio: number
+  release_type: string
+  shareholder_count: number
+}
+
+export interface RestrictedReleaseResponse {
+  events: RestrictedReleaseEvent[]
+  total: number
+}
+
+export async function fetchRestrictedRelease(): Promise<RestrictedReleaseResponse> {
+  return fetchJSON<RestrictedReleaseResponse>(`${BASE}/market/restricted-release`, 'restricted_release', 60000)
+}
+
+export interface DataSourceInfo {
+  path: string
+  exists: boolean
+  size?: number
+  entries?: number
+  ts?: number
+  age_seconds?: number
+  error?: string
+}
+
+export interface DataSourcesResponse {
+  sources: Record<string, DataSourceInfo>
+  cache_dir?: string
+}
+
+export async function fetchDataSources(): Promise<DataSourcesResponse> {
+  return fetchJSON<DataSourcesResponse>(`${BASE}/market/data-sources`, 'data_sources', 30000)
+}
+
+// ── Stock Concept Rotation (THS + EastMoney fine-grained concept boards) ──────
+
+export interface StockConceptItem {
+  stock_code: string
+  stock_name: string
+  stock_price: number
+  stock_change_pct: number
+  pe: number
+  pb: number
+  roe: number
+  gpm: number
+  momentum_5d: number
+  momentum_10d: number
+  momentum_20d: number
+  momentum_60d: number
+  turnover_rate: number
+  net_capital_flow: number
+  debt_ratio: number
+  iv: number
+  pledge_ratio: number
+  cagr: number
+}
+
+export interface StockConceptAgg {
+  concept: string
+  stock_count: number
+  sources: string[]   // subset of ["eastmoney", "ths"] — which source lists this concept
+  avg_stock_change_pct: number
+  avg_stock_price: number
+  avg_momentum_5d: number
+  avg_momentum_10d: number
+  avg_momentum_20d: number
+  avg_momentum_60d: number
+  momentum_dispersion: number
+  avg_roe: number
+  avg_pe: number
+  avg_pb: number
+  avg_gpm: number
+  avg_debt_ratio: number
+  avg_turnover_rate: number
+  avg_pledge_ratio: number
+  avg_cagr: number
+  net_capital_flow: number
+  net_super_flow: number
+  net_big_flow: number
+  avg_iv: number
+  total_volume: number
+  up_count: number
+  down_count: number
+  top_stocks: StockConceptItem[]
+}
+
+export interface StockConceptsResponse {
+  concepts: StockConceptAgg[]
+  total_concepts: number
+  total_stocks: number
+  sources: string[]
+  source_filter: string
+  min_count: number
+}
+
+export type StockConceptSource = 'all' | 'em' | 'ths' | 'both' | 'em_only' | 'ths_only'
+
+export async function fetchStockConcepts(opts?: {
+  source?: StockConceptSource
+  minCount?: number
+  fields?: string[]
+}): Promise<StockConceptsResponse> {
+  const params = new URLSearchParams()
+  params.set('source', opts?.source ?? 'all')
+  params.set('min_count', String(opts?.minCount ?? 2))
+  if (opts?.fields?.length) params.set('fields', opts.fields.join(','))
+  return fetchJSON<StockConceptsResponse>(
+    `${BASE}/market/stock-concepts?${params.toString()}`,
+    'stock-concepts',
+    30000,
+  )
+}
+

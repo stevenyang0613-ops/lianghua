@@ -103,11 +103,11 @@ export default function OpsDashboard() {
     // 更新健康状态
     const newHealth: SystemHealth = {
       status: memoryPercent > 90 ? 'critical' : memoryPercent > 70 ? 'warning' : 'healthy',
-      cpu: Math.random() * 30 + 10, // 模拟CPU使用率
+      cpu: 0, // 需从后端 /health 获取实际值
       memory: memoryPercent,
-      disk: Math.random() * 20 + 40, // 模拟磁盘使用率
+      disk: 0, // 需从后端 /health 获取实际值
       network: navigator.onLine ? 'online' : 'offline',
-      apiLatency: Math.random() * 100 + 50,
+      apiLatency: 0, // 需从后端 /health 获取实际值
       wsStatus: 'connected',
       lastUpdate: Date.now(),
     }

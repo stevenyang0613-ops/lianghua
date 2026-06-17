@@ -8,15 +8,16 @@ import { BarChart, LineChart, PieChart, RadarChart, GaugeChart, CandlestickChart
 import {
   TitleComponent, TooltipComponent, LegendComponent,
   GridComponent, DataZoomComponent, ToolboxComponent,
-  MarkLineComponent, MarkPointComponent,
+  MarkLineComponent, MarkPointComponent, VisualMapComponent,
 } from 'echarts/components'
+import { HeatmapChart } from 'echarts/charts'
 
 echarts.use([
   CanvasRenderer,
-  BarChart, LineChart, PieChart, RadarChart, GaugeChart, CandlestickChart, ScatterChart,
+  BarChart, LineChart, PieChart, RadarChart, GaugeChart, CandlestickChart, ScatterChart, HeatmapChart,
   TitleComponent, TooltipComponent, LegendComponent,
   GridComponent, DataZoomComponent, ToolboxComponent,
-  MarkLineComponent, MarkPointComponent,
+  MarkLineComponent, MarkPointComponent, VisualMapComponent,
 ])
 
 export default echarts

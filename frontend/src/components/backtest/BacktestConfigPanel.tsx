@@ -24,7 +24,7 @@ interface BacktestConfigPanelProps {
   strategies: StrategyInfo[]
   strategiesLoading: boolean
   selectedStrategy: string
-  strategyParams: Record<string, number>
+  strategyParams: Record<string, number | string>
   dateRange: [dayjs.Dayjs, dayjs.Dayjs]
   config: BacktestConfig
   optEnabled: boolean
@@ -34,7 +34,7 @@ interface BacktestConfigPanelProps {
   optRanges: OptimizationParamRange[]
   loading: boolean
   onStrategyChange: (id: string) => void
-  onStrategyParamsChange: (params: Record<string, number>) => void
+  onStrategyParamsChange: (params: Record<string, number | string>) => void
   onDateRangeChange: (range: [dayjs.Dayjs, dayjs.Dayjs]) => void
   onConfigChange: (config: BacktestConfig) => void
   onOptEnabledChange: (enabled: boolean) => void
@@ -71,7 +71,7 @@ const BacktestConfigPanel = memo(function BacktestConfigPanel({
 }: BacktestConfigPanelProps) {
   const currentStrategy = strategies.find((s) => s.id === selectedStrategy)
 
-  const handleParamChange = useCallback((name: string, value: number | null, defaultVal: number) => {
+  const handleParamChange = useCallback((name: string, value: number | string | null, defaultVal: number | string) => {
     onStrategyParamsChange({ ...strategyParams, [name]: value ?? defaultVal })
   }, [strategyParams, onStrategyParamsChange])
 
@@ -94,17 +94,36 @@ const BacktestConfigPanel = memo(function BacktestConfigPanel({
           </Text>
         )}
 
-        {currentStrategy?.params.map((p) => (
-          <Form.Item key={p.name} label={p.label}>
-            <InputNumber
-              style={{ width: '100%' }}
-              min={p.min_val}
-              max={p.max_val}
-              value={strategyParams[p.name]}
-              onChange={(v) => handleParamChange(p.name, v, p.default)}
-            />
-          </Form.Item>
-        ))}
+        {currentStrategy?.params.map((p) => {
+          // Render Select for str/select types, InputNumber for numeric types
+          if (p.type === 'str' || p.type === 'select') {
+            const options = p.options || []
+            return (
+              <Form.Item key={p.name} label={p.label}>
+                <Select
+                  value={String(strategyParams[p.name] ?? p.default ?? '')}
+                  onChange={(v) => handleParamChange(p.name, v, p.default ?? '')}
+                >
+                  {options.map((opt) => (
+                    <Select.Option key={opt} value={opt}>{opt}</Select.Option>
+                  ))}
+                </Select>
+                {p.description && <Text type="secondary" style={{ fontSize: 11 }}>{p.description}</Text>}
+              </Form.Item>
+            )
+          }
+          return (
+            <Form.Item key={p.name} label={p.label}>
+              <InputNumber
+                style={{ width: '100%' }}
+                min={p.min_val}
+                max={p.max_val}
+                value={strategyParams[p.name] as number}
+                onChange={(v) => handleParamChange(p.name, v, p.default ?? 0)}
+              />
+            </Form.Item>
+          )
+        })}
 
         <Form.Item label="回测区间">
           <RangePicker

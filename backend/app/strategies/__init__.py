@@ -2,18 +2,22 @@ from app.strategies.base import Strategy
 from app.strategies.dual_low import DualLowStrategy
 from app.strategies.low_premium import LowPremiumStrategy
 from app.strategies.momentum import MomentumStrategy
+from app.strategies.xuanji_v8 import XuanjiV8Strategy
 from app.strategies.multi_factor import MultiFactorStrategy
 from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
 from app.strategies.xuanji_twelve_factor import XuanjiTwelveFactorStrategy
+from app.strategies.sector_rotation import SectorRotationStrategy
 
 
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "dual_low": DualLowStrategy,
     "low_premium": LowPremiumStrategy,
     "momentum": MomentumStrategy,
+    "xuanji_v8": XuanjiV8Strategy,
     "multi_factor": MultiFactorStrategy,
     "songgang_seven": SonggangSevenDimensionStrategy,
     "xuanji_twelve": XuanjiTwelveFactorStrategy,
+    "sector_rotation": SectorRotationStrategy,
 }
 
 

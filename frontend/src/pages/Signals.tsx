@@ -4,7 +4,7 @@ import { ThunderboltOutlined, CheckCircleOutlined, DownloadOutlined, HistoryOutl
 import { useSignalStore } from '../stores/useSignalStore'
 import { useAppStore } from '../stores/useAppStore'
 import { signalsWs, refreshWsToken } from '../utils/wsInstances'
-import type { TradeSignal } from '../services/api'
+import type { TradeSignal, SignalHistoryItem } from '../services/api'
 import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
@@ -104,14 +104,14 @@ export default function Signals() {
   }
 
   const currentColumns = [
-    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
-    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 100, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '方向', dataIndex: 'action', key: 'action', width: 70, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
-    { title: '价格', dataIndex: 'price', key: 'price', width: 100, render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
-    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 100, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
-    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
-    { title: '时间', dataIndex: 'ts', key: 'ts', width: 180, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
+    { title: '代码', dataIndex: 'code', key: 'code', width: 100, sorter: (a: TradeSignal, b: TradeSignal) => String(a.code ?? '').localeCompare(String(b.code ?? '')), render: (v: string) => <Text code>{v}</Text> },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 140, sorter: (a: TradeSignal, b: TradeSignal) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
+    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 100, sorter: (a: TradeSignal, b: TradeSignal) => String(a.strategy ?? '').localeCompare(String(b.strategy ?? '')), render: (v: string) => <Tag>{v}</Tag> },
+    { title: '方向', dataIndex: 'action', key: 'action', width: 70, sorter: (a: TradeSignal, b: TradeSignal) => String(a.action ?? '').localeCompare(String(b.action ?? '')), render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 100, sorter: (a: TradeSignal, b: TradeSignal) => (a.price ?? 0) - (b.price ?? 0), render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
+    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 100, sorter: (a: TradeSignal, b: TradeSignal) => (a.confidence ?? 0) - (b.confidence ?? 0), render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
+    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true, sorter: (a: TradeSignal, b: TradeSignal) => String(a.reason ?? '').localeCompare(String(b.reason ?? '')) },
+    { title: '时间', dataIndex: 'ts', key: 'ts', width: 180, sorter: (a: TradeSignal, b: TradeSignal) => new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime(), render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
     {
       title: '操作', key: 'action', width: 100,
       render: (_: unknown, record: TradeSignal) => (
@@ -121,15 +121,15 @@ export default function Signals() {
   ]
 
   const historyColumns = [
-    { title: '代码', dataIndex: 'code', key: 'code', width: 100, render: (v: string) => <Text code>{v}</Text> },
-    { title: '名称', dataIndex: 'name', key: 'name', width: 130 },
-    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 90, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '方向', dataIndex: 'action', key: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
-    { title: '价格', dataIndex: 'price', key: 'price', width: 90, render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
-    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 80, render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
-    { title: '已执行', dataIndex: 'executed', key: 'executed', width: 80, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
-    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
-    { title: '时间', dataIndex: 'ts', key: 'ts', width: 170, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
+    { title: '代码', dataIndex: 'code', key: 'code', width: 100, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => String(a.code ?? '').localeCompare(String(b.code ?? '')), render: (v: string) => <Text code>{v}</Text> },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 130, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
+    { title: '策略', dataIndex: 'strategy', key: 'strategy', width: 90, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => String(a.strategy ?? '').localeCompare(String(b.strategy ?? '')), render: (v: string) => <Tag>{v}</Tag> },
+    { title: '方向', dataIndex: 'action', key: 'action', width: 60, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => String(a.action ?? '').localeCompare(String(b.action ?? '')), render: (v: string) => <Tag color={actionColors[v] || 'default'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 90, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => (a.price ?? 0) - (b.price ?? 0), render: (v: number) => { const s = fmt(v, 3); return <Text>{s === '-' ? '--' : s}</Text> } },
+    { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 80, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => (a.confidence ?? 0) - (b.confidence ?? 0), render: (v: number) => <Tag color={confidenceColor(v)}>{v >= 0.01 ? `${(v * 100).toFixed(0)}%` : '--'}</Tag> },
+    { title: '已执行', dataIndex: 'executed', key: 'executed', width: 80, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => Number(a.executed ?? 0) - Number(b.executed ?? 0), render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
+    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => String(a.reason ?? '').localeCompare(String(b.reason ?? '')) },
+    { title: '时间', dataIndex: 'ts', key: 'ts', width: 170, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime(), render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '--' },
   ]
 
   // Initial loading skeleton

@@ -71,7 +71,7 @@
           "!docker-compose.yml",
           "!pyproject.toml",
           "!requirements.txt",
-          "!run_app.py"
+          "run_app.py"
         ]
       },
       {
@@ -147,6 +147,7 @@
     "wait-on": "^9.0.10"
   },
   "dependencies": {
+    "playwright": "^1.61.0",
     "ws": "^8.20.1"
   }
 }

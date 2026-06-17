@@ -36,6 +36,39 @@ def make_mock_data(n_bonds=20, n_days=100):
     return pd.DataFrame(rows)
 
 
+def make_complete_mock_data(n_bonds=20, n_days=100):
+    """生成完整字段的模拟转债数据 (供on_data完整路径测试)"""
+    dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(n_days)]
+    rows = []
+    np.random.seed(42)
+    for code_idx in range(n_bonds):
+        code = f"11{code_idx:04d}"
+        base_price = 100 + code_idx * 2
+        for d_idx, d in enumerate(dates):
+            price = base_price * (1 + d_idx * 0.001) * (1 + np.random.normal(0, 0.02))
+            rows.append({
+                "code": code,
+                "date": d,
+                "name": f"测试转债{code_idx}",
+                "price": max(80, min(180, price)),
+                "premium_ratio": abs(np.random.normal(30, 15)),
+                "volume": abs(np.random.normal(1000, 500)) + 100,
+                "change_pct": np.random.normal(0, 2),
+                "ytm": np.random.uniform(-3, 3),
+                "remaining_years": np.random.uniform(1, 5),
+                "stock_price": max(50, price * 0.85),
+                "conversion_value": price * 0.9,
+                "roe": np.random.uniform(0, 20),
+                "gpm": np.random.uniform(10, 50),
+                "cagr": np.random.uniform(0, 30),
+                "debt_ratio": np.random.uniform(20, 70),
+                "pe": np.random.uniform(5, 50),
+                "pb": np.random.uniform(0.5, 5),
+                "iv": np.random.uniform(20, 60),
+            })
+    return pd.DataFrame(rows)
+
+
 class TestXuanjiStrategy:
     """测试璇玑十二因子策略"""
 
@@ -74,18 +107,21 @@ class TestXuanjiStrategy:
             assert abs(total - 1.0) < 0.01, f"{state} 权重总和 {total} != 1.0"
 
     def test_normalize_rank(self):
-        """测试rank归一化函数"""
+        """测试rank归一化函数 - 修复后: rank1(最优)→score1.0(最高分)"""
         s = XuanjiTwelveFactorStrategy()
         series = pd.Series([10, 20, 30, 40, 50])
-        # ascending=True: 小的rank低
+        # ascending=True: 最小值(10)排名最高(rank=1), 得最高分1.0
         normalized = s._normalize_rank(series, ascending=True)
-        assert normalized.min() == 0.0
-        # 公式(rank-1)/max_rank, 最大值=(5-1)/5=0.8
-        assert abs(normalized.max() - 0.8) < 0.01
-        # 反向
+        # 最小值应得最高分
+        assert abs(normalized.iloc[0] - 1.0) < 0.01
+        # 最大值应得最低分0
+        assert abs(normalized.iloc[-1] - 0.0) < 0.01
+        # 反向: ascending=False: 最大值(50)排名最高(rank=1), 得最高分1.0
         normalized_rev = s._normalize_rank(series, ascending=False)
-        assert normalized_rev.iloc[0] == 0.8  # 10是最大值的反向
-        assert normalized_rev.iloc[-1] == 0.0  # 50是最小值的反向
+        # 最大值应得最高分
+        assert abs(normalized_rev.iloc[-1] - 1.0) < 0.01
+        # 最小值应得最低分0
+        assert abs(normalized_rev.iloc[0] - 0.0) < 0.01
 
     def test_detect_market_state(self):
         """测试市场状态自动检测"""
@@ -121,25 +157,49 @@ class TestXuanjiStrategy:
     def test_on_data_returns_signals_at_rebalance(self):
         """测试调仓日返回交易信号"""
         s = XuanjiTwelveFactorStrategy(hold_count=5, rebalance_days=10, market_state="neutral")
-        data = make_mock_data(n_bonds=30, n_days=50)
+        # 使用完整字段的mock数据
+        data = make_complete_mock_data(n_bonds=30, n_days=50)
         s.on_init(data)
 
-        # 第10天 (idx=10) 是调仓日 - 测试on_data的过滤逻辑(过滤+return None or signals)
-        # 由于内部factor_data和day_data合并可能在mock数据上有兼容问题
-        # 这里主要验证函数可以被调用, 而不一定返回信号
+        # 第10天 (idx=10) 是调仓日
         day_data = s._date_data_map[s._dates[10]].copy()
-        # 注入预计算字段
-        if 'momentum' not in day_data.columns:
-            day_data['momentum'] = 0.01
-        if 'hv' not in day_data.columns:
-            day_data['hv'] = 25.0
-        try:
-            signals = s.on_data(day_data, 10)
-            # 成功执行(无论返回None还是signals都算通过)
-            assert signals is None or isinstance(signals, list)
-        except (KeyError, ValueError) as e:
-            # mock数据可能不能完整支持所有字段
-            pytest.skip(f"Mock数据不完整, 跳过: {e}")
+        signals = s.on_data(day_data, 10)
+
+        # 应该返回完整的signals list（首次调仓，全部为买入）
+        assert signals is not None, "调仓日应返回信号"
+        assert isinstance(signals, list)
+        buy_signals = [sig for sig in signals if sig['action'] == 'buy']
+        # 首次调仓不应有卖出
+        assert len(buy_signals) > 0
+        # buy数量不超过hold_count
+        assert len(buy_signals) <= 5
+        # 验证信号结构
+        for sig in buy_signals:
+            assert 'code' in sig
+            assert 'action' in sig
+            assert sig['action'] == 'buy'
+            assert 'price' in sig
+            assert sig['price'] > 0
+            assert 'reason' in sig
+            assert '璇玑' in sig['reason']
+
+    def test_on_data_buy_then_sell_rotation(self):
+        """测试调仓轮换: 第二次调仓应有卖出"""
+        s = XuanjiTwelveFactorStrategy(hold_count=5, rebalance_days=10, market_state="neutral")
+        data = make_complete_mock_data(n_bonds=30, n_days=50)
+        s.on_init(data)
+
+        # 第一次调仓
+        day1 = s._date_data_map[s._dates[10]].copy()
+        signals1 = s.on_data(day1, 10)
+        assert signals1 is not None
+        initial_codes = {sig['code'] for sig in signals1 if sig['action'] == 'buy'}
+
+        # 第二次调仓 - 由于mock数据相同,结果可能相同
+        day2 = s._date_data_map[s._dates[20]].copy()
+        signals2 = s.on_data(day2, 20)
+        # 至少应该返回信号
+        assert signals2 is not None
 
     def test_on_data_skips_non_rebalance_days(self):
         """测试非调仓日返回None"""

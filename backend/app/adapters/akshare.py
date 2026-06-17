@@ -118,17 +118,108 @@ class AKShareAdapter(DataSourceAdapter):
         except Exception as e:
             logger.warning(f"[AKShare] bond_zh_cov_info_ths failed: {e}")
 
-        # 4. 赎回/退市/可交换债 统一从 JSL bond_cb_redeem_jsl 拉取
-        eb_bonds: list[ConvertibleQuote] = []
-        # 赎回信息表: code -> {is_called, call_status, last_trade_date, redemption_price, maturity_date}
-        redeem_map: dict[str, dict] = {}
-        # 正股涨跌幅映射: stock_code -> change_pct (从 enrichment 缓存复用)
+# 4. 正股行情: stock_zh_a_spot (新浪实时行情, 含涨跌幅/价格/成交量)
+        # PE/PB/换手率由 data_enrich 后台任务从东财 push2 批量获取
         stock_chg_map: dict[str, float] = {}
+        stock_price_map: dict[str, float] = {}
+        stock_volume_map: dict[str, float] = {}
+        stock_pe_map: dict[str, float] = {}
+        stock_pb_map: dict[str, float] = {}
+        stock_turnover_map: dict[str, float] = {}
         try:
-            from app.engine.data_enrich import get_all_stock_change_pct
-            stock_chg_map = get_all_stock_change_pct() or {}
-        except Exception:
-            pass
+            df_stock = ak.stock_zh_a_spot()
+            for _, r in df_stock.iterrows():
+                raw_code = str(r.get("代码", "")).strip()
+                if not raw_code or raw_code.startswith("bj"):
+                    continue
+                s_code = raw_code[2:] if (raw_code.startswith("sz") or raw_code.startswith("sh")) else raw_code
+                chg = self._safe_float(r.get("涨跌幅", 0))
+                stock_chg_map[s_code] = chg
+                sp_v = self._safe_float(r.get("最新价", 0))
+                if sp_v:
+                    stock_price_map[s_code] = sp_v
+                sv_v = self._safe_float(r.get("成交额", 0))
+                if sv_v:
+                    stock_volume_map[s_code] = sv_v
+            logger.info(f"[AKShare] Fetched {len(stock_chg_map)} stock change data from Sina ({len(stock_price_map)} prices)")
+
+            # 尝试从 data_enrich 缓存拉取 PE/PB/换手率
+            try:
+                from app.engine.data_enrich import get_stock_spot
+                for code in stock_price_map:
+                    spot = get_stock_spot(code)
+                    if spot:
+                        pe = spot.get('pe')
+                        pb = spot.get('pb')
+                        tr = spot.get('turnover_rate')
+                        if pe and pe > 0:
+                            stock_pe_map[code] = pe
+                        if pb and pb > 0:
+                            stock_pb_map[code] = pb
+                        if tr and tr > 0:
+                            stock_turnover_map[code] = tr
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.warning(f"[AKShare] stock_zh_a_spot (Sina) failed: {e}")
+
+        # 5. 资金流向: stock_individual_fund_flow_rank
+        # 失败时用 debug 级别，避免重复 5xx 刷屏
+        fund_flow_map: dict[str, dict] = {}
+        try:
+            df_flow = ak.stock_individual_fund_flow_rank(indicator="今日")
+            for _, r in df_flow.iterrows():
+                f_code = str(r.get("代码", "")).strip()
+                if not f_code:
+                    continue
+                fund_flow_map[f_code] = {
+                    "net_main": self._safe_float(r.get("今日主力净流入-净额", 0)),
+                    "net_main_pct": self._safe_float(r.get("今日主力净流入-净占比", 0)),
+                }
+            logger.info(f"[AKShare] Fetched fund flow: {len(fund_flow_map)} stocks")
+        except Exception as e:
+            logger.debug(f"[AKShare] fund flow failed: {e}")
+
+        # 合并所有正股行情(价格/涨跌幅/PE/PB/换手率/资金流向)到 data_enrich 缓存
+        if stock_price_map or stock_chg_map:
+            try:
+                from app.engine import data_enrich as _de
+                existing = {}
+                try:
+                    import json, os
+                    cache_path = os.path.expanduser("~/.lianghua/data_cache/stock_spot.json")
+                    if os.path.exists(cache_path):
+                        with open(cache_path) as f:
+                            cached = json.load(f)
+                            if isinstance(cached, dict):
+                                existing = {k: v for k, v in cached.items() if k != "_ts"}
+                except Exception:
+                    pass
+                all_stock_codes = set(stock_chg_map.keys()) | set(stock_price_map.keys()) | set(stock_pe_map.keys())
+                for code in all_stock_codes:
+                    if code not in existing:
+                        existing[code] = {}
+                    if code in stock_price_map:
+                        existing[code]["price"] = stock_price_map[code]
+                    existing[code]["change_pct"] = stock_chg_map.get(code, 0.0)
+                    existing[code]["volume"] = stock_volume_map.get(code, 0.0)
+                    if code in stock_pe_map:
+                        existing[code]["pe"] = stock_pe_map[code]
+                    if code in stock_pb_map:
+                        existing[code]["pb"] = stock_pb_map[code]
+                    if code in stock_turnover_map:
+                        existing[code]["turnover_rate"] = stock_turnover_map[code]
+                    if code in fund_flow_map:
+                        existing[code]["net_main"] = fund_flow_map[code].get("net_main")
+                        existing[code]["net_main_pct"] = fund_flow_map[code].get("net_main_pct")
+                _de._inject_spot_data(existing)
+            except Exception:
+                pass
+
+        # 6. 赎回/退市/可交换债 统一从 JSL bond_cb_redeem_jsl 拉取
+        eb_bonds: list[ConvertibleQuote] = []
+        redeem_map: dict[str, dict] = {}
         try:
             df_redeem = ak.bond_cb_redeem_jsl()
             for _, r in df_redeem.iterrows():
@@ -161,6 +252,7 @@ class AKShareAdapter(DataSourceAdapter):
                     "forced_call_days": forced_call_days,
                     "jsl_price": jsl_price,
                     "jsl_premium": jsl_premium,
+                    "remaining_scale": self._safe_float(r.get("剩余规模")),
                 }
 
                 # 可交换债额外构建行情(EB 单独走另一条数据流)
@@ -184,6 +276,7 @@ class AKShareAdapter(DataSourceAdapter):
                 volume = round(raw_amount / 100000000, 4) if raw_amount > 0 else 0.0
                 eb_stock_code = str(r.get("正股代码", "")).strip()
                 stock_change_pct = stock_chg_map.get(eb_stock_code, 0.0)
+                ff = fund_flow_map.get(eb_stock_code, {})
                 eb_bonds.append(ConvertibleQuote(
                     code=code,
                     name=name,
@@ -196,6 +289,7 @@ class AKShareAdapter(DataSourceAdapter):
                     conversion_value=conversion_value,
                     premium_ratio=premium_ratio,
                     dual_low=dual_low,
+                    ytm=self._calc_ytm(price, remaining_years),
                     volume=volume,
                     remaining_years=remaining_years,
                     forced_call_days=forced_call_days,
@@ -203,7 +297,13 @@ class AKShareAdapter(DataSourceAdapter):
                     call_status=call_status,
                     last_trade_date=last_trade_date,
                     maturity_date=maturity,
+                    pe=stock_pe_map.get(eb_stock_code),
+                    pb=stock_pb_map.get(eb_stock_code),
+                    turnover_rate=stock_turnover_map.get(eb_stock_code),
+                    net_capital_flow=ff.get("net_main"),
+                    net_capital_flow_pct=ff.get("net_main_pct"),
                     redemption_price=redemption_price,
+                    outstanding_scale=self._safe_float(r.get("剩余规模")),
                 ))
             if eb_bonds:
                 logger.info(f"[AKShare] Fetched {len(eb_bonds)} exchangeable bonds from JSL")
@@ -223,12 +323,39 @@ class AKShareAdapter(DataSourceAdapter):
                 if self._is_exchangeable_bond(code):
                     continue
                 rating = str(row.get("信用评级", "")).strip() or None
-                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating, stock_chg_map)
+                bond = self._row_to_quote(row, spot_map, maturity_map, redeem_map.get(code), rating,
+                                          stock_chg_map, stock_pe_map, stock_pb_map,
+                                          stock_turnover_map, fund_flow_map)
                 if bond:
                     bonds.append(bond)
             except (KeyError, ValueError, TypeError) as e:
                 logger.debug(f"[AKShare] Skip row: {e}")
                 continue
+
+        # TDX fallback: 补充缺失的转债价格和正股行情
+        try:
+            from app.adapters.tdx_adapter import get_tdx_adapter
+            tdx = get_tdx_adapter()
+
+            # TDX 补充转债价格
+            missing_cb_codes = [b.code for b in bonds if not b.price or b.price <= 0]
+            if missing_cb_codes:
+                tdx_q = tdx.fetch_quotes(missing_cb_codes)
+                if tdx_q:
+                    filled = 0
+                    for code, q in tdx_q.items():
+                        price = q.get("price", 0)
+                        if price and price > 0:
+                            for b in bonds:
+                                if b.code == code and (not b.price or b.price <= 0):
+                                    b.price = price
+                                    b.change_pct = q.get("change_pct")
+                                    filled += 1
+                                    break
+                    if filled:
+                        logger.info(f"[AKShare] TDX: filled {filled} CB prices")
+        except Exception as e:
+            logger.debug(f"[AKShare] TDX CB fallback failed: {e}")
 
         return bonds, eb_bonds
 
@@ -242,8 +369,15 @@ class AKShareAdapter(DataSourceAdapter):
 
     @staticmethod
     def _safe_float(value) -> float:
-        v = float(value) if value is not None and value != '' else 0.0
-        return 0.0 if math.isnan(v) or math.isinf(v) else v
+        if value is None or value == '' or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+            return 0.0
+        try:
+            v = float(value)
+            if math.isnan(v) or math.isinf(v):
+                return 0.0
+            return v
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def _calc_ytm(price: float, remaining_years: float) -> float:
@@ -252,13 +386,15 @@ class AKShareAdapter(DataSourceAdapter):
         使用简化的当前收益率 + 资本利得/损失摊销
 
         中国可转债通常采用阶梯利率（如0.3%、0.5%、1.0%、1.5%、1.8%、2.0%），
-        平均简化取1.5%作为票面利率近似值。
+        根据剩余年限估算加权平均票面利率：剩余越长，用到的高息年份越多。
         """
         if price <= 0 or remaining_years <= 0:
             return 0.0
         face_value = 100.0
-        coupon_rate = 1.5
-        annual_interest = face_value * coupon_rate / 100.0
+        coupon_rates = [0.3, 0.5, 1.0, 1.5, 1.8, 2.0]
+        total_years = min(6, remaining_years)
+        weighted_coupon = sum(coupon_rates[:int(total_years)]) / total_years if total_years > 0 else 1.5
+        annual_interest = face_value * weighted_coupon / 100.0
         avg_price = (face_value + price) / 2.0
         capital_gain = (face_value - price) / remaining_years
         ytm = ((annual_interest + capital_gain) / avg_price) * 100.0
@@ -286,12 +422,17 @@ class AKShareAdapter(DataSourceAdapter):
                             last_trade_date=None, maturity_date=None,
                             volume: float = None, change_pct: float = None) -> bool:
         """判断转债是否已停止交易（到期/强赎后已退市），应从行情中移除"""
-        if price <= 0:
-            return True
+        # price=0 with remaining_years=0: likely missing data, not confirmed stopped
+        # Only filter if we have explicit stop signals
         if remaining_years is None or remaining_years < 0:
             return True
+        # Confirmed stopped: price < 1 AND remaining_years == 0 AND we have maturity info
         if remaining_years == 0.0 and price < 1.0:
-            return True
+            # If we have maturity_date, it's confirmed stopped
+            if maturity_date is not None:
+                return True
+            # Otherwise, price=0 with no maturity data = missing data, keep it
+            return False
         # 已到期转债：price=100 且无剩余年限 → 过滤掉
         if price == 100.0 and remaining_years == 0.0:
             return True
@@ -326,10 +467,6 @@ class AKShareAdapter(DataSourceAdapter):
         return code.startswith('132') or code.startswith('133')
 
     @staticmethod
-    def _is_expired_bond(price: float, remaining_years: float) -> bool:
-        """判断是否为已到期无交易价值的转债（price=100且无剩余年限）"""
-        return price == 100.0 and remaining_years == 0.0
-
     @staticmethod
     def _parse_iso_date(value):
         """解析 JSL/THS 的日期字段为 date；空值/无效值返回 None"""
@@ -355,7 +492,11 @@ class AKShareAdapter(DataSourceAdapter):
     def _row_to_quote(self, row: pd.Series, spot_map: dict, maturity_map: dict,
                       redeem_info: Optional[dict] = None,
                       rating: Optional[str] = None,
-                      stock_chg_map: Optional[dict] = None) -> Optional[ConvertibleQuote]:
+                      stock_chg_map: Optional[dict] = None,
+                      stock_pe_map: Optional[dict] = None,
+                      stock_pb_map: Optional[dict] = None,
+                      stock_turnover_map: Optional[dict] = None,
+                      fund_flow_map: Optional[dict] = None) -> Optional[ConvertibleQuote]:
         """将主数据行与补充数据合并为 Quote 对象，过滤退市和到期转债"""
         try:
             code = str(row.get("债券代码", row.get("代码", ""))).strip()
@@ -398,6 +539,7 @@ class AKShareAdapter(DataSourceAdapter):
             conversion_value = self._safe_float(row.get("转股价值", 0))
             conversion_price = self._safe_float(row.get("转股价", 0))
             stock_price = self._safe_float(row.get("正股价", 0))
+            stock_code = str(row.get("正股代码", "")).strip()
 
             # 溢价率优先级: JSL > 东财
             jsl_premium = float(ri.get("jsl_premium", 0) or 0)
@@ -448,19 +590,24 @@ class AKShareAdapter(DataSourceAdapter):
             ):
                 return None
 
-            # 所有数据源均无真实价格 → 视为停牌/无交易，过滤掉
+            # 所有数据源均无真实价格 → price=0, 不丢弃（数据源缺失≠确认停牌）
+            # _is_stopped_trading 会根据其他字段做进一步判断
             if price <= 0:
+                price = 0.0
+
+            # 无 Sina 无 JSL 价格（即东财默认100元）→ 数据源均不跟踪，过滤
+            if sina_price <= 0 and jsl_price <= 0 and em_price == 100.0:
                 return None
 
             return ConvertibleQuote(
                 code=code,
                 name=name,
-                stock_code=str(row.get("正股代码", "")).strip(),
+                stock_code=stock_code,
                 price=price,
                 change_pct=change_pct,
                 stock_price=stock_price,
                 stock_change_pct=(stock_chg_map or {}).get(
-                    str(row.get("正股代码", "")).strip(), 0.0
+                    stock_code, 0.0
                 ),
                 conversion_price=conversion_price,
                 conversion_value=conversion_value,
@@ -476,9 +623,13 @@ class AKShareAdapter(DataSourceAdapter):
                 maturity_date=maturity,
                 redemption_price=float(ri.get("redemption_price", 0.0) or 0.0),
                 rating=rating,
+                pe=(stock_pe_map or {}).get(stock_code),
+                pb=(stock_pb_map or {}).get(stock_code),
+                turnover_rate=(stock_turnover_map or {}).get(stock_code),
+                net_capital_flow=((fund_flow_map or {}).get(stock_code) or {}).get("net_main"),
+                net_capital_flow_pct=((fund_flow_map or {}).get(stock_code) or {}).get("net_main_pct"),
+                outstanding_scale=ri.get("remaining_scale"),
             )
-            if rating:
-                logger.debug(f"[AKShare] Rating for {code} ({name}): {rating}")
         except (ValueError, TypeError, ZeroDivisionError) as e:
             logger.debug(f"[AKShare] _row_to_quote failed for row: {e}")
             return None

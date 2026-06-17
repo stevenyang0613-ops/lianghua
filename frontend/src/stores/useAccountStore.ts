@@ -5,6 +5,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { secureSave, secureLoad, secureRemove } from '../utils/secureStorage'
+import { message } from 'antd'
 
 export interface BrokerAccount {
   id: string
@@ -145,25 +146,18 @@ export const useAccountStore = create<AccountState>()(
       syncAccount: async (id) => {
         set({ isLoading: true, error: null })
         try {
-          // 模拟同步
-          await new Promise((resolve) => setTimeout(resolve, 1000))
+          if (!window.electronAPI?.httpRequest) {
+            message.warning('账户同步需要连接真实交易接口，当前无可用接口')
+            set({ isLoading: false })
+            return
+          }
 
           const account = get().accounts.find((a) => a.id === id)
           if (!account) throw new Error('账户不存在')
 
-          // 模拟更新数据
-          const updates: Partial<BrokerAccount> = {
-            balance: account.balance + (Math.random() - 0.5) * 1000,
-            available: account.available + (Math.random() - 0.5) * 500,
-            marketValue: account.marketValue * (1 + (Math.random() - 0.5) * 0.02),
-            todayProfit: (Math.random() - 0.5) * 1000,
-            lastSync: Date.now(),
-            status: 'active',
-          }
-
           set((state) => ({
             accounts: state.accounts.map((a) =>
-              a.id === id ? { ...a, ...updates } : a
+              a.id === id ? { ...a, lastSync: Date.now(), status: 'active' } : a
             ),
             isLoading: false,
           }))

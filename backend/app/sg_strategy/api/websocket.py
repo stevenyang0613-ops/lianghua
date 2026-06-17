@@ -18,6 +18,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
+from fastapi import Depends
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -398,20 +399,26 @@ class QuotePushService:
                 await asyncio.sleep(1)
 
     async def _fetch_quotes(self) -> Dict[str, dict]:
-        """获取行情数据"""
-        # 这里应该从数据源获取真实行情
-        # 模拟数据
-        import random
-        codes = ["110001", "110002", "110003", "110004", "110005"]
-        return {
-            code: {
-                "price": round(100 + random.uniform(-5, 5), 2),
-                "change_pct": round(random.uniform(-3, 3), 2),
-                "volume": random.randint(100000, 1000000),
-                "amount": round(random.uniform(1000, 10000), 2),
-            }
-            for code in codes
-        }
+        """获取行情数据 - 从 AKShare 获取真实行情"""
+        try:
+            import akshare as ak
+            df = ak.bond_zh_hs_cov_spot()
+            result = {}
+            for _, r in df.iterrows():
+                code = str(r.get("code", "")).strip()
+                if code and len(code) == 6 and code[0] in '12':
+                    trade = float(r.get("trade", 0) or 0)
+                    if trade > 0:
+                        result[code] = {
+                            "price": trade,
+                            "change_pct": float(r.get("changepercent", 0) or 0),
+                            "volume": int(r.get("volume", 0) or 0),
+                            "amount": float(r.get("amount", 0) or 0),
+                        }
+            return result
+        except Exception as e:
+            logger.error(f"[QuotePush] 获取行情失败: {e}")
+            return {}
 
     def stop(self):
         """停止"""

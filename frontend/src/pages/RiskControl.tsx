@@ -70,6 +70,7 @@ export default function RiskControl() {
       title: '规则名称',
       dataIndex: 'name',
       width: 150,
+      sorter: (a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')),
       render: (name: string, record) => (
         <Space>
           <Text strong>{name}</Text>
@@ -81,6 +82,7 @@ export default function RiskControl() {
       title: '状态',
       dataIndex: 'enabled',
       width: 80,
+      sorter: (a, b) => Number(a.enabled ?? 0) - Number(b.enabled ?? 0),
       render: (enabled: boolean, record) => (
         <Switch
           size="small"
@@ -93,12 +95,14 @@ export default function RiskControl() {
       title: '阈值',
       dataIndex: 'threshold',
       width: 100,
+      sorter: (a, b) => (a.threshold ?? 0) - (b.threshold ?? 0),
       render: (v: number) => `${v}%`,
     },
     {
       title: '当前值',
       dataIndex: 'current',
       width: 100,
+      sorter: (a, b) => (a.current ?? 0) - (b.current ?? 0),
       render: (v: number, record) => {
         const exceeded = record.type === 'drawdown' || record.type === 'loss_limit'
           ? v < record.threshold
@@ -114,6 +118,7 @@ export default function RiskControl() {
       title: '风险等级',
       dataIndex: 'level',
       width: 100,
+      sorter: (a, b) => String(a.level ?? '').localeCompare(String(b.level ?? '')),
       render: (level: string) => (
         <Tag color={levelColors[level]}>{level === 'info' ? '信息' : level === 'warning' ? '警告' : '严重'}</Tag>
       ),
@@ -122,12 +127,14 @@ export default function RiskControl() {
       title: '触发动作',
       dataIndex: 'action',
       width: 100,
+      sorter: (a, b) => String(a.action ?? '').localeCompare(String(b.action ?? '')),
       render: (action: string) => actionLabels[action] || action,
     },
     {
       title: '说明',
       dataIndex: 'description',
       ellipsis: true,
+      sorter: (a, b) => String(a.description ?? '').localeCompare(String(b.description ?? '')),
     },
     {
       title: '操作',
@@ -148,18 +155,7 @@ export default function RiskControl() {
     },
   ]
 
-  // 模拟风险状态
-  const mockStatus = {
-    overallLevel: 'safe',
-    rules,
-    lastCheck: Date.now(),
-    recommendations: rules.filter(r => r.triggered).map(r => `【${r.name}】规则已触发`),
-  }
-
-  const overallColor = mockStatus.overallLevel === 'safe' ? '#52c41a'
-    : mockStatus.overallLevel === 'warning' ? '#faad14'
-    : mockStatus.overallLevel === 'danger' ? '#ff7875'
-    : '#ff4d4f'
+  const overallColor = '#52c41a'
 
   const history = getRiskHistory().slice(-10).reverse()
 
@@ -178,9 +174,7 @@ export default function RiskControl() {
                 strokeColor={overallColor}
                 format={() => (
                   <span style={{ fontSize: 16 }}>
-                    {mockStatus.overallLevel === 'safe' ? '安全'
-                      : mockStatus.overallLevel === 'warning' ? '警告'
-                      : mockStatus.overallLevel === 'danger' ? '危险' : '危急'}
+                    {'等待数据'}
                   </span>
                 )}
                 size={100}
@@ -226,22 +220,7 @@ export default function RiskControl() {
         </Row>
       </Card>
 
-      {/* 风控建议 */}
-      {mockStatus.recommendations.length > 0 && (
-        <Alert
-          type={mockStatus.overallLevel === 'safe' ? 'success' : mockStatus.overallLevel === 'warning' ? 'warning' : 'error'}
-          message="风控建议"
-          description={
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              {mockStatus.recommendations.map((rec: string, i: number) => (
-                <li key={i}>{rec}</li>
-              ))}
-            </ul>
-          }
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
+      {/* 风控建议 — 需接入真实风控数据 */}
 
       {/* 风控规则 */}
       <Card title="风控规则">
@@ -329,18 +308,19 @@ export default function RiskControl() {
           <Table
             dataSource={history}
             columns={[
-              { title: '时间', dataIndex: 'timestamp', width: 160, render: (v) => new Date(v).toLocaleString('zh-CN') },
+              { title: '时间', dataIndex: 'timestamp', width: 160, sorter: (a, b) => new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime(), render: (v) => new Date(v).toLocaleString('zh-CN') },
               {
                 title: '风险等级',
                 dataIndex: 'level',
                 width: 100,
+                sorter: (a, b) => String(a.level ?? '').localeCompare(String(b.level ?? '')),
                 render: (v) => (
                   <Tag color={v === 'safe' ? 'green' : v === 'warning' ? 'orange' : 'red'}>
                     {v === 'safe' ? '安全' : v === 'warning' ? '警告' : '危险'}
                   </Tag>
                 ),
               },
-              { title: '触发规则', dataIndex: 'rules', render: (v: string[]) => (v ?? []).join(', ') || '-' },
+              { title: '触发规则', dataIndex: 'rules', sorter: (a, b) => String((a.rules ?? []).join(',') ?? '').localeCompare(String((b.rules ?? []).join(',') ?? '')), render: (v: string[]) => (v ?? []).join(', ') || '-' },
             ]}
             rowKey="timestamp"
             pagination={false}

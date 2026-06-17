@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, Table, Tag, Typography, Spin, Empty, message, Row, Col, Descriptions, Button, Divider } from 'antd'
+import { Card, Table, Tag, Typography, Spin, Empty, message, Row, Col, Descriptions, Button, Divider, Skeleton } from 'antd'
 import { DeploymentUnitOutlined, InfoCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { fetchStrategies, fetchSignalHistory, fetchSignalStats } from '../services/api'
+import { useStrategyStore } from '../stores/useStrategyStore'
 import type { StrategyInfo, SignalHistoryItem, SignalStats } from '../services/api'
 import { fmt } from '../utils/format'
 
@@ -11,33 +11,20 @@ const { Title, Text } = Typography
 
 
 export default function Strategies() {
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [selectedStrategy, setSelectedStrategy] = useState<StrategyInfo | null>(null)
-  const [signalHistory, setSignalHistory] = useState<SignalHistoryItem[]>([])
-  const [signalHistoryLoading, setSignalHistoryLoading] = useState(false)
-  const [signalStats, setSignalStats] = useState<SignalStats | null>(null)
+  const strategies = useStrategyStore((s) => s.strategies)
+  const loading = useStrategyStore((s) => s.loading)
+  const selectedStrategy = useStrategyStore((s) => s.selectedStrategy)
+  const signalHistory = useStrategyStore((s) => s.signalHistory)
+  const signalHistoryLoading = useStrategyStore((s) => s.signalHistoryLoading)
+  const signalStats = useStrategyStore((s) => s.signalStats)
+  const loadStrategies = useStrategyStore((s) => s.loadStrategies)
+  const selectStrategy = useStrategyStore((s) => s.selectStrategy)
+  const loadStats = useStrategyStore((s) => s.loadStats)
 
   useEffect(() => {
-    fetchStrategies()
-      .then((list) => {
-        setStrategies(list)
-        if (list.length > 0) setSelectedStrategy(list[0])
-      })
-      .catch(e => message.error('加载策略失败: ' + e.message))
-      .finally(() => setLoading(false))
-    fetchSignalStats().then(setSignalStats).catch(() => {})
+    loadStrategies()
+    loadStats()
   }, [])
-
-  useEffect(() => {
-    if (selectedStrategy) {
-      setSignalHistoryLoading(true)
-      fetchSignalHistory(selectedStrategy.id, undefined, 50)
-        .then(data => setSignalHistory(data.signals))
-        .catch(() => {})
-        .finally(() => setSignalHistoryLoading(false))
-    }
-  }, [selectedStrategy])
 
   const strategyColumns = [
     { title: 'ID', dataIndex: 'id', width: 100 },
@@ -60,14 +47,20 @@ export default function Strategies() {
       title: '操作',
       width: 100,
       render: (_: any, record: StrategyInfo) => (
-        <Button type="link" onClick={() => setSelectedStrategy(record)}>查看详情</Button>
+        <Button type="link" onClick={() => selectStrategy(record)}>查看详情</Button>
       ),
     },
   ]
 
   const actionColors: Record<string, string> = { buy: 'green', sell: 'red' }
 
-  if (loading) return <Spin size="large" style={{ display: 'block', margin: '60px auto' }} />
+  if (loading && strategies.length === 0) {
+    return (
+      <div style={{ padding: 16 }}>
+        <Skeleton paragraph={{ rows: 6 }} active />
+      </div>
+    )
+  }
   if (strategies.length === 0) return <Empty description="暂无已注册策略" />
 
   return (

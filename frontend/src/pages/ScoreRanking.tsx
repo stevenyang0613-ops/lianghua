@@ -321,13 +321,13 @@ export default function ScoreRanking() {
   }, [])
 
   const columns = useMemo(() => [
-    { title: '排名', dataIndex: 'rank', width: 60, render: (v: number) => <Text strong style={{ color: v <= 10 ? '#faad14' : v <= 30 ? '#1677ff' : undefined }}>#{v}</Text> },
-    { title: '代码', dataIndex: 'code', width: 90, render: (v: string) => <Text code>{v}</Text> },
-    { title: '名称', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
-    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, ellipsis: { showTitle: true }, render: (v: number) => <Tag color={v < 20 ? 'green' : v < 40 ? 'blue' : 'orange'}>{fmt(v, 1)}%</Tag> },
-    { title: '双低值', dataIndex: 'dual_low', width: 80, ellipsis: { showTitle: true }, render: (v: number) => <Tag color={v < 130 ? 'green' : v < 150 ? 'blue' : 'orange'}>{fmt(v, 1)}</Tag> },
-    { title: '涨跌幅', dataIndex: 'change_pct', width: 90, render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
+    { title: '排名', dataIndex: 'rank', width: 60, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.rank ?? 0) - (b.rank ?? 0), render: (v: number) => <Text strong style={{ color: v <= 10 ? '#faad14' : v <= 30 ? '#1677ff' : undefined }}>#{v}</Text> },
+    { title: '代码', dataIndex: 'code', width: 90, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => String(a.code ?? '').localeCompare(String(b.code ?? '')), render: (v: string) => <Text code>{v}</Text> },
+    { title: '名称', dataIndex: 'name', width: 120, ellipsis: true, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
+    { title: '价格', dataIndex: 'price', width: 80, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.price ?? 0) - (b.price ?? 0), render: (v: number) => fmt(v) },
+    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, ellipsis: { showTitle: true }, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.premium_ratio ?? 0) - (b.premium_ratio ?? 0), render: (v: number) => <Tag color={v < 20 ? 'green' : v < 40 ? 'blue' : 'orange'}>{fmt(v, 1)}%</Tag> },
+    { title: '双低值', dataIndex: 'dual_low', width: 80, ellipsis: { showTitle: true }, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.dual_low ?? 0) - (b.dual_low ?? 0), render: (v: number) => <Tag color={v < 130 ? 'green' : v < 150 ? 'blue' : 'orange'}>{fmt(v, 1)}</Tag> },
+    { title: '涨跌幅', dataIndex: 'change_pct', width: 90, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.change_pct ?? 0) - (b.change_pct ?? 0), render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
     {
       title: '综合评分', dataIndex: 'score', width: 140, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.score ?? 0) - (b.score ?? 0),
       render: (v: number) => (
@@ -342,9 +342,9 @@ export default function ScoreRanking() {
         </Tooltip>
       ),
     },
-    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
-    { title: '剩余年限', dataIndex: 'remaining_years', width: 80, ellipsis: { showTitle: true }, render: (v: number) => Number.isFinite(v) ? `${fmt(v, 1)}年` : '-' },
-    { title: '转股价值', dataIndex: 'conversion_value', width: 90, ellipsis: { showTitle: true }, render: (v: number) => fmt(v) },
+    { title: '成交量', dataIndex: 'volume', width: 100, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.volume ?? 0) - (b.volume ?? 0), render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
+    { title: '剩余年限', dataIndex: 'remaining_years', width: 80, ellipsis: { showTitle: true }, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.remaining_years ?? 0) - (b.remaining_years ?? 0), render: (v: number) => Number.isFinite(v) ? `${fmt(v, 1)}年` : '-' },
+    { title: '转股价值', dataIndex: 'conversion_value', width: 90, ellipsis: { showTitle: true }, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.conversion_value ?? 0) - (b.conversion_value ?? 0), render: (v: number) => fmt(v) },
     {
       title: '操作', key: 'actions', width: 130, fixed: 'right' as const,
       render: (_: unknown, record: ScoreRankingItem) => (
@@ -358,15 +358,15 @@ export default function ScoreRanking() {
   ], [handleViewHistory, runPrediction, predictionLoading, predictionCode])
 
   const fullColumns = useMemo(() => [
-    { title: '排名', dataIndex: 'rank', width: 60, render: (v: number) => <Text strong>#{v}</Text> },
-    { title: '代码', dataIndex: 'code', width: 90 },
-    { title: '名称', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
-    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, render: (v: number) => `${fmt(v, 1)}%` },
-    { title: '双低值', dataIndex: 'dual_low', width: 80, render: (v: number) => fmt(v, 1) },
-    { title: '涨跌幅', dataIndex: 'change_pct', width: 80, render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
+    { title: '排名', dataIndex: 'rank', width: 60, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.rank ?? 0) - (b.rank ?? 0), render: (v: number) => <Text strong>#{v}</Text> },
+    { title: '代码', dataIndex: 'code', width: 90, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => String(a.code ?? '').localeCompare(String(b.code ?? '')) },
+    { title: '名称', dataIndex: 'name', width: 120, ellipsis: true, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
+    { title: '价格', dataIndex: 'price', width: 80, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.price ?? 0) - (b.price ?? 0), render: (v: number) => fmt(v) },
+    { title: '溢价率', dataIndex: 'premium_ratio', width: 80, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.premium_ratio ?? 0) - (b.premium_ratio ?? 0), render: (v: number) => `${fmt(v, 1)}%` },
+    { title: '双低值', dataIndex: 'dual_low', width: 80, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.dual_low ?? 0) - (b.dual_low ?? 0), render: (v: number) => fmt(v, 1) },
+    { title: '涨跌幅', dataIndex: 'change_pct', width: 80, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.change_pct ?? 0) - (b.change_pct ?? 0), render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span> },
     { title: '综合评分', dataIndex: 'score', width: 120, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.score ?? 0) - (b.score ?? 0), render: (v: number) => <Text strong style={{ color: scoreColor(v ?? 0) }}>{fmt(v, 3)}</Text> },
-    { title: '成交量', dataIndex: 'volume', width: 100, render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
+    { title: '成交量', dataIndex: 'volume', width: 100, sorter: (a: ScoreRankingItem, b: ScoreRankingItem) => (a.volume ?? 0) - (b.volume ?? 0), render: (v: number) => Number.isFinite(v) ? v.toLocaleString() : '-' },
   ], [])
 
   const exportCsv = useCallback(() => {

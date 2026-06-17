@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Row, Col, Typography, message } from 'antd'
+import { Row, Col, Typography, message, Progress, Alert } from 'antd'
 import { BarChartOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { fetchStrategies, runBacktest, runOptimization } from '../services/api'
+import { fetchStrategies, runBacktestStream } from '../services/api'
 import type { BacktestResult, StrategyInfo, BacktestConfig, OptimizationConfig, OptimizationParamRange, OptimizationResult } from '../services/api'
 import BacktestConfigPanel from '../components/backtest/BacktestConfigPanel'
 import BacktestResultsPanel from '../components/backtest/BacktestResultsPanel'
@@ -20,7 +20,7 @@ const DEFAULT_CONFIG: BacktestConfig = {
 export default function Backtest() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [selectedStrategy, setSelectedStrategy] = useState<string>('')
-  const [strategyParams, setStrategyParams] = useState<Record<string, number>>({})
+  const [strategyParams, setStrategyParams] = useState<Record<string, number | string>>({})
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
     dayjs('2024-01-01'),
     dayjs('2024-12-31'),
@@ -39,23 +39,37 @@ export default function Backtest() {
   const [optMaxIter, setOptMaxIter] = useState(100)
   const [optTopN, setOptTopN] = useState(10)
   const [optRanges, setOptRanges] = useState<OptimizationParamRange[]>([])
+  const [dataSource, setDataSource] = useState<string>('')
 
-  useEffect(() => {
+  // 带重试的策略列表加载
+  const loadStrategies = useCallback((retries = 3) => {
+    setStrategiesLoading(true)
     fetchStrategies()
       .then((list) => {
         setStrategies(list)
         if (list.length > 0 && list[0].id) {
           setSelectedStrategy(list[0].id)
-          const defaults: Record<string, number> = {}
+          const defaults: Record<string, number | string> = {}
           for (const p of (list[0].params || [])) {
-            defaults[p.name] = p.default ?? 0
+            defaults[p.name] = p.default ?? (p.type === 'str' ? '' : 0)
           }
           setStrategyParams(defaults)
         }
+        setStrategiesLoading(false)
       })
-      .catch(() => message.error('策略列表加载失败'))
-      .finally(() => setStrategiesLoading(false))
+      .catch(() => {
+        if (retries > 0) {
+          setTimeout(() => loadStrategies(retries - 1), 2000)
+        } else {
+          message.error('策略列表加载失败，请检查后端是否正常运行')
+          setStrategiesLoading(false)
+        }
+      })
   }, [])
+
+  useEffect(() => {
+    loadStrategies()
+  }, [loadStrategies])
 
   // 切换策略时自动初始化优化范围
   const handleStrategyChange = useCallback((id: string) => {
@@ -64,14 +78,15 @@ export default function Backtest() {
     setOptResult(null)
     const s = strategies.find((st) => st.id === id)
     if (s) {
-      const defaults: Record<string, number> = {}
+      const defaults: Record<string, number | string> = {}
       const ranges: OptimizationParamRange[] = []
       for (const p of (s.params || [])) {
-        const def = p.default ?? 0
+        const def = p.default ?? (p.type === 'str' ? '' : 0)
         defaults[p.name] = def
         if (p.type === 'int' || p.type === 'float') {
-          const min = p.min_val ?? def * 0.5
-          const max = p.max_val ?? def * 1.5
+          const numDef = typeof def === 'number' ? def : Number(def) || 0
+          const min = p.min_val ?? numDef * 0.5
+          const max = p.max_val ?? numDef * 1.5
           ranges.push({
             name: p.name,
             min_val: min,
@@ -85,12 +100,19 @@ export default function Backtest() {
     }
   }, [strategies])
 
-  // ---- 运行回测或优化 ----
+  // ---- 进度状态 ----
+  const [progressPct, setProgressPct] = useState(0)
+  const [progressMsg, setProgressMsg] = useState('')
+
+  // ---- 运行回测或优化（使用 SSE 流式端点） ----
   const handleRun = async () => {
     if (!selectedStrategy || !dateRange[0] || !dateRange[1]) return
     setLoading(true)
     setResult(null)
     setOptResult(null)
+    setDataSource('')
+    setProgressPct(0)
+    setProgressMsg('准备中...')
 
     const payload = {
       strategy: selectedStrategy,
@@ -110,12 +132,18 @@ export default function Backtest() {
     }
 
     try {
-      if (optEnabled) {
-        const res = await runOptimization(payload)
-        setOptResult(res.result)
-        message.success(`参数优化完成，共测试 ${res.result.total_combinations} 种组合`)
-      } else {
-        const res = await runBacktest(payload)
+      const res = await runBacktestStream(
+        payload,
+        (evt) => {
+          setProgressPct(evt.pct)
+          setProgressMsg(evt.msg)
+        },
+      )
+      if (res.data_source) setDataSource(res.data_source)
+      if (res.type === 'optimization' && res.result) {
+        setOptResult(res.result as OptimizationResult)
+        message.success(`参数优化完成，共测试 ${(res.result as OptimizationResult).total_combinations} 种组合`)
+      } else if (res.result) {
         setResult(res.result as BacktestResult)
         message.success('回测完成')
       }
@@ -123,6 +151,8 @@ export default function Backtest() {
       message.error('失败: ' + (e.message || '未知错误'))
     } finally {
       setLoading(false)
+      setProgressPct(0)
+      setProgressMsg('')
     }
   }
 
@@ -163,6 +193,30 @@ export default function Backtest() {
 
         {/* 结果区 */}
         <Col span={16}>
+          {(dataSource.includes('simulated') || dataSource.includes('_sim')) && !loading && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前使用模拟数据回测"
+              description="历史数据不足，回测结果基于随机模拟生成，仅供策略逻辑验证，不具实际参考价值。建议点击「种子数据」拉取真实历史行情。"
+            />
+          )}
+          {dataSource.includes('real_') && !dataSource.includes('factors_from_current_snapshot') && !loading && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="部分因子数据使用默认值填充"
+              description="溢价率/YTM等字段缺失时已用保守默认值（如溢价率15%）填充，可能影响策略筛选结果。建议种子数据后重新回测。"
+            />
+          )}
+          {loading && progressPct > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <Progress percent={progressPct} size="small" status="active" />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{progressMsg}</Typography.Text>
+            </div>
+          )}
           {optResult && !loading ? (
             <OptimizationResultsTable optResult={optResult} />
           ) : (

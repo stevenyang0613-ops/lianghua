@@ -490,7 +490,7 @@ class EventDrivenEngine:
         for opp in opportunities:
             # 计算交易数量
             position_value = aum * 10000 * opp.max_position
-            # 假设均价100元
+            # 计算交易数量（需从行情获取实际价格，暂用保守估值）
             quantity = int(position_value / 100 / 100) * 100
 
             signals.append(TradeSignal(
@@ -499,7 +499,7 @@ class EventDrivenEngine:
                 cb_name=opp.cb_name,
                 action=TradeAction.BUY,
                 signal_type=SignalType.NEW_BUY,
-                price=100,  # 需要实际价格
+                price=0.0,  # 需从行情引擎获取实际价格后填充
                 quantity=quantity,
                 reason=f"[{opp.event_type}] {', '.join(opp.trigger_conditions[:2])}",
                 confidence=opp.probability / 100,

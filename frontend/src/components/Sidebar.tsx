@@ -28,11 +28,14 @@ import {
   TrophyOutlined,
   CloudSyncOutlined,
   CrownOutlined,
+  SwapOutlined,
 } from '@ant-design/icons'
 
 const menuItems = [
   { key: '/', icon: <StockOutlined />, label: '实时行情' },
   { key: '/exchangeable', icon: <StockOutlined />, label: '可交换债' },
+  { key: '/sector-rotation', icon: <SwapOutlined />, label: '行业轮动' },
+  { key: '/sector-rotation-stock', icon: <StockOutlined />, label: '行业轮动·股票版' },
   { key: '/dashboard', icon: <DashboardOutlined />, label: '数据看板' },
   { key: '/watchlist', icon: <StarOutlined />, label: '自选列表' },
   { key: '/signals', icon: <AlertOutlined />, label: '交易信号' },

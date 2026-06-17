@@ -1,7 +1,7 @@
 {
   "name": "lianghua-electron",
   "version": "1.0.0",
-  "description": "LiangHua - 可转债券量化分析终端",
+  "description": "LiangHua - \u53ef\u8f6c\u503a\u5238\u91cf\u5316\u5206\u6790\u7ec8\u7aef",
   "author": "LiangHua <dev@lianghua.app>",
   "private": true,
   "main": "dist/main.js",
@@ -9,10 +9,12 @@
     "build": "tsc",
     "watch": "tsc -w",
     "start": "electron .",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build:prod",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "build:dev": "tsc && electron-builder --dir --mac -c.directories.output=release-dev",
+    "build:prod": "tsc && electron-builder --mac -c.directories.output=release"
   },
   "build": {
     "appId": "com.lianghua.quant",
@@ -46,44 +48,47 @@
         "from": "../backend",
         "to": "backend",
         "filter": [
-          "lianghua-backend",
-          "lianghua-backend.exe",
           "app/**/*.py",
+          "run_app.py",
           "!.venv/**",
+          "!dist/**",
           "!__pycache__/**",
           "!.git/**",
           "!data/**",
           "!build/**",
           "!wheels/**",
-          "!dist/**",
-          "!.dockerignore",
-          "!.env.example",
+          "!tests/**",
           "!.github/**",
           "!.pytest_cache/**",
-          "!Dockerfile",
-          "!docker-compose.yml",
-          "!alembic.ini",
-          "!lianghua-backend.spec",
-          "!lianghua_backend.egg-info/**",
           "!notebooks/**",
           "!performance/**",
-          "!prometheus.yml",
-          "!pyproject.toml",
-          "!requirements.txt",
-          "!run_app.py",
-          "!sdk/**",
-          "!deploy/**",
           "!grafana/**",
-          "!tests/**",
+          "!deploy/**",
+          "!sdk/**",
+          "!lianghua_backend.egg-info/**",
+          "!*.pyc",
+          "!.env.example",
+          "!Dockerfile",
+          "!docker-compose.yml",
+          "!pyproject.toml",
+          "requirements.txt",
+          "!prometheus.yml",
+          "!alembic.ini",
           "!alembic/**",
-          "!*.pyc"
+          "!lianghua-backend.spec"
         ]
       }
     ],
     "mac": {
       "target": [
         {
-          "target": "dmg",
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dir",
           "arch": [
             "arm64"
           ]
@@ -113,7 +118,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "electron": "^42.3.3",
+    "electron": "^42.0.1",
     "electron-builder": "^26.8.1",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.9",

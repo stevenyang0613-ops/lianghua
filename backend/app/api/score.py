@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 # 内存缓存
 _cache: dict = {}
-_CACHE_TTL = 60  # 缓存60秒
-_LONG_CACHE_TTL = 300  # 长缓存5分钟（用于历史数据）
+_CACHE_TTL = 180  # 缓存3分钟（排名等计算型数据）
+_LONG_CACHE_TTL = 600  # 长缓存10分钟（历史数据）
 
 
 def _get_cache_key(prefix: str, **kwargs) -> str:

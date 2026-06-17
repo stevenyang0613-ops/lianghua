@@ -6,6 +6,7 @@
 - 同花顺iFinD
 - 巨潮资讯
 - 东方财富
+- 通达信
 """
 
 from .base import DataSourceAdapter, DataQuery
@@ -13,6 +14,7 @@ from .wind_adapter import WindAdapter
 from .tonghuashun_adapter import TonghuashunAdapter
 from .cninfo_adapter import CNInfoAdapter
 from .eastmoney_adapter import EastmoneyAdapter
+from .tdx_data_adapter import TdxDataAdapter
 
 __all__ = [
     'DataSourceAdapter',
@@ -21,4 +23,5 @@ __all__ = [
     'TonghuashunAdapter',
     'CNInfoAdapter',
     'EastmoneyAdapter',
+    'TdxDataAdapter',
 ]

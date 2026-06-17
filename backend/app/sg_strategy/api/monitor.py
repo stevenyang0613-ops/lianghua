@@ -187,68 +187,42 @@ class MonitorService:
         return nav_data
 
     def get_position_summary(self) -> PositionSummary:
-        """获取持仓摘要"""
-        # 模拟数据
+        """获取持仓摘要 - 需要对接真实持仓数据"""
         return PositionSummary(
-            total_count=15,
-            total_value=9850000.0,
-            total_cost=9500000.0,
-            total_profit=350000.0,
-            total_profit_pct=0.0368,
-            top_positions=[
-                {"code": "110001", "name": "转债A", "weight": 0.08, "profit_pct": 0.05},
-                {"code": "110002", "name": "转债B", "weight": 0.07, "profit_pct": 0.03},
-                {"code": "110003", "name": "转债C", "weight": 0.06, "profit_pct": 0.04},
-                {"code": "110004", "name": "转债D", "weight": 0.06, "profit_pct": -0.02},
-                {"code": "110005", "name": "转债E", "weight": 0.05, "profit_pct": 0.06},
-            ],
+            total_count=0,
+            total_value=0.0,
+            total_cost=0.0,
+            total_profit=0.0,
+            total_profit_pct=0.0,
+            top_positions=[],
         )
 
     def get_risk_metrics(self) -> RiskMetrics:
-        """获取风险指标"""
+        """获取风险指标 - 需要对接真实风控引擎"""
         return RiskMetrics(
-            var_95=0.025,
-            var_99=0.038,
-            max_drawdown=0.08,
-            current_drawdown=0.02,
-            volatility=0.12,
-            sharpe_ratio=1.85,
-            sortino_ratio=2.15,
-            beta=0.35,
-            concentration=0.25,
+            var_95=0.0, var_99=0.0, max_drawdown=0.0,
+            current_drawdown=0.0, volatility=0.0,
+            sharpe_ratio=0.0, sortino_ratio=0.0,
+            beta=0.0, concentration=0.0,
         )
 
     def get_signal_summary(self) -> SignalSummary:
         """获取信号摘要"""
         return SignalSummary(
-            pending_count=3,
-            executed_count=25,
-            cancelled_count=2,
-            today_signals=[
-                {"code": "110010", "action": "buy", "quantity": 500, "status": "pending"},
-                {"code": "110011", "action": "sell", "quantity": 300, "status": "pending"},
-                {"code": "110012", "action": "buy", "quantity": 400, "status": "pending"},
-            ],
-            recent_signals=[
-                {"time": "2024-01-15 14:30", "code": "110001", "action": "buy", "status": "executed"},
-                {"time": "2024-01-15 10:15", "code": "110002", "action": "sell", "status": "executed"},
-                {"time": "2024-01-14 15:00", "code": "110003", "action": "buy", "status": "executed"},
-            ],
+            pending_count=0,
+            executed_count=0,
+            cancelled_count=0,
+            today_signals=[],
+            recent_signals=[],
         )
 
     def get_performance_metrics(self) -> PerformanceMetrics:
-        """获取性能指标"""
+        """获取性能指标 - 需要对接真实绩效计算"""
         return PerformanceMetrics(
-            total_return=0.25,
-            annual_return=0.18,
-            monthly_return=0.015,
-            weekly_return=0.003,
-            daily_return=0.0005,
-            win_rate=0.65,
-            profit_factor=1.8,
-            max_consecutive_wins=8,
-            max_consecutive_losses=4,
-            average_holding_days=15.5,
+            total_return=0.0, annual_return=0.0, monthly_return=0.0,
+            weekly_return=0.0, daily_return=0.0, win_rate=0.0,
+            profit_factor=0.0, max_consecutive_wins=0,
+            max_consecutive_losses=0, average_holding_days=0.0,
         )
 
     def get_alerts(

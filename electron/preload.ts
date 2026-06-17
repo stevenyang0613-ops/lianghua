@@ -37,12 +37,20 @@ export interface ElectronAPI {
     isDev: boolean
   }>
 
+  // WebSocket auth token (used by the renderer to authenticate ws:// connections)
+  getWsToken: () => Promise<string>
+
   // Backend
   restartBackend: () => Promise<void>
+  onBackendReady: (callback: () => void) => () => void
+
+  // Frontend reload (used by did-fail-load error page retry button)
+  retryFrontendLoad: () => Promise<boolean>
 
   // HTTP proxy for API requests (bypasses CORS/webSecurity)
   httpGet: (url: string) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
   httpPost: (url: string, body: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
+  httpRequest: (method: string, url: string, body?: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
 
   // Performance monitoring
   getPerformanceMetrics: () => Promise<{
@@ -100,6 +108,9 @@ export interface ElectronAPI {
   wsState: (wsId: string) => Promise<{ state: string }>
   onWsState: (callback: (wsId: string, state: string, code?: number, reason?: string) => void) => () => void
   onWsMessage: (callback: (wsId: string, data: string, isBinary: boolean) => void) => () => void
+
+  // Prefetched data from main process
+  getPrefetchedMarketData: () => Promise<any>
 }
 
 // Crash report type
@@ -150,6 +161,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   httpGet: (url: string) => ipcRenderer.invoke('http-get', url),
   httpPost: (url: string, body: any) => ipcRenderer.invoke('http-post', url, body),
   httpRequest: (method: string, url: string, body?: any) => ipcRenderer.invoke('http-request', method, url, body),
+
+  // Frontend reload
+  retryFrontendLoad: () => ipcRenderer.invoke('retry-frontend-load'),
 
   // Backend ready event
   onBackendReady: (callback: () => void) => {
@@ -295,4 +309,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       listeners.delete(key)
     }
   },
-} as ElectronAPI)
+
+  // Prefetched data from main process
+  getPrefetchedMarketData: () => ipcRenderer.invoke('get-prefetched-market-data'),
+})

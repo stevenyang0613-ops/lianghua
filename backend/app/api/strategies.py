@@ -5,7 +5,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 router = APIRouter()
@@ -97,7 +97,7 @@ async def create_strategy(strategy: StrategyCreate):
     """创建策略"""
     import uuid
     strategy_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     new_strategy = Strategy(
         id=strategy_id,
@@ -135,7 +135,7 @@ async def update_strategy(strategy_id: str, strategy: StrategyCreate):
     existing = strategies_db[strategy_id]
     existing.name = strategy.name
     existing.description = strategy.description
-    existing.updatedAt = datetime.utcnow()
+    existing.updatedAt = datetime.now(timezone.utc)
     return existing
 
 @router.delete("/{strategy_id}")
@@ -189,7 +189,7 @@ async def add_comment(strategy_id: str, content: str):
         userId="user1",
         userName="Test User",
         content=content,
-        createdAt=datetime.utcnow(),
+        createdAt=datetime.now(timezone.utc),
     )
     if strategy_id not in comments_db:
         comments_db[strategy_id] = []

@@ -66,7 +66,7 @@ export default function Market() {
     }
   }, [updateQuotes, setBackendConnected])
 
-  const { isConnected: wsConnected, lastError, reconnect } = useWebSocket(onWsMessage, () => {
+  const { isConnected: wsConnected } = useWebSocket(onWsMessage, () => {
     fetchAllQuotes().then(res => {
       const bonds = Array.isArray(res?.bonds) ? res.bonds : []
       if (bonds.length > 0) setAllBonds(bonds)
@@ -227,7 +227,7 @@ export default function Market() {
         if (daysLeft <= 10) return <Tag color="orange" style={{ fontSize: 12 }}>{daysLeft}天</Tag>
         return <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{daysLeft}天</span>
       }},
-      { key: 'call_status', dataIndex: 'call_status', title: '强赎状态', width: 80, render: (v: unknown, r: ConvertibleQuote) => {
+      { key: 'call_status', dataIndex: 'call_status', title: '强赎状态', width: 80, sortable: true, sortOrder: orderOf('call_status'), sorter: (a, b) => String(a.call_status ?? '').localeCompare(String(b.call_status ?? '')), render: (v: unknown, r: ConvertibleQuote) => {
         if (r.is_called) return <Tag color="red" style={{ fontSize: 12 }}>已公告强赎</Tag>
         if (v) return <Tag color="orange" style={{ fontSize: 12 }}>{String(v)}</Tag>
         return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
@@ -303,8 +303,7 @@ export default function Market() {
                 {wsConnected ? <><WifiOutlined /> 实时</> : (
                   <>
                     <DisconnectOutlined /> 离线
-                    {lastError && <span style={{ marginLeft: 4, fontSize: 11 }}>({lastError})</span>}
-                    <Button type="link" size="small" style={{ padding: 0, marginLeft: 4, fontSize: 11 }} onClick={reconnect}>重连</Button>
+                    <Button type="link" size="small" style={{ padding: 0, marginLeft: 4, fontSize: 11 }} onClick={() => { import('../utils/wsInstances').then(m => m.marketWs.connect()) }}>重连</Button>
                   </>
                 )}
               </span>

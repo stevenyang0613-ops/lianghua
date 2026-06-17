@@ -335,8 +335,7 @@ class SignalGenerator:
         """检查买入条件"""
         # 1. 七维得分分级
         # 注意：生产环境建议阈值70分
-        # 当前设置较低以适应测试数据不完整的情况
-        min_score = 30  # 测试阈值，生产环境应为70
+        min_score = 70
 
         if score.total_score < min_score:
             return None

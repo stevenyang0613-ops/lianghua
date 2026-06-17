@@ -5,7 +5,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 router = APIRouter()
@@ -88,7 +88,7 @@ async def get_accounts():
 async def add_account(account: AccountCreate):
     """添加账户"""
     import uuid
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     new_account = Account(
         id=str(uuid.uuid4()),
         name=account.name,
@@ -111,7 +111,7 @@ async def update_account(account_id: str, account: AccountCreate):
 
     existing = accounts_db[account_id]
     existing.name = account.name
-    existing.updatedAt = datetime.utcnow()
+    existing.updatedAt = datetime.now(timezone.utc)
     return existing
 
 @router.delete("/{account_id}")
@@ -174,7 +174,7 @@ async def sync_balance(account_id: str, request: Request = None):
         frozenCash=round(market_value * 0.1, 2),
         profitToday=round(profit_today, 2),
         profitTotal=round(profit_total, 2),
-        updatedAt=datetime.utcnow(),
+        updatedAt=datetime.now(timezone.utc),
     )
     return balances_db[account_id]
 
@@ -208,7 +208,7 @@ async def create_group(name: str, accountIds: List[str], riskConfig: dict, alloc
         accountIds=accountIds,
         riskConfig=riskConfig,
         allocationStrategy=allocationStrategy,
-        createdAt=datetime.utcnow(),
+        createdAt=datetime.now(timezone.utc),
     )
     groups_db[group.id] = group
     return group

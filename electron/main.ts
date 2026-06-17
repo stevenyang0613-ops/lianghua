@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, globalShortcut, shell, dialog, NativeImage, safeStorage } from 'electron'
+import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, globalShortcut, shell, dialog, NativeImage, safeStorage, screen } from 'electron'
 
 // 抑制开发模式下的Electron安全警告（打包后自动消失）
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
@@ -55,8 +55,99 @@ const BACKEND_PORT = 8765
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
 
+// ---- Local HTTP server for frontend static files ----
+// Serves frontend from a real HTTP server instead of file:// protocol,
+// enabling proper code splitting, ES module loading, and faster resource fetching.
+const FRONTEND_PORT = 8766
+let frontendServer: http.Server | null = null
+
+function startFrontendServer(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const frontendDir = isDev
+      ? path.join(__dirname, '..', '..', 'frontend', 'dist')
+      : path.join(process.resourcesPath, 'frontend')
+
+    const mimeTypes: Record<string, string> = {
+      '.html': 'text/html',
+      '.js': 'application/javascript',
+      '.mjs': 'application/javascript',
+      '.css': 'text/css',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.eot': 'application/vnd.ms-fontobject',
+    }
+
+    const server = http.createServer((req, res) => {
+      try {
+        // Normalize URL and prevent directory traversal
+        const urlPath = new URL(req.url || '/', `http://localhost:${FRONTEND_PORT}`).pathname
+        let filePath = path.join(frontendDir, urlPath === '/' ? 'index.html' : urlPath)
+
+        // Security: ensure the resolved path is within frontendDir
+        if (!filePath.startsWith(frontendDir)) {
+          res.writeHead(403)
+          res.end('Forbidden')
+          return
+        }
+
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+          // SPA fallback: serve index.html for client-side routing
+          filePath = path.join(frontendDir, 'index.html')
+        }
+
+        const ext = path.extname(filePath).toLowerCase()
+        const contentType = mimeTypes[ext] || 'application/octet-stream'
+
+        const data = fs.readFileSync(filePath)
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=86400',
+        })
+        res.end(data)
+      } catch (e) {
+        res.writeHead(404)
+        res.end('Not Found')
+      }
+    })
+
+    // Try FRONTEND_PORT first, fall back to a random port if occupied
+    server.on('error', (e: any) => {
+      if (e.code === 'EADDRINUSE') {
+        // Port occupied, try a random port
+        server.listen(0, '127.0.0.1', () => {
+          const addr = server.address()
+          const port = typeof addr === 'object' && addr ? addr.port : FRONTEND_PORT
+          frontendServer = server
+          console.log(`[FrontendServer] Serving on http://127.0.0.1:${port} (fallback port) from ${frontendDir}`)
+          resolve(port)
+        })
+      } else {
+        reject(e)
+      }
+    })
+
+    server.listen(FRONTEND_PORT, '127.0.0.1', () => {
+      frontendServer = server
+      console.log(`[FrontendServer] Serving on http://127.0.0.1:${FRONTEND_PORT} from ${frontendDir}`)
+      resolve(FRONTEND_PORT)
+    })
+  })
+}
+
+let actualFrontendPort: number = FRONTEND_PORT
+
 // Forward declaration
 let restartBackend: (isManualRestart?: boolean) => void
+let restartInFlight = false
+let _backendStarting = false
 
 // ---- Performance tracking ----
 const perfMetrics = {
@@ -105,6 +196,7 @@ function recordCrash(type: CrashReport['type'], message: string, stack?: string)
 
 // ---- WebSocket connection pool ----
 const wsConnections = new Map<string, WebSocket>()
+const MAX_WS_CONNECTIONS = 64
 
 // ---- Child windows ----
 const childWindows = new Map<number, BrowserWindow>()
@@ -195,15 +287,35 @@ async function ensureDesktopAuthToken(): Promise<string> {
   return ''
 }
 
+// Loopback hostnames permitted for IPC-driven http requests. Anything else
+// is rejected to prevent the renderer (or a compromised renderer) from using
+// the desktop token to hit intranet / metadata services.
+const ALLOWED_HTTP_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
+
+function isAllowedHttpHost(hostname: string): boolean {
+  return ALLOWED_HTTP_HOSTS.has(hostname.toLowerCase())
+}
+
 async function httpRequestHandler(
   method: string,
   url: string,
   body?: any
 ): Promise<{ ok: boolean; status: number; data: any; error?: string }> {
   const authToken = await ensureDesktopAuthToken()
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    return { ok: false, status: 0, data: null, error: 'Invalid URL' }
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return { ok: false, status: 0, data: null, error: 'Unsupported protocol' }
+  }
+  if (!isAllowedHttpHost(parsedUrl.hostname)) {
+    return { ok: false, status: 0, data: null, error: `Host not allowed: ${parsedUrl.hostname}` }
+  }
   return new Promise((resolve) => {
     const timeout = 30000
-    const parsedUrl = new URL(url)
     const isHttps = parsedUrl.protocol === 'https:'
     const httpModule = isHttps ? https : http
 
@@ -269,7 +381,7 @@ async function backendHealthcheck(): Promise<boolean> {
 }
 
 // ---- Wait for backend to be ready ----
-async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boolean> {
+async function waitForBackend(maxWaitMs = 120000, intervalMs = 2000): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < maxWaitMs) {
     if (await backendHealthcheck()) {
@@ -279,6 +391,35 @@ async function waitForBackend(maxWaitMs = 60000, intervalMs = 1000): Promise<boo
     await new Promise((r) => setTimeout(r, intervalMs))
   }
   return false
+}
+
+// ---- Prefetch market data for first-screen optimization ----
+let prefetchedMarketData: any = null
+
+async function prefetchMarketData(): Promise<void> {
+  try {
+    const resp = await new Promise<any>((resolve, reject) => {
+      const req = http.get(`${BACKEND_URL}/api/v1/market/quotes`, (res) => {
+        let body = ''
+        res.on('data', (chunk: string) => { body += chunk })
+        res.on('end', () => {
+          try { resolve(JSON.parse(body)) } catch { reject(new Error('Parse error')) }
+        })
+      })
+      req.on('error', reject)
+      req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')) })
+    })
+    if (resp?.bonds && Array.isArray(resp.bonds)) {
+      prefetchedMarketData = resp
+      console.log(`[Prefetch] Market data: ${resp.bonds.length} bonds`)
+      // Send to renderer if window is already loaded
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('prefetched-market-data', resp)
+      }
+    }
+  } catch (e) {
+    console.warn(`[Prefetch] Market data prefetch failed: ${e}`)
+  }
 }
 
 // ---- Health monitoring loop ----
@@ -324,7 +465,7 @@ function createApplicationMenu() {
         {
           label: '关于 LiangHua',
           click: () => {
-            dialog.showMessageBox(mainWindow!, {
+            dialog.showMessageBox(mainWindow as any, {
               type: 'info',
               title: '关于',
               message: APP_NAME,
@@ -534,7 +675,7 @@ function createApplicationMenu() {
           label: '快捷键',
           accelerator: 'CmdOrCtrl+/',
           click: () => {
-            dialog.showMessageBox(mainWindow!, {
+            dialog.showMessageBox(mainWindow as any, {
               type: 'info',
               title: '快捷键',
               message: '键盘快捷键',
@@ -568,6 +709,171 @@ let pythonRestartCount = 0
 let pythonRestartTimer: ReturnType<typeof setTimeout> | null = null
 const MAX_PYTHON_RESTARTS = 5
 const PYTHON_RESTART_RESET_INTERVAL = 60000
+// AGENTS.md improvement: getPidDir() is resolved lazily via getPidDir().
+// app.getPath('home') is more correct than os.homedir() in sandboxed
+// environments, but only safe to call after app is ready. The helpers
+// below call getPidDir() at use-time, not at module load time.
+function getPidDir(): string {
+  try {
+    return path.join(app.getPath('home'), '.lianghua', 'pids')
+  } catch {
+    return path.join(os.homedir(), '.lianghua', 'pids')
+  }
+}
+
+/**
+ * Write a PID file (and a sibling .ts file with the write epoch in ms)
+ * to track the spawned backend/electron process. The timestamp allows
+ * the next launch to detect a race where two instances started <1s
+ * apart — in that case, the second instance is allowed to skip the
+ * kill step on the first instance's PID (it might be its own process).
+ */
+function writePidFile(name: string, pid: number): void {
+  try {
+    fs.mkdirSync(getPidDir(), { recursive: true })
+    const dir = getPidDir()
+    fs.writeFileSync(path.join(dir, `${name}.pid`), String(pid))
+    fs.writeFileSync(path.join(dir, `${name}.ts`), String(Date.now()))
+  } catch (e) {
+    console.error(`[Electron] Failed to write ${name}.pid:`, (e as Error).message)
+  }
+}
+
+/**
+ * Read the timestamp of a PID file (when it was last written).
+ * Returns 0 if the file is missing or unreadable.
+ */
+function readPidTimestamp(name: string): number {
+  try {
+    return parseInt(fs.readFileSync(path.join(getPidDir(), `${name}.ts`), 'utf-8').trim(), 10) || 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Read a previously-written PID file. Returns null if file doesn't exist
+ * or the process is no longer alive.
+ */
+function readPidFile(name: string): number | null {
+  try {
+    const pidStr = fs.readFileSync(path.join(getPidDir(), `${name}.pid`), 'utf-8').trim()
+    const pid = parseInt(pidStr, 10)
+    if (!Number.isFinite(pid) || pid <= 0) return null
+    // Check if process is alive
+    try {
+      process.kill(pid, 0)
+      return pid
+    } catch {
+      // ESRCH = no such process
+      return null
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Remove stale PID file. Safe to call even if file doesn't exist.
+ */
+function removePidFile(name: string): void {
+  try {
+    fs.unlinkSync(path.join(getPidDir(), `${name}.pid`))
+  } catch {
+    // Ignore ENOENT
+  }
+}
+
+/**
+ * Kill any stale lianghua process (Electron or backend) referenced by PID files.
+ * Called at startup so rebuilds don't leave zombie daemons holding the
+ * backend port or DuckDB lock (root cause of "打不开" incidents).
+ */
+function killStaleInstances(): void {
+  const candidates: Array<{ name: string; pid: number }> = []
+  const now = Date.now()
+  // Race protection: if a candidate was written <1000ms ago, the
+  // owning process might still be starting up — or it might be us.
+  // Skip the kill to avoid killing ourselves.
+  const RACE_GRACE_MS = 1000
+  for (const name of ['backend', 'desktop']) {
+    const pid = readPidFile(name)
+    if (pid === null) continue
+    const ts = readPidTimestamp(name)
+    if (ts > 0 && (now - ts) < RACE_GRACE_MS) {
+      console.log(`[Electron] Skipping ${name} (PID ${pid}) — written ${now - ts}ms ago, within race grace`)
+      continue
+    }
+    candidates.push({ name, pid })
+  }
+  for (const { name, pid } of candidates) {
+    try {
+      // Negative pid = process group (Unix). The original spawn used
+      // detached: true, so the backend owns its own group.
+      process.kill(-pid, 'SIGTERM')
+      console.log(`[Electron] Killed stale ${name} (PID ${pid}) via SIGTERM`)
+    } catch (e: any) {
+      if (e.code === 'ESRCH') {
+        console.log(`[Electron] Stale ${name}.pid pointed at dead PID ${pid}; cleaning up`)
+      } else if (e.code === 'EPERM') {
+        console.warn(`[Electron] No permission to kill stale ${name} (PID ${pid})`)
+        continue
+      } else {
+        console.error(`[Electron] Failed to kill stale ${name} (PID ${pid}):`, e.message)
+        continue
+      }
+    }
+    removePidFile(name)
+  }
+  // Belt-and-suspenders: if 8765 is still occupied after PID-file sweep
+  // (e.g. user launched manually), try to identify via lsof and kill.
+  // Hard 2s timeout — lsof can hang on certain kernel states.
+  // ENOENT (lsof missing) is silently ignored (pure dev/CI edge case).
+  try {
+    const { execFileSync } = require('child_process') as typeof import('child_process')
+    const out = execFileSync('lsof', ['-ti', `tcp:${BACKEND_PORT}`, '-sTCP:LISTEN'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+      killSignal: 'SIGKILL',
+    }).toString().trim()
+    if (out) {
+      const pids = out.split('\n').map(s => parseInt(s, 10)).filter(Number.isFinite)
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGTERM')
+          console.log(`[Electron] Killed orphaned port ${BACKEND_PORT} holder (PID ${pid})`)
+        } catch {}
+      }
+    }
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') {
+      console.warn('[Electron] lsof not found; skipping port-occupant cleanup')
+    } else if (e?.signal === 'SIGKILL' || e?.killed) {
+      console.warn('[Electron] lsof timed out (>2s); skipping port-occupant cleanup')
+    }
+    // Other errors (no listener, etc.) are silent.
+  }
+  // Retry: after killing processes, wait for the port to be released
+  // macOS TIME_WAIT can keep a port busy for 1-2 s after the process dies
+  try {
+    const { execFileSync } = require('child_process') as typeof import('child_process')
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      const stillHeld = execFileSync('lsof', ['-ti', `tcp:${BACKEND_PORT}`, '-sTCP:LISTEN'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+        killSignal: 'SIGKILL',
+      }).toString().trim()
+      if (!stillHeld) break
+      console.log(`[Electron] Port ${BACKEND_PORT} still held; waiting...`)
+      const pids = stillHeld.split('\n').map(s => parseInt(s, 10)).filter(Number.isFinite)
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGKILL') } catch {}
+      }
+      require('child_process').execFileSync('sleep', ['0.5'])
+    }
+  } catch {}
+}
 
 function getBackendDir(): string {
   // Production: use process.resourcesPath directly (backend is in extraResources, NOT in asar)
@@ -579,19 +885,40 @@ function getBackendDir(): string {
 }
 
 function getPythonCmd(backendDir: string): string {
-  // PyInstaller 编译的二进制优先于系统 python3（系统 python3 可能缺少依赖包）
   const pyinstallerBin = path.join(backendDir, 'lianghua-backend')
-  if (fs.existsSync(pyinstallerBin)) return pyinstallerBin
-  // 开发模式优先使用 .venv 中的 python（源码模式，最可靠）
-  // 生产环境跳过 .venv：如果 .venv 意外存在但损坏会导致启动失败
+  if (fs.existsSync(pyinstallerBin) && !fs.statSync(pyinstallerBin).isDirectory()) return pyinstallerBin
+  const pyinstallerOnedir = path.join(backendDir, 'dist', 'lianghua-backend', 'lianghua-backend')
+  if (fs.existsSync(pyinstallerOnedir)) return pyinstallerOnedir
   if (isDev) {
     const venvPython = path.join(backendDir, '.venv', 'bin', 'python')
     if (fs.existsSync(venvPython)) return venvPython
   }
-  // 仅在没有打包二进制时才回退到系统 python3
+  // Resolve python3 absolute path (macOS sandbox restricts PATH-based lookup)
+  function resolvePython3(): string {
+    const candidates = [
+      '/usr/local/bin/python3',
+      '/opt/homebrew/bin/python3',
+      '/usr/bin/python3',
+      '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
+      '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
+      '/Library/Frameworks/Python.framework/Versions/3.10/bin/python3',
+    ]
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c
+    }
+    // Fall back to PATH lookup (may fail in sandbox)
+    const extraPaths = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin']
+    const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'
+    const fullPath = [...extraPaths.filter(p => !currentPath.includes(p)), currentPath].join(':')
+    process.env.PATH = fullPath
+    return 'python3'
+  }
   const runAppPy = path.join(backendDir, 'run_app.py')
-  if (fs.existsSync(runAppPy)) return 'python3'
-  return 'python3'
+  if (fs.existsSync(runAppPy)) {
+    const pythonExe = resolvePython3()
+    return pythonExe
+  }
+  return resolvePython3()
 }
 
 function getSSLCertEnv(): Record<string, string> {
@@ -610,22 +937,62 @@ function getSSLCertEnv(): Record<string, string> {
   return {}
 }
 
+function killPythonProcessGroup(child: import('child_process').ChildProcess): void {
+  if (!child || child.killed || child.pid === undefined) return
+  if (process.platform === 'win32') {
+    try {
+      require('child_process').execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch (e) {
+      console.error('[Electron] taskkill failed:', (e as Error).message)
+      try { child.kill('SIGKILL') } catch {}
+    }
+  } else {
+    try {
+      process.kill(-child.pid, 'SIGTERM')
+    } catch {
+      try { child.kill('SIGTERM') } catch {}
+    }
+    // Hard kill after grace period
+    const pid = child.pid
+    setTimeout(() => {
+      try { process.kill(-pid, 'SIGKILL') } catch {}
+      try { process.kill(pid, 'SIGKILL') } catch {}
+    }, 1500).unref()
+  }
+}
+
 function startPythonBackend() {
+  if (_backendStarting) {
+    console.log('[Electron] startPythonBackend already in progress, ignoring')
+    return
+  }
+  _backendStarting = true
   const backendDir = getBackendDir()
   const pythonCmd = getPythonCmd(backendDir)
 
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
+  const pyinstallerCwd = isPyinstaller ? path.dirname(pythonCmd) : backendDir
   const args = isPyinstaller
     ? ['--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
     : [path.join(backendDir, 'run_app.py'), '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
 
   const sslEnv = getSSLCertEnv()
 
+  console.log(`[Electron] startPythonBackend: cmd=${pythonCmd}, args=${JSON.stringify(args)}, cwd=${pyinstallerCwd}`)
   pythonProcess = spawn(pythonCmd, args, {
-    cwd: backendDir,
+    cwd: pyinstallerCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ...sslEnv },
+    // detached: true lets us kill the entire process group (workers, children)
+    // on Unix. On Windows, taskkill /T is used in killPythonProcessGroup.
+    detached: process.platform !== 'win32',
+    windowsHide: true,
   })
+
+  if (pythonProcess.pid !== undefined) {
+    writePidFile('backend', pythonProcess.pid)
+  }
+  _backendStarting = false
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
     console.log('[Python] ' + data.toString().trim())
@@ -646,10 +1013,13 @@ function startPythonBackend() {
   })
 
   pythonProcess.on('exit', (code: number | null) => {
+    removePidFile('backend')
+    _backendStarting = false
     console.log('[Electron] Python process exited with code ' + code)
-    if (!isQuitting && code !== 0) {
+    if (!isQuitting && code !== 0 && !restartInFlight) {
       recordCrash('backend', `Python backend exited with code ${code}`)
       setTimeout(() => {
+        if (isQuitting || restartInFlight) return
         if (pythonRestartCount < MAX_PYTHON_RESTARTS) {
           pythonRestartCount++
           console.log(`[Electron] Restarting Python backend (attempt ${pythonRestartCount}/${MAX_PYTHON_RESTARTS})...`)
@@ -669,6 +1039,13 @@ function startPythonBackend() {
   pythonProcess.on('error', (err: Error) => {
     console.error('[Electron] Failed to start Python:', err.message)
     recordCrash('backend', `Failed to start Python: ${err.message}`)
+    // Notify the renderer immediately so the user is not staring at a loading
+    // screen for the full 60s waitForBackend timeout.
+    mainWindow?.webContents.send('backend-error', {
+      title: '后端启动失败',
+      message: `Python 后端进程启动失败: ${err.message}`,
+      details: '请检查 Python 解释器路径与依赖',
+    })
     // Fallback EADDRINUSE detection — primary detection is in stderr handler above
     if ((err as any).code === 'EADDRINUSE') {
       console.error(`[Electron] Port ${BACKEND_PORT} is already in use by another process (fallback detection)`)
@@ -682,6 +1059,8 @@ function startPythonBackend() {
       console.log('[Electron] Backend is ready, notifying renderer')
       mainWindow?.webContents.send('backend-ready')
       startHealthMonitor()
+      // Prefetch market data for first-screen optimization
+      prefetchMarketData()
     } else {
       console.error('[Electron] Backend did not become ready in time')
       mainWindow?.webContents.send('backend-error', {
@@ -788,8 +1167,31 @@ function loadWindowState(): { width: number; height: number; x?: number; y?: num
   try {
     if (fs.existsSync(statePath)) {
       const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'))
-      if (state.width && state.height) {
-        return state
+      if (
+        Number.isFinite(state.width) && state.width >= 1024 && state.width <= 10000 &&
+        Number.isFinite(state.height) && state.height >= 680 && state.height <= 10000
+      ) {
+        const result: { width: number; height: number; x?: number; y?: number; isMaximized?: boolean } = {
+          width: Math.floor(state.width),
+          height: Math.floor(state.height),
+        }
+        // Validate x/y against currently connected displays
+        if (Number.isFinite(state.x) && Number.isFinite(state.y)) {
+          const displays = screen.getAllDisplays()
+          const onScreen = displays.some(d => {
+            const b = d.bounds
+            return state.x >= b.x - 50 && state.x <= b.x + b.width - 50 &&
+                   state.y >= b.y - 50 && state.y <= b.y + b.height - 50
+          })
+          if (onScreen) {
+            result.x = Math.floor(state.x)
+            result.y = Math.floor(state.y)
+          }
+        }
+        if (state.isMaximized === true) {
+          result.isMaximized = true
+        }
+        return result
       }
     }
   } catch (e) {
@@ -812,7 +1214,7 @@ function saveWindowState() {
 }
 
 // ---- Create main window ----
-function createWindow() {
+async function createWindow() {
   const savedState = loadWindowState()
 
   mainWindow = new BrowserWindow({
@@ -840,28 +1242,84 @@ function createWindow() {
     mainWindow.maximize()
   }
 
+  // 立即显示窗口：不等待 ready-to-show，避免黑屏
+  // macOS 上 ready-to-show 有时不会触发或触发过晚，导致用户看到黑屏
+  mainWindow.show()
+
+  // Safety timeout: show window even if show() above failed
+  const readyShowTimeout = setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      console.warn('[Electron] window.show() failed, forcing show (3s timeout)')
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  }, 3000)
+  readyShowTimeout.unref()
+
   mainWindow.once('ready-to-show', () => {
+    clearTimeout(readyShowTimeout)
     mainWindow?.show()
+    mainWindow?.focus()
     perfMetrics.frontendLoadTime = Date.now()
     if (isDev) {
       mainWindow?.webContents.openDevTools()
     }
   })
 
-  mainWindow.setBackgroundColor('#1a1a2e')
-
-  const frontendPath = getFrontendIndexPath()
-  if (frontendPath.startsWith('http')) {
-    mainWindow.loadURL(frontendPath)
-  } else {
-    mainWindow.loadFile(frontendPath)
+  // Start local HTTP server for frontend static files (enables code splitting)
+  // Fall back to file:// if server fails to start
+  try {
+    actualFrontendPort = await startFrontendServer()
+    const frontendUrl = `http://127.0.0.1:${actualFrontendPort}`
+    console.log(`[Electron] Loading frontend from ${frontendUrl}`)
+    try {
+      await mainWindow.loadURL(frontendUrl)
+      console.log('[Electron] Frontend URL loaded successfully')
+    } catch (loadErr) {
+      console.error(`[Electron] loadURL failed: ${loadErr}, falling back to file://`)
+      const frontendPath = getFrontendIndexPath()
+      if (frontendPath.startsWith('http')) {
+        await mainWindow.loadURL(frontendPath)
+      } else {
+        await mainWindow.loadFile(frontendPath)
+      }
+    }
+  } catch (e) {
+    console.warn(`[Electron] Frontend server failed, falling back to file://: ${e}`)
+    const frontendPath = getFrontendIndexPath()
+    try {
+      if (frontendPath.startsWith('http')) {
+        await mainWindow.loadURL(frontendPath)
+      } else {
+        await mainWindow.loadFile(frontendPath)
+      }
+    } catch (fallbackErr) {
+      console.error(`[Electron] Fallback load also failed: ${fallbackErr}`)
+      // Ultimate fallback: show a basic error page
+      const errorHtml = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="background:#f5f5f5;color:#333;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif;margin:0"><h1 style="color:#e74c3c">✨ 页面加载失败</h1><p style="color:#666;margin:8px 0">无法加载应用页面</p><button onclick="window.location.reload()" style="margin-top:16px;padding:8px 24px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer">重试</button></body></html>`)}`
+      mainWindow?.loadURL(errorHtml)
+    }
   }
 
+  // Log when page finishes loading (for debugging)
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[Electron] Page did-finish-load')
+  })
+
   // Handle frontend loading errors
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+  mainWindow.webContents.on('did-fail-load', (event: any, errorCode: number, errorDescription: string, validatedURL: string) => {
+    // Only handle main-frame failures — sub-resource failures (images, scripts,
+    // stylesheets) should not wipe the whole app.
+    if (!event.isMainFrame) {
+      console.warn(`[Electron] Sub-resource failed: ${validatedURL} (${errorCode})`)
+      return
+    }
     console.error(`[Electron] Failed to load: ${validatedURL}, error: ${errorCode} - ${errorDescription}`)
     if (!isDev) {
-      mainWindow?.loadURL(`data:text/html,<html><body style="background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif"><h1 style="color:#ff4d4f">页面加载失败</h1><p style="color:#aaa">无法加载应用页面 (错误码: ${errorCode})</p><p style="margin-top:20px"><button onclick="window.location.reload()" style="padding:10px 24px;background:#1890ff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">重新加载</button></p></body></html>`)
+      // Retry button uses IPC (retry-frontend-load) instead of location.reload()
+      // because reload() would re-load the data: URL of this error page itself.
+      const errorHtml = `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="background:#f5f5f5;color:#333;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:sans-serif;margin:0"><h1 style="color:#e74c3c">✨ 页面加载失败</h1><p style="color:#666;margin:8px 0">无法加载应用页面 (错误码: ${errorCode})</p><p style="margin-top:20px"><button id="retry" style="padding:10px 24px;background:#1890ff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">重新加载</button></p><script>document.getElementById('retry').onclick=()=>window.electronAPI.retryFrontendLoad();</script></body></html>`)}`
+      mainWindow?.loadURL(errorHtml)
     }
   })
 
@@ -911,7 +1369,12 @@ function createWindow() {
 
   // Child process crash detection
   app.on('child-process-gone', (_event: any, details: any) => {
-    recordCrash('gpu', `Child process gone: ${details.type} - ${details.reason}`)
+    const allowedTypes: ReadonlySet<CrashReport['type']> = new Set(['renderer', 'main', 'backend', 'gpu'])
+    const t: string = details?.type
+    const mapped: CrashReport['type'] = allowedTypes.has(t as CrashReport['type'])
+      ? (t as CrashReport['type'])
+      : 'main'  // utility / plugin / sandbox / service-worker / etc. → 'main'
+    recordCrash(mapped, `Child process gone: ${t} - ${details?.reason ?? 'unknown'}`)
   })
 }
 
@@ -953,6 +1416,10 @@ ipcMain.handle('http-post', async (_event, url: string, body: any) => {
 // ---- WebSocket IPC proxy handlers ----
 ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
   try {
+    // Cap on total WS connections to prevent renderer-driven fd/memory leaks
+    if (wsConnections.size >= MAX_WS_CONNECTIONS && !wsConnections.has(wsId)) {
+      return { ok: false, state: 'error', error: `WS connection limit reached (${MAX_WS_CONNECTIONS})` }
+    }
     // Close existing connection for this wsId
     // 静默关闭：移除所有监听器避免触发 ws-state:disconnected 事件
     // 这是内部清理，不应让renderer感知（否则会导致重连循环）
@@ -969,6 +1436,7 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
     // 注意：ws.on('open') 必须在 IPC Promise 的 openHandler 之后注册
     // 这样 IPC Promise 先 resolve，renderer 端先处理结果，再收到 ws-state 事件
     let ipcResolved = false
+    let wsAccepted = false
     ws.on('open', () => {
       if (ipcResolved) {
         mainWindow?.webContents.send('ws-state', wsId, 'connected')
@@ -995,20 +1463,32 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
 
     // Wait for connection to open or error
     return new Promise((resolve) => {
-      const openHandler = () => {
+      const finalizeResolve = (result: { ok: boolean; state: string; error?: string }) => {
         cleanup()
         ipcResolved = true
-        resolve({ ok: true, state: 'connected' })
+        resolve(result)
+      }
+      const openHandler = () => {
+        wsAccepted = true
+        finalizeResolve({ ok: true, state: 'connected' })
         // IPC Promise resolve 后再发送 ws-state 事件，确保 renderer 端先处理 IPC 结果
         mainWindow?.webContents.send('ws-state', wsId, 'connected')
       }
       const errorHandler = (err: Error) => {
-        cleanup()
-        resolve({ ok: false, state: 'error', error: err.message })
+        finalizeResolve({ ok: false, state: 'error', error: err.message })
       }
       const timeoutId = setTimeout(() => {
-        cleanup()
-        resolve({ ok: false, state: 'timeout', error: 'Connection timeout' })
+        // If the WS still opens after the timeout, the persistent 'open'
+        // listener at the top of this scope will not send ws-state:connected
+        // (because ipcResolved=true, wsAccepted=false). Force-send it here so
+        // the renderer can recover from a late connection.
+        finalizeResolve({ ok: false, state: 'timeout', error: 'Connection timeout' })
+        try {
+          if (ws.readyState === WebSocket.OPEN) {
+            wsAccepted = true
+            mainWindow?.webContents.send('ws-state', wsId, 'connected')
+          }
+        } catch {}
       }, 5000)
 
       const cleanup = () => {
@@ -1059,6 +1539,28 @@ ipcMain.handle('ws-state', async (_event, wsId: string) => {
   return { state: stateMap[ws.readyState] || 'unknown' }
 })
 
+// ---- Frontend reload (used by did-fail-load error page retry button) ----
+ipcMain.handle('retry-frontend-load', async () => {
+  if (!mainWindow) return false
+  // Prefer local HTTP server if running, otherwise fall back to file://
+  try {
+    if (frontendServer) {
+      await mainWindow.loadURL(`http://127.0.0.1:${actualFrontendPort}`)
+    } else {
+      const frontendPath = getFrontendIndexPath()
+      if (frontendPath.startsWith('http')) {
+        await mainWindow.loadURL(frontendPath)
+      } else {
+        await mainWindow.loadFile(frontendPath)
+      }
+    }
+  } catch (e) {
+    console.error('[Electron] retry-frontend-load failed:', e)
+    return false
+  }
+  return true
+})
+
 // ---- Notifications ----
 ipcMain.handle('show-notification', (_event, { title, body }: { title: string; body: string }) => {
   if (Notification.isSupported()) {
@@ -1101,45 +1603,65 @@ ipcMain.handle('get-ws-token', () => {
 })
 
 // ---- Safe storage (encryption) ----
+// Refuse to silently write plaintext disguised as ciphertext when no OS-level
+// encryption is available. The caller should treat this as a hard error and
+// fall back to a different persistence strategy.
 ipcMain.handle('encrypt-string', (_event, plainText: string) => {
   if (!safeStorage.isEncryptionAvailable()) {
-    return Buffer.from(plainText).toString('base64')
+    throw new Error('Encryption unavailable: OS keychain/credential manager is not accessible. Refusing to store plaintext.')
   }
   return safeStorage.encryptString(plainText).toString('base64')
 })
 
 ipcMain.handle('decrypt-string', (_event, cipherText: string) => {
   if (!safeStorage.isEncryptionAvailable()) {
-    return Buffer.from(cipherText, 'base64').toString('utf-8')
+    throw new Error('Encryption unavailable: cannot decrypt previously stored values')
   }
   return safeStorage.decryptString(Buffer.from(cipherText, 'base64'))
 })
 
 // ---- Restart backend ----
 restartBackend = (isManualRestart = false) => {
+  if (isQuitting) return
+  if (restartInFlight) {
+    console.log('[Electron] restartBackend already in flight, ignoring')
+    return
+  }
+  restartInFlight = true
   stopHealthMonitor()
   healthFailCount = 0
   if (isManualRestart) pythonRestartCount = 0
+  for (const [wsId, ws] of wsConnections) {
+    ws.close()
+    wsConnections.delete(wsId)
+  }
+  const pendingTimeout = setTimeout(() => {
+    if (isQuitting) {
+      restartInFlight = false
+      return
+    }
+    console.warn('[Electron] restartBackend fallback timeout firing')
+    startPythonBackend()
+    restartInFlight = false
+  }, 3000)
   if (pythonProcess) {
     const oldProcess = pythonProcess
     pythonProcess = null
-    oldProcess.kill()
-    for (const [wsId, ws] of wsConnections) {
-      ws.close()
-      wsConnections.delete(wsId)
-    }
-    oldProcess.on('exit', () => {
+    oldProcess.removeAllListeners('exit')
+    oldProcess.once('exit', () => {
+      clearTimeout(pendingTimeout)
+      if (isQuitting) {
+        restartInFlight = false
+        return
+      }
       startPythonBackend()
+      restartInFlight = false
     })
-    setTimeout(() => {
-      startPythonBackend()
-    }, 3000)
+    killPythonProcessGroup(oldProcess)
   } else {
-    for (const [wsId, ws] of wsConnections) {
-      ws.close()
-      wsConnections.delete(wsId)
-    }
+    clearTimeout(pendingTimeout)
     startPythonBackend()
+    restartInFlight = false
   }
 }
 
@@ -1280,12 +1802,12 @@ ipcMain.handle('create-chart-window', (_event, bondCode: string, bondName: strin
   ;(win as any).bondCode = bondCode
   childWindows.set(id, win)
 
-  if (isDev) {
-    const fp = getFrontendIndexPath()
-    if (fp.startsWith('http')) {
-      win.loadURL(`${fp}#/chart/${bondCode}`)
+  if (isDev || frontendServer) {
+    const baseUrl = frontendServer ? `http://127.0.0.1:${actualFrontendPort}` : getFrontendIndexPath()
+    if (baseUrl.startsWith('http')) {
+      win.loadURL(`${baseUrl}#/chart/${bondCode}`)
     } else {
-      win.loadFile(fp, { hash: `/chart/${bondCode}` })
+      win.loadFile(baseUrl, { hash: `/chart/${bondCode}` })
     }
   } else {
     win.loadFile(getFrontendIndexPath(), {
@@ -1314,12 +1836,12 @@ ipcMain.handle('create-detail-window', (_event, bondCode: string, bondName: stri
   ;(win as any).bondCode = bondCode
   childWindows.set(id, win)
 
-  if (isDev) {
-    const fp = getFrontendIndexPath()
-    if (fp.startsWith('http')) {
-      win.loadURL(`${fp}#/detail/${bondCode}`)
+  if (isDev || frontendServer) {
+    const baseUrl = frontendServer ? `http://127.0.0.1:${actualFrontendPort}` : getFrontendIndexPath()
+    if (baseUrl.startsWith('http')) {
+      win.loadURL(`${baseUrl}#/detail/${bondCode}`)
     } else {
-      win.loadFile(fp, { hash: `/detail/${bondCode}` })
+      win.loadFile(baseUrl, { hash: `/detail/${bondCode}` })
     }
   } else {
     win.loadFile(getFrontendIndexPath(), {
@@ -1377,6 +1899,16 @@ function setupAutoUpdater() {
 
   if (!autoUpdater) {
     console.log('[AutoUpdater] electron-updater not available')
+    return
+  }
+
+  // Skip auto-update when no real release server is configured.
+  // The default publish config points to a non-existent GitHub repo
+  // (lianghua/lianghua-app), which causes noisy 404 errors and unhandled
+  // promise rejections on every launch. Set LH_DISABLE_UPDATER=0 to force
+  // it on, or override app-builder publish with a real provider.
+  if (process.env.LH_DISABLE_UPDATER !== '0') {
+    console.log('[AutoUpdater] Disabled (no release server configured)')
     return
   }
 
@@ -1448,13 +1980,19 @@ function setupAutoUpdater() {
     }
   })
 
-  // Check for updates on startup
-  autoUpdater.checkForUpdates()
+  // Check for updates on startup (wrapped to handle missing/private GitHub repo)
+  try {
+    autoUpdater.checkForUpdates().catch((err: any) => {
+      console.log('[AutoUpdater] checkForUpdates failed (non-fatal):', err?.message || err)
+    })
+  } catch (err: any) {
+    console.log('[AutoUpdater] checkForUpdates sync error (non-fatal):', err?.message || err)
+  }
 }
 
 function checkForUpdates() {
   if (isDev) {
-    dialog.showMessageBox(mainWindow!, {
+    dialog.showMessageBox(mainWindow as any, {
       type: 'info',
       title: '检查更新',
       message: '开发模式',
@@ -1464,7 +2002,7 @@ function checkForUpdates() {
     return
   }
   if (!autoUpdater) {
-    dialog.showMessageBox(mainWindow!, {
+    dialog.showMessageBox(mainWindow as any, {
       type: 'warning',
       title: '检查更新',
       message: '自动更新不可用',
@@ -1475,6 +2013,10 @@ function checkForUpdates() {
   }
   autoUpdater.checkForUpdates()
 }
+
+ipcMain.handle('get-prefetched-market-data', () => {
+  return prefetchedMarketData
+})
 
 ipcMain.handle('check-for-updates', async () => {
   if (isDev || !autoUpdater) {
@@ -1496,6 +2038,8 @@ ipcMain.handle('check-for-updates', async () => {
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
+  // NOTE: do not register any other lifecycle hooks or run startup code in the
+  // second instance. The original instance handles `second-instance` below.
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -1504,69 +2048,157 @@ if (!gotTheLock) {
       mainWindow.focus()
     }
   })
-}
 
-// ---- Global error handlers ----
-process.on('uncaughtException', (error: Error) => {
-  console.error('[APP] Uncaught exception:', error)
-  recordCrash('main', error.message, error.stack)
-})
+  // ---- GPU acceleration ----
+  // NOTE: Both app.disableHardwareAcceleration() and --disable-gpu have been
+  // shown to cause black/blank screens on Apple Silicon Macs (the window is
+  // created but never paints). Rely on Electron's default GPU acceleration
+  // which works reliably on modern hardware. If GPU crashes occur, handle
+  // them via Electron's built-in GPU process crash handling instead.
 
-process.on('unhandledRejection', (reason: any) => {
-  console.error('[APP] Unhandled rejection:', reason)
-  recordCrash('main', String(reason))
-})
-// ============================================================
-// App lifecycle
-// ============================================================
+  // ---- Global error handlers ----
+  process.on('uncaughtException', (error: Error) => {
+    console.error('[APP] Uncaught exception:', error)
+    recordCrash('main', error.message, error.stack)
+  })
 
-app.whenReady().then(() => {
-  startPythonBackend()
-  createApplicationMenu()
-  createTrayIcon()
-  createWindow()
-  registerGlobalShortcuts()
-  setupAutoUpdater()
+  process.on('unhandledRejection', (reason: any) => {
+    console.error('[APP] Unhandled rejection:', reason)
+    recordCrash('main', String(reason))
+  })
+  // ============================================================
+  // App lifecycle
+  // ============================================================
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    } else {
-      mainWindow?.show()
+  app.whenReady().then(async () => {
+    // ---- Startup banner ----
+    // AGENTS.md improvement #5: print asar path, port, resource paths so user
+    // can immediately tell which .app instance and which port is being used
+    // (when multiple builds coexist on disk).
+    const asarPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar')
+      : path.join(__dirname, '..', 'app.asar')
+    console.log('============================================')
+    console.log(`[LiangHua] Version:      ${APP_VERSION}`)
+    console.log(`[LiangHua] Mode:         ${app.isPackaged ? 'PRODUCTION' : 'DEVELOPMENT'}`)
+    console.log(`[LiangHua] CWD:          ${process.cwd()}`)
+    console.log(`[LiangHua] asar path:    ${asarPath}`)
+    console.log(`[LiangHua] Resources:    ${process.resourcesPath}`)
+    console.log(`[LiangHua] Backend port: ${BACKEND_PORT}`)
+    console.log(`[LiangHua] Frontend port:${FRONTEND_PORT}`)
+    console.log(`[LiangHua] Backend URL:  ${BACKEND_URL}`)
+    console.log(`[LiangHua] Frontend:     ${getFrontendIndexPath()}`)
+    console.log(`[LiangHua] UserData:     ${app.getPath('userData')}`)
+    console.log(`[LiangHua] PID (Electron): ${process.pid}`)
+    console.log('============================================')
+
+    // AGENTS.md improvement #1: kill any zombie lianghua daemons before
+    // claiming the port. This is the root cause of the recurring
+    // "打不开" reports — the previous .app's backend was still running
+    // on 8766 holding the DuckDB lock.
+    killStaleInstances()
+    // Write our own desktop PID so the NEXT launch can find us.
+    writePidFile('desktop', process.pid)
+
+    // AGENTS.md improvement: first-run Gatekeeper guidance.
+    // On macOS, the user must manually allow unsigned apps in
+    // System Settings → Privacy & Security. Detect the marker file
+    // and show a one-time dialog explaining how to bypass the warning.
+    if (app.isPackaged && process.platform === 'darwin') {
+      try {
+        const firstRunFlag = path.join(app.getPath('userData'), '.first_run_done')
+        if (!fs.existsSync(firstRunFlag)) {
+          const result: any = await dialog.showMessageBox({
+            type: 'info',
+            title: '首次启动 — Gatekeeper 提示',
+            message: '如果系统弹出 "无法打开，因为它来自身份不明的开发者"',
+            detail: '请按以下步骤放行：\n' +
+                    '1. 打开 "系统设置 → 隐私与安全性"\n' +
+                    '2. 向下滚动找到 "仍要打开" 按钮并点击\n' +
+                    '3. 再次双击 LiangHua 即可\n\n' +
+                    '本应用使用 ad-hoc 签名（非 Apple Developer ID），属于开发构建。',
+            buttons: ['我知道了', '不再提示'],
+            defaultId: 0,
+            cancelId: 1,
+          })
+          if (result.response === 0) {
+            try { fs.writeFileSync(firstRunFlag, new Date().toISOString()) } catch {}
+          } else {
+            try { fs.writeFileSync(firstRunFlag, 'dismissed-' + new Date().toISOString()) } catch {}
+          }
+        }
+      } catch (e) {
+        console.error('[Electron] first-run check failed:', (e as Error).message)
+      }
+    }
+
+    startPythonBackend()
+    createApplicationMenu()
+    createTrayIcon()
+    // await createWindow so errors loading the frontend page are caught
+    try {
+      await createWindow()
+    } catch (winErr) {
+      console.error('[Electron] createWindow failed:', winErr)
+    }
+    registerGlobalShortcuts()
+    setupAutoUpdater()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow().catch((err: any) => console.error('[Electron] activate createWindow failed:', err))
+      } else {
+        mainWindow?.show()
+      }
+    })
+  })
+
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll()
+    stopHealthMonitor()
+    // Close frontend HTTP server
+    if (frontendServer) {
+      frontendServer.close()
+      frontendServer = null
+    }
+    // Close all WebSocket connections
+    for (const [wsId, ws] of wsConnections) {
+      ws.close()
+      wsConnections.delete(wsId)
+    }
+    if (tray) {
+      tray.destroy()
+      tray = null
     }
   })
-})
 
-app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
-  stopHealthMonitor()
-  // Close all WebSocket connections
-  for (const [wsId, ws] of wsConnections) {
-    ws.close()
-    wsConnections.delete(wsId)
-  }
-  if (tray) {
-    tray.destroy()
-    tray = null
-  }
-})
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit()
+    }
+  })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-app.on('before-quit', () => {
-  isQuitting = true
-  stopHealthMonitor()
-  // Persist crash reports
-  try {
-    const crashPath = path.join(app.getPath('userData'), 'crash-reports.json')
-    fs.writeFileSync(crashPath, JSON.stringify(crashReports.slice(0, 20), null, 2))
-  } catch {}
-  if (pythonProcess) {
-    pythonProcess.kill()
-    pythonProcess = null
-  }
-})
+  app.on('before-quit', () => {
+    isQuitting = true
+    stopHealthMonitor()
+    if (pythonRestartTimer) {
+      clearTimeout(pythonRestartTimer)
+      pythonRestartTimer = null
+    }
+    // AGENTS.md improvement #1: clean up our PID files so the next launch
+    // doesn't try to kill us thinking we're a stale instance.
+    removePidFile('desktop')
+    if (pythonProcess) {
+      removePidFile('backend')
+    }
+    // Persist crash reports
+    try {
+      const crashPath = path.join(app.getPath('userData'), 'crash-reports.json')
+      fs.writeFileSync(crashPath, JSON.stringify(crashReports.slice(0, 20), null, 2))
+    } catch {}
+    if (pythonProcess) {
+      killPythonProcessGroup(pythonProcess)
+      pythonProcess = null
+    }
+  })
+}

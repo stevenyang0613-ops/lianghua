@@ -12,9 +12,9 @@ from app.main import app
 def token():
     from app.config import settings
     from jose import jwt
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     return jwt.encode(
-        {"sub": "testuser", "exp": datetime.utcnow() + timedelta(hours=1)},
+        {"sub": "testuser", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
         settings.JWT_SECRET_KEY,
         algorithm=settings.JWT_ALGORITHM
     )

@@ -250,7 +250,9 @@ export default function SonggangScore() {
             })
             .catch((e) => {
               console.error('[SonggangScore] REST fallback failed:', e)
-              message.error('加载失败')
+              const msg = getErrorMessage(e)
+              setErrorMsg(msg)
+              message.error(`加载失败: ${msg}`)
             })
             .finally(() => {
               if (seq === fetchSeqRef.current) setLoading(false)
@@ -473,6 +475,19 @@ export default function SonggangScore() {
   return (
     <div style={{ padding: 16 }}>
       <Card>
+        {errorMsg && (
+          <Alert
+            type="error"
+            message="数据加载失败"
+            description={errorMsg}
+            closable
+            onClose={() => setErrorMsg(null)}
+            style={{ marginBottom: 16 }}
+            action={
+              <Button size="small" onClick={fetchData}>重试</Button>
+            }
+          />
+        )}
         <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
           <Col>
             <Title level={4} style={{ margin: 0 }}>

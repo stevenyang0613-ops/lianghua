@@ -13,9 +13,18 @@ import logging
 router = APIRouter(prefix="/xuanji", tags=["璇玑十二因子"])
 logger = logging.getLogger(__name__)
 
-# 内存缓存
+# 内存缓存 — LRU风格
 _cache: dict = {}
-_CACHE_TTL = 60
+_CACHE_TTL = 180  # 排名等计算型数据缓存3分钟
+_LONG_CACHE_TTL = 600  # 静态/半静态数据缓存10分钟
+_MAX_CACHE_SIZE = 64  # LRU: 最多保留64个条目
+
+
+def _lru_touch(key: str):
+    """将 key 移动到字典末尾 (模拟 LRU 顺序)"""
+    if key in _cache:
+        entry = _cache.pop(key)
+        _cache[key] = entry
 
 
 def _get_cache_key(prefix: str, **kwargs) -> str:
@@ -25,33 +34,45 @@ def _get_cache_key(prefix: str, **kwargs) -> str:
     return f"{prefix}:{hash_key}"
 
 
-def _get_cached(key: str) -> Optional[dict]:
+def _get_cached(key: str, ttl: int = None) -> Optional[dict]:
     if key in _cache:
+        _lru_touch(key)
         entry = _cache[key]
-        if time.time() - entry['ts'] < _CACHE_TTL:
+        effective_ttl = ttl or entry.get('ttl', _CACHE_TTL)
+        if time.time() - entry['ts'] < effective_ttl:
             return entry['data']
         else:
             del _cache[key]
     return None
 
 
-def _set_cache(key: str, data: dict):
+def _set_cache(key: str, data: dict, ttl: int = None):
     _cleanup_cache()
-    _cache[key] = {'ts': time.time(), 'data': data}
+    _cache[key] = {'ts': time.time(), 'data': data, 'ttl': ttl or _CACHE_TTL}
 
 
 def _cleanup_cache():
     now = time.time()
-    expired = [k for k, v in _cache.items() if now - v['ts'] >= _CACHE_TTL]
+    # 清除过期条目 (2倍 TTL)
+    expired = [k for k, v in _cache.items() if now - v['ts'] >= v.get('ttl', _CACHE_TTL) * 2]
     for k in expired:
         del _cache[k]
+    # LRU 淘汰: 超过最大容量时移除最旧的 25%
+    overflow = len(_cache) - _MAX_CACHE_SIZE
+    if overflow > 0:
+        keys = list(_cache.keys())
+        for k in keys[:overflow]:
+            del _cache[k]
 
 
 _ENRICH_COLS = [
     'roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb', 'iv',
     'buyback_amount', 'mgmt_buy_price', 'current_ratio',
     'turnover_rate', 'net_capital_flow', 'net_capital_flow_pct',
-    'outstanding_scale',
+    'outstanding_scale', 'pledge_ratio',
+    'net_super_flow', 'net_big_flow', 'stock_name',
+    'momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_60d',
+    'event_score', 'event_detail', 'call_status',
 ]
 
 
@@ -70,7 +91,7 @@ def _build_row_from_bond(b) -> dict:
         "conversion_value": b.conversion_value,
         "stock_price": b.stock_price,
         "industry": getattr(b, 'industry', None) or "其他",
-        "rating": getattr(b, 'rating', None) or "AA",
+        "rating": getattr(b, 'rating', None) or "未评级",
     }
     for col in _ENRICH_COLS:
         if hasattr(b, col):
@@ -142,11 +163,37 @@ FACTOR_NAMES = {
 
 
 def _normalize_rank(series: pd.Series, ascending: bool = True) -> pd.Series:
-    ranks = series.rank(method='average', ascending=ascending)
-    max_r = ranks.max()
-    if pd.isna(max_r) or max_r <= 1:
+    """
+    横截面Z-score归一化 (v8 style): winsorize 5% + Z-score + rank归一化 [0,1]
+    比纯rank保留更多分布信息。
+    ascending=True: 低值→高分 (如低溢价率)
+    ascending=False: 高值→高分 (如高动量)
+    """
+    s = series.dropna()
+    if len(s) < 3:
         return pd.Series(0.5, index=series.index)
-    return (max_r - ranks) / (max_r - 1)
+    
+    # winsorize 5%
+    lo, hi = s.quantile(0.05), s.quantile(0.95)
+    if pd.isna(lo) or pd.isna(hi) or lo >= hi:
+        lo, hi = s.min(), s.max()
+    w = s.clip(lo, hi)
+    
+    mu, sigma = w.mean(), w.std()
+    if sigma <= 0 or pd.isna(sigma):
+        return pd.Series(0.5, index=series.index)
+    
+    z = (w - mu) / sigma
+    # Sigmoid mapping: 1 / (1 + exp(-z*s))
+    # ascending=True: negate z so low input values → high z → high sigmoid score
+    if ascending:
+        z = -z
+    sig = 1.0 / (1.0 + np.exp(-z * 1.5))
+    
+    # Build result preserving original index, NaN→0.5
+    result = pd.Series(0.5, index=series.index)
+    result.loc[sig.index] = sig
+    return result
 
 
 def _detect_market_state(df: pd.DataFrame) -> str:
@@ -172,6 +219,11 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
 
     weights = MARKET_WEIGHTS.get(market_state, MARKET_WEIGHTS['neutral'])
 
+    if 'dual_low' in df.columns:
+        dl_median = df['dual_low'].median()
+        if pd.isna(dl_median):
+            dl_median = 150.0
+        df['dual_low'] = df['dual_low'].fillna(dl_median)
     score_dual_low = _normalize_rank(df['dual_low'], ascending=True)
     hv_median = df['hv'].median() if 'hv' in df.columns and df['hv'].notna().any() else 20.0
     if 'hv' in df.columns:
@@ -180,7 +232,23 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     score_hv = _normalize_rank(df['hv'], ascending=True)
 
     if 'change_pct' in df.columns:
-        score_momentum = _normalize_rank(df['change_pct'].fillna(0), ascending=False)
+        if 'momentum_20d' in df.columns and df['momentum_20d'].notna().any():
+            m20 = pd.to_numeric(df['momentum_20d'], errors='coerce')
+            m10 = pd.to_numeric(df.get('momentum_10d', m20), errors='coerce')
+            m5 = pd.to_numeric(df.get('momentum_5d', m10), errors='coerce')
+            m60 = pd.to_numeric(df.get('momentum_60d', m20), errors='coerce')
+            m_median = m20.median()
+            if pd.isna(m_median):
+                m_median = 0
+            parts = []
+            for m in [m5, m10, m20, m60]:
+                parts.append(m.fillna(m_median))
+            stacked = pd.DataFrame(parts).T
+            valid = stacked.notna().sum(axis=1).clip(lower=1)
+            composite_mom = stacked.sum(axis=1) / valid
+            score_momentum = _normalize_rank(composite_mom, ascending=False)
+        else:
+            score_momentum = _normalize_rank(df['change_pct'].fillna(0), ascending=False)
     else:
         score_momentum = pd.Series(0.5, index=df.index)
 
@@ -190,7 +258,7 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
             ytm_median = 0
         score_ytm = _normalize_rank(df['ytm'].fillna(ytm_median), ascending=False)
     else:
-        score_ytm = pd.Series(0.25, index=df.index)
+        score_ytm = pd.Series(0.5, index=df.index)
 
     if 'remaining_years' in df.columns and df['remaining_years'].notna().any():
         ry_median = df['remaining_years'].median()
@@ -198,19 +266,19 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
             ry_median = 3
         score_remaining_years = _normalize_rank(df['remaining_years'].fillna(ry_median), ascending=False)
     else:
-        score_remaining_years = pd.Series(0.25, index=df.index)
+        score_remaining_years = pd.Series(0.5, index=df.index)
 
     quality_parts = []
-    has_quality_data = any(col in df.columns and df[col].notna().any() for col in ['roe', 'gpm', 'cagr', 'debt_ratio'])
+    has_quality_data = any(col in df.columns and df[col].notna().any() for col in ['roe', 'gpm', 'cagr', 'debt_ratio', 'current_ratio', 'turnover_rate'])
     if has_quality_data:
-        for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True)]:
+        for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True), ('current_ratio', False), ('turnover_rate', False)]:
             if col in df.columns and df[col].notna().any():
                 col_median = df[col].median()
                 if pd.isna(col_median):
                     col_median = 0
                 col_data = pd.to_numeric(df[col], errors='coerce').fillna(col_median)
                 quality_parts.append(_normalize_rank(col_data, ascending=asc))
-    score_quality = sum(quality_parts) / len(quality_parts) if quality_parts else pd.Series(0.25, index=df.index)
+    score_quality = sum(quality_parts) / len(quality_parts) if quality_parts else pd.Series(0.5, index=df.index)
 
     valuation_parts = []
     has_val_data = any(col in df.columns and df[col].notna().any() for col in ['pe', 'pb'])
@@ -222,21 +290,27 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
                     col_median = 50
                 col_data = pd.to_numeric(df[col], errors='coerce').fillna(col_median)
                 valuation_parts.append(_normalize_rank(col_data, ascending=asc))
-    score_valuation = sum(valuation_parts) / len(valuation_parts) if valuation_parts else pd.Series(0.25, index=df.index)
+    score_valuation = sum(valuation_parts) / len(valuation_parts) if valuation_parts else pd.Series(0.5, index=df.index)
 
     event_parts = []
-    has_event_data = any(col in df.columns and df[col].notna().any() for col in ['buyback_amount', 'mgmt_buy_price'])
+    has_event_data = any(col in df.columns and df[col].notna().any() for col in ['buyback_amount', 'mgmt_buy_price', 'event_score'])
     if has_event_data:
-        for col in ['buyback_amount', 'mgmt_buy_price']:
+        for col in ['buyback_amount', 'mgmt_buy_price', 'event_score']:
             if col in df.columns and df[col].notna().any():
-                col_data = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                col_median = pd.to_numeric(df[col], errors='coerce').median()
+                if pd.isna(col_median):
+                    col_median = 0
+                col_data = pd.to_numeric(df[col], errors='coerce').fillna(col_median)
                 event_parts.append(_normalize_rank(col_data, ascending=False))
-    score_event = sum(event_parts) / len(event_parts) if event_parts else pd.Series(0.25, index=df.index)
+    score_event = sum(event_parts) / len(event_parts) if event_parts else pd.Series(0.5, index=df.index)
 
-    score_delta = pd.Series(0.25, index=df.index)
+    score_delta = pd.Series(0.5, index=df.index)
     score_delta_available = 'iv' in df.columns and df['iv'].notna().any() and 'hv' in df.columns
     if score_delta_available:
-        iv_hv_diff = (pd.to_numeric(df['iv'], errors='coerce').fillna(0) - df['hv']).clip(lower=0)
+        iv_raw = pd.to_numeric(df['iv'], errors='coerce').fillna(0)
+        hv_data = df['hv']
+        iv_effective = np.maximum(iv_raw, hv_data * 1.2 + 3.0)
+        iv_hv_diff = (iv_effective - hv_data).clip(lower=0)
         score_delta = _normalize_rank(iv_hv_diff, ascending=False)
 
     active_weights = {}
@@ -282,6 +356,9 @@ def _compute_xuanji_scores(df: pd.DataFrame, market_state: str, vol_adjust: floa
     ) * vol_factor
 
     df['score'] = composite.clip(0, 1)
+    score_nan = df['score'].isna()
+    if score_nan.any():
+        df.loc[score_nan, 'score'] = 0.5
     df['score_dual_low'] = score_dual_low
     df['score_momentum'] = score_momentum
     df['score_hv'] = score_hv
@@ -389,6 +466,15 @@ async def get_xuanji_ranking(
                 "turnover_rate": _r2('turnover_rate'),
                 "net_capital_flow": _r2('net_capital_flow'),
                 "net_capital_flow_pct": _r2('net_capital_flow_pct'),
+                "net_super_flow": _r2('net_super_flow'),
+                "net_big_flow": _r2('net_big_flow'),
+                "momentum_5d": _r2('momentum_5d'),
+                "momentum_10d": _r2('momentum_10d'),
+                "momentum_20d": _r2('momentum_20d'),
+                "momentum_60d": _r2('momentum_60d'),
+                "pledge_ratio": _r2('pledge_ratio'),
+                "event_score": _r2('event_score'),
+                "event_detail": row.get('event_detail'),
                 "score": round(float(row['score']), 4),
                 "score_dual_low": round(float(row['score_dual_low']), 4),
                 "score_momentum": round(float(row['score_momentum']), 4),
@@ -526,6 +612,8 @@ async def get_xuanji_single(
                 "turnover_rate": getattr(target, 'turnover_rate', None),
                 "net_capital_flow": getattr(target, 'net_capital_flow', None),
                 "net_capital_flow_pct": getattr(target, 'net_capital_flow_pct', None),
+                "net_super_flow": getattr(target, 'net_super_flow', None),
+                "net_big_flow": getattr(target, 'net_big_flow', None),
                 "buyback_amount": getattr(target, 'buyback_amount', None),
                 "mgmt_buy_price": getattr(target, 'mgmt_buy_price', None),
                 "outstanding_scale": getattr(target, 'outstanding_scale', None),
@@ -629,10 +717,9 @@ async def get_delta_candidates(
                 hv_est = max(3.0, min(80.0, hv_est))
 
                 actual_iv = float(getattr(b, 'iv', 0) or 0)
-                actual_iv_source = getattr(b, 'iv_source', None)
-                if actual_iv > 0:
+                if actual_iv > 0 and actual_iv > hv_est * 1.1:
                     iv_est = actual_iv
-                    iv_source = actual_iv_source if actual_iv_source in ("actual", "hv_proxy") else "hv_proxy"
+                    iv_source = "actual"
                 else:
                     iv_est = hv_est * 1.3 + 5.0
                     iv_source = "estimated"
@@ -679,6 +766,11 @@ async def get_delta_candidates(
 @router.get("/greeks")
 async def get_greeks_summary(request: Request):
     """168只转债的Greeks分布汇总"""
+    cache_key = _get_cache_key("xuanji_greeks")
+    cached = _get_cached(cache_key, _LONG_CACHE_TTL)
+    if cached:
+        return cached
+
     try:
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -696,7 +788,7 @@ async def get_greeks_summary(request: Request):
         mid_delta = sum(1 for d in delta_values if 0.3 <= d <= 0.7)
         low_delta = sum(1 for d in delta_values if d < 0.3)
 
-        return {
+        result = {
             "total": len(bonds),
             "summary": {
                 "delta_mean": round(_safe_mean(delta_values), 4),
@@ -711,6 +803,8 @@ async def get_greeks_summary(request: Request):
                 "low_delta": low_delta,
             },
         }
+        _set_cache(cache_key, result, _LONG_CACHE_TTL)
+        return result
     except Exception as e:
         logger.exception("Greeks汇总失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -854,7 +948,7 @@ async def get_alpha_sources(request: Request):
 
 @router.get("/health")
 def xuanji_health():
-    return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "3.0"}
+    return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "4.0"}
 
 
 def _safe_float(v, default=0.0):
@@ -1135,6 +1229,36 @@ async def factor_correlation(
 
         factor_cols = [f"score_{k}" for k in FACTOR_NAMES.keys() if f"score_{k}" in top_df.columns]
         if len(top_df) < 2 or not factor_cols:
+            # 低样本时：使用ICIR存储中的历史/理论相关矩阵
+            try:
+                from app.engine.icir_storage import get_stored_correlation_matrix
+                stored = get_stored_correlation_matrix()
+                if stored:
+                    correlations = []
+                    for i, f1 in enumerate(stored["factors"]):
+                        for j, f2 in enumerate(stored["factors"]):
+                            if i < j and i < len(stored["matrix"]) and j < len(stored["matrix"][i]):
+                                val = stored["matrix"][i][j]
+                                correlations.append({
+                                    "factor1": f1,
+                                    "factor2": f2,
+                                    "correlation": val,
+                                    "abs_correlation": round(abs(val), 3),
+                                    "redundancy": "high" if abs(val) > 0.7 else "medium" if abs(val) > 0.5 else "low",
+                                })
+                    correlations.sort(key=lambda x: x["abs_correlation"], reverse=True)
+                    return {
+                        "market_state": actual_state,
+                        "market_state_requested": market_state,
+                        "top_n": top_n,
+                        "total_pairs": len(correlations),
+                        "high_redundancy_pairs": len([c for c in correlations if c["redundancy"] == "high"]),
+                        "total_unfiltered": total_unfiltered,
+                        "correlations": correlations[:20],
+                        "correlation_source": stored["source"],
+                    }
+            except Exception:
+                pass
             return {
                 "market_state": actual_state,
                 "market_state_requested": market_state,
@@ -1142,6 +1266,7 @@ async def factor_correlation(
                 "total_pairs": 0,
                 "high_redundancy_pairs": 0,
                 "correlations": [],
+                "correlation_source": "insufficient_data",
             }
         corr_matrix = top_df[factor_cols].corr()
 
@@ -1302,7 +1427,12 @@ async def strategy_comparison(
 
 
 @router.get("/summary")
-async def strategy_summary(request: Request):
+async def strategy_summary(
+    request: Request,
+    max_premium: float = Query(80.0, ge=10, le=100),
+    min_price: float = Query(80.0, ge=70, le=120),
+    max_price: float = Query(180.0, ge=120, le=200),
+):
     """策略总览: 一页式展示所有关键指标 (target_returns 基于实时行情估算)"""
     target_returns = {
         "neutral": None,
@@ -1316,8 +1446,8 @@ async def strategy_summary(request: Request):
             bonds = await engine.get_all_quotes()
             if bonds:
                 df = pd.DataFrame([_build_row_from_bond(b) for b in bonds])
-                df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= 80) &
-                        (df['price'] >= 80) & (df['price'] <= 180)]
+                df = df[(df['premium_ratio'] >= 0) & (df['premium_ratio'] <= max_premium) &
+                        (df['price'] >= min_price) & (df['price'] <= max_price)]
                 if not df.empty:
                     df = _compute_hv_estimate(df)
                     detected_state = _detect_market_state(df)
@@ -1343,7 +1473,7 @@ async def strategy_summary(request: Request):
     return {
         "strategy": {
             "name": "璇玑十二因子指增",
-            "version": "3.0",
+            "version": "4.0",
             "category": "可转债多因子指增",
             "philosophy": "古代天文仪器，象征多维度精密分析",
             "factors": list(FACTOR_NAMES.keys()),
@@ -1351,6 +1481,11 @@ async def strategy_summary(request: Request):
             "alpha_sources": 12,
             "market_states": list(MARKET_WEIGHTS.keys()),
             "market_state_count": len(MARKET_WEIGHTS),
+            "icir_dynamic_weights": True,
+            "factor_orthogonalization": True,
+            "industry_neutralization": True,
+            "layered_model": True,
+            "delta_hedge_default": 10,
         },
         "target_returns": target_returns,
         "key_features": {
@@ -1374,7 +1509,372 @@ async def strategy_summary(request: Request):
             "factor_contribution": "/api/v1/xuanji/factor-contribution",
             "factor_correlation": "/api/v1/xuanji/factor-correlation",
             "comparison": "/api/v1/xuanji/comparison",
+            "data_source_health": "/api/v1/xuanji/data-source-health",
             "backtest": "/api/v1/backtest/run (strategy=xuanji_twelve)",
             "optimization": "/api/v1/backtest/optimize (strategy=xuanji_twelve)",
         }
     }
+
+
+# ==================== ICIR历史辅助函数 ====================
+
+
+def _generate_simulated_icir(actual_state: str) -> dict:
+    """生成模拟的ICIR数据（当无真实历史数据时）"""
+    scenarios = []
+    for state_key, state_name in [("extreme_bull", "极端牛"), ("mild_bull", "温和牛"),
+                                   ("neutral", "震荡"), ("mild_bear", "温和熊"),
+                                   ("extreme_bear", "极端熊")]:
+        base = MARKET_WEIGHTS[state_key]
+        icir_adjusted = {}
+        for k in FACTOR_NAMES:
+            w = base.get(k, 0)
+            if k in ("dual_low", "hv", "ytm", "remaining_years"):
+                adj = 1.0 + (0.15 if "bear" in state_key else -0.10 if "bull" in state_key else 0.0)
+            elif k in ("momentum", "delta"):
+                adj = 1.0 + (0.20 if "bull" in state_key else -0.15 if "bear" in state_key else 0.0)
+            elif k in ("quality", "valuation"):
+                adj = 1.05
+            else:
+                adj = 1.0
+            icir_adjusted[k] = round(w * adj, 4)
+        total = sum(icir_adjusted.values())
+        if total > 0:
+            for k in icir_adjusted:
+                icir_adjusted[k] = round(icir_adjusted[k] / total, 4)
+        scenarios.append({
+            "state": state_key,
+            "state_name": state_name,
+            "base_weights": base,
+            "icir_weights": icir_adjusted,
+            "description": f"{state_name}市场: ICIR调权{'防守↑' if 'bear' in state_key else '进攻↑' if 'bull' in state_key else '均衡'}",
+        })
+
+    return {
+        "data_source": "simulated",
+        "scenarios": scenarios,
+        "factor_names": FACTOR_NAMES,
+        "methodology": "模拟ICIR: 基于因子逻辑的权重调整（等待真实IC数据积累）",
+    }
+
+
+def _compute_icir_weights_from_real_data(real_data: dict, actual_state: str) -> dict:
+    """基于真实ICIR数据计算当前权重"""
+    # 用最近ICIR值作为信号
+    weights = {}
+    for key in FACTOR_NAMES:
+        entries = real_data["factor_icir"].get(key, [])
+        if entries:
+            recent = sorted(entries, key=lambda x: x["date"], reverse=True)[:10]
+            avg_icir = np.mean([e["icir"] for e in recent]) if recent else 0
+        else:
+            avg_icir = 0
+        # ICIR > 0.5 表示强预测能力，提升权重；ICIR < -0.5 表示负向预测，降权
+        w = 0.11 + avg_icir * 0.05  # 基准11% ± ICIR*5%
+        weights[key] = round(max(0.02, min(0.35, w)), 4)
+
+    total = sum(weights.values())
+    if total > 0:
+        for k in weights:
+            weights[k] = round(weights[k] / total, 4)
+    return weights
+
+
+def _build_scenarios_from_icir(real_data: dict, actual_state: str) -> list:
+    """基于真实ICIR数据构建各市场态场景"""
+    scenarios = []
+    for state_key, state_name in [("extreme_bull", "极端牛"), ("mild_bull", "温和牛"),
+                                   ("neutral", "震荡"), ("mild_bear", "温和熊"),
+                                   ("extreme_bear", "极端熊")]:
+        base = MARKET_WEIGHTS[state_key]
+        icir_adjusted = {}
+        for k in FACTOR_NAMES:
+            entries = real_data["factor_icir"].get(k, [])
+            if entries:
+                recent = sorted(entries, key=lambda x: x["date"], reverse=True)[:10]
+                avg_icir = np.mean([e["icir"] for e in recent]) if recent else 0
+            else:
+                avg_icir = 0
+            w = base.get(k, 0)
+            if "bear" in state_key:
+                adj = 1.0 + min(0.3, max(-0.1, avg_icir * 0.3))
+            elif "bull" in state_key:
+                adj = 1.0 + min(0.3, max(-0.1, avg_icir * 0.2))
+            else:
+                adj = 1.0 + avg_icir * 0.1
+            icir_adjusted[k] = round(w * adj, 4)
+        total = sum(icir_adjusted.values())
+        if total > 0:
+            for k in icir_adjusted:
+                icir_adjusted[k] = round(icir_adjusted[k] / total, 4)
+        scenarios.append({
+            "state": state_key,
+            "state_name": state_name,
+            "base_weights": base,
+            "icir_weights": icir_adjusted,
+            "description": f"{state_name}: ICIR真实数据调权",
+        })
+    return scenarios
+
+
+@router.get("/icir-history")
+async def icir_history(request: Request, days: int = Query(90, ge=30, le=365)):
+    """ICIR动态权重历史 — 真实或模拟数据"""
+    try:
+        from app.engine.icir_storage import get_icir_history, compute_icir, initialize as _icir_init
+        _icir_init()
+
+        real_data = get_icir_history(days)
+        has_real_data = any(len(v) > 0 for v in real_data["factor_ic"].values())
+
+        engine = getattr(request.app.state, "engine", None)
+        actual_state = "neutral"
+        if engine:
+            bonds = await engine.get_all_quotes()
+            if bonds:
+                rows = [_build_row_from_bond(b) for b in bonds]
+                df = pd.DataFrame(rows)
+                actual_state = _detect_market_state(df) if not df.empty else "neutral"
+
+        if has_real_data:
+            # 真实数据模式
+            icir_weights = _compute_icir_weights_from_real_data(real_data, actual_state)
+            scenarios = _build_scenarios_from_icir(real_data, actual_state)
+
+            # 计算最近IC统计
+            ic_stats = {}
+            for key in FACTOR_NAMES:
+                entries = real_data["factor_ic"].get(key, [])
+                if entries:
+                    recent = [e["ic"] for e in entries[-30:]]
+                    mu = np.mean(recent) if recent else 0
+                    sigma = np.std(recent) if recent else 1e-9
+                    ic_stats[key] = {
+                        "mean_ic": round(float(mu), 4),
+                        "std_ic": round(float(sigma), 4),
+                        "ir": round(float(mu / sigma), 4) if sigma > 0 else 0,
+                        "sample_count": len(recent),
+                    }
+
+            return {
+                "data_source": "real",
+                "scenarios": scenarios,
+                "factor_names": FACTOR_NAMES,
+                "icir_weights": icir_weights,
+                "ic_stats": ic_stats,
+                "last_updated": real_data["last_updated"],
+                "methodology": "ICIR真实数据: 基于每日截面IC的历史数据计算",
+            }
+        else:
+            # 无真实数据时使用模拟数据
+            return _generate_simulated_icir(actual_state)
+
+    except Exception as e:
+        logger.exception("ICIR历史获取失败，回退到模拟数据")
+        try:
+            return _generate_simulated_icir("neutral")
+        except Exception:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/custom-ranking")
+async def custom_ranking(request: Request, body: dict):
+    """自定义因子权重排名 — 用户可指定各因子权重（带缓存）"""
+    try:
+        # 生成缓存键
+        cache_key = _get_cache_key(
+            "custom_ranking",
+            weights=str(sorted(body.get("weights", {}).items())),
+            top_n=body.get("top_n", 50),
+            market_state=body.get("market_state", "auto"),
+            max_premium=body.get("max_premium", 80),
+            min_price=body.get("min_price", 80),
+            max_price=body.get("max_price", 180),
+        )
+        cached = _get_cached(cache_key, ttl=120)  # 2分钟缓存
+        if cached:
+            return cached
+        custom_weights = body.get("weights", {})
+        top_n = body.get("top_n", 50)
+        market_state = body.get("market_state", "auto")
+        max_premium = body.get("max_premium", 80)
+        min_price = body.get("min_price", 80)
+        max_price = body.get("max_price", 180)
+        vol_adjust = body.get("vol_adjust", 0.85)
+
+        engine = request.app.state.engine
+        bonds = await engine.get_all_quotes()
+        if not bonds:
+            return {"total": 0, "items": []}
+
+        rows = [_build_row_from_bond(b) for b in bonds]
+        df = pd.DataFrame(rows)
+        df = _compute_hv_estimate(df)
+
+        actual_state = _detect_market_state(df) if market_state == "auto" else market_state
+        if actual_state not in MARKET_WEIGHTS:
+            actual_state = "neutral"
+
+        df = df[
+            (df['premium_ratio'] >= 0) &
+            (df['premium_ratio'] <= max_premium) &
+            (df['price'] >= min_price) &
+            (df['price'] <= max_price) &
+            (df['price'] > 0)
+        ]
+
+        if df.empty:
+            return {"total": 0, "items": [], "market_state": actual_state}
+
+        df = _compute_xuanji_scores(df, actual_state, vol_adjust)
+
+        # Override weights with custom weights
+        valid_keys = [k for k in FACTOR_NAMES if k in custom_weights and custom_weights[k] > 0]
+        if valid_keys:
+            total_w = sum(custom_weights[k] for k in valid_keys)
+            if total_w > 0:
+                normalized = {k: custom_weights[k] / total_w for k in valid_keys}
+            else:
+                normalized = {k: 1.0 / len(valid_keys) for k in valid_keys}
+        else:
+            normalized = df.attrs.get('active_weights', MARKET_WEIGHTS[actual_state])
+            valid_keys = list(normalized.keys())
+
+        # Recompute composite with custom weights
+        composite = pd.Series(0.0, index=df.index)
+        for key in valid_keys:
+            score_col = f"score_{key}"
+            if score_col in df.columns:
+                composite += df[score_col] * normalized.get(key, 0)
+
+        df['custom_score'] = composite.clip(0, 1)
+        df = df.sort_values('custom_score', ascending=False).reset_index(drop=True)
+        top_df = df.head(top_n)
+
+        def _r2(key, _r=row):
+            v = _r.get(key)
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return None
+            return round(float(v), 2)
+
+        items = []
+        for idx, row in top_df.iterrows():
+            items.append({
+                "rank": idx + 1,
+                "code": row['code'],
+                "name": row['name'],
+                "price": round(float(row['price']), 3),
+                "premium_ratio": round(float(row['premium_ratio']), 2),
+                "dual_low": round(float(row['dual_low']), 2),
+                "industry": row.get('industry', '其他'),
+                "score": round(float(row['custom_score']), 4),
+            })
+
+        result = {
+            "total": int(len(df)),
+            "returned": int(len(items)),
+            "market_state": actual_state,
+            "weights_used": normalized,
+            "items": items,
+        }
+        _set_cache(cache_key, result, ttl=120)
+        return result
+    except Exception as e:
+        logger.exception("自定义因子排名失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/data-source-health")
+async def data_source_health(request: Request):
+    """数据源健康状况 — 返回所有缓存数据源的维度覆盖率和新鲜度"""
+    try:
+        from app.engine.data_enrich import (
+            _industry_map, _spot_map, _fin_map, _debt_map, _vol_map,
+            _buyback_map, _mgmt_map, _momentum_map, _event_map,
+            _bond_outstanding_map, _call_status_map, _pledge_map,
+            _name_map, _concept_map, _fund_flow_map, _bond_price_map,
+            get_cache_refresh_ts,
+        )
+        import time as _time
+
+        now = _time.time()
+        refresh_ts = get_cache_refresh_ts()
+
+        sources = [
+            ("industry", _industry_map, "行业分类", len(_industry_map)),
+            ("spot", _spot_map, "行情/PE/PB", sum(1 for v in _spot_map.values() if isinstance(v, dict) and v.get("pe") is not None)),
+            ("fin", _fin_map, "财务(ROE/GPM)", len(_fin_map)),
+            ("debt", _debt_map, "负债率/流动比", len(_debt_map)),
+            ("vol", _vol_map, "历史波动率", len(_vol_map)),
+            ("buyback", _buyback_map, "回购", len(_buyback_map)),
+            ("mgmt", _mgmt_map, "增持", len(_mgmt_map)),
+            ("momentum", _momentum_map, "动量", len(_momentum_map)),
+            ("event", _event_map, "事件", len(_event_map)),
+            ("outstanding", _bond_outstanding_map, "剩余规模", len(_bond_outstanding_map)),
+            ("call_status", _call_status_map, "强赎状态", len(_call_status_map)),
+            ("pledge", _pledge_map, "质押率", len(_pledge_map)),
+            ("stock_names", _name_map, "正股名称", len(_name_map)),
+            ("concept", _concept_map, "概念板块", len(_concept_map)),
+            ("fund_flow", _fund_flow_map, "资金流向", len(_fund_flow_map)),
+            ("bond_price", _bond_price_map, "集思录行情", len(_bond_price_map)),
+        ]
+
+        # 获取总可转债数量作为覆盖度参考
+        total_bonds = 0
+        try:
+            engine = getattr(request.app.state, "engine", None)
+            if engine:
+                all_quotes = await engine.get_all_quotes()
+                total_bonds = len(all_quotes)
+        except Exception:
+            pass
+
+        sources_status = []
+        for name, data, label, count in sources:
+            cov_pct = round(count / max(total_bonds, 1) * 100, 1) if total_bonds > 0 else 0
+            last_ts = refresh_ts.get(name, 0)
+            last_update = None
+            if last_ts > 0:
+                elapsed_s = int(now - last_ts)
+                if elapsed_s < 60:
+                    last_update = f"{elapsed_s}秒前"
+                elif elapsed_s < 3600:
+                    last_update = f"{elapsed_s // 60}分钟前"
+                elif elapsed_s < 86400:
+                    last_update = f"{elapsed_s // 3600}小时前"
+                else:
+                    last_update = f"{elapsed_s // 86400}天前"
+            sources_status.append({
+                "name": name,
+                "label": label,
+                "count": count,
+                "coverage_pct": min(cov_pct, 100),
+                "has_data": count > 0,
+                "last_update": last_update,
+                "last_update_ts": int(last_ts) if last_ts > 0 else None,
+            })
+
+        return {
+            "total_bonds": total_bonds,
+            "bond_stock_codes_loaded": bool(_ensure_bond_stock_codes_result_cache()),
+            "sources": sources_status,
+            "summary": {
+                "total_sources": len(sources),
+                "sources_with_data": sum(1 for s in sources_status if s["has_data"]),
+                "avg_coverage_pct": round(
+                    sum(s["coverage_pct"] for s in sources_status) / max(len(sources_status), 1), 1
+                ),
+            }
+        }
+    except Exception as e:
+        logger.warning(f"[data-source-health] Error: {e}")
+        return {"total_bonds": 0, "sources": [], "error": str(e)[:100]}
+
+
+def _ensure_bond_stock_codes_result_cache():
+    """返回 _bond_stock_codes 是否已加载（辅助 data_source_health 端点）"""
+    try:
+        from app.engine.data_enrich import _bond_stock_codes
+        return len(_bond_stock_codes) > 0
+    except Exception:
+        return False

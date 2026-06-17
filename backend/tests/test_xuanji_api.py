@@ -11,35 +11,48 @@ class TestXuanjiHelpers:
     """测试璇玑API辅助函数"""
 
     def test_normalize_rank_empty(self):
-        """空Series应该返回0.5"""
+        """空Series应该返回空Series"""
         import pandas as pd
         s = pd.Series([], dtype=float)
         result = _normalize_rank(s)
         assert len(result) == 0
 
     def test_normalize_rank_basic(self):
-        """基本排名归一化"""
+        """基本排名归一化 - ascending=True时最小值得最高分"""
         import pandas as pd
         s = pd.Series([10, 30, 20, 50, 40])
         result = _normalize_rank(s, ascending=True)
-        # 最小值(10)的归一化排名为0
-        assert result.min() == 0.0
-        # 最大值(50)的归一化排名应为 (5-1)/5 = 0.8 (公式: (rank-1)/max_rank)
-        assert abs(result.max() - 0.8) < 0.01
-        # 所有值在[0, 1)之间
-        assert all(0 <= v < 1 for v in result)
+        # ascending=True: 最小值(10)应得最高分, 最大值(50)应得最低分
+        assert result.iloc[0] > result.iloc[1] > result.iloc[3]
+        # 所有值在[0, 1]之间
+        assert all(0 <= v <= 1 for v in result)
 
     def test_normalize_rank_descending(self):
-        """降序排名"""
+        """降序排名 - ascending=False时最大值得最高分"""
         import pandas as pd
         s = pd.Series([10, 30, 20])
         result = _normalize_rank(s, ascending=False)
-        # 降序时最大值(30)排名为0
-        assert result.min() == 0.0
-        # 最小值(10)排名为 (3-1)/3 ≈ 0.667
-        assert abs(result.max() - 0.667) < 0.01
-        # 所有值在[0, 1)之间
-        assert all(0 <= v < 1 for v in result)
+        # ascending=False: 最大值(30)应得最高分
+        assert result.iloc[1] > result.iloc[0]
+        assert result.iloc[1] > result.iloc[2]
+        # 所有值在[0, 1]之间
+        assert all(0 <= v <= 1 for v in result)
+
+    def test_normalize_rank_dual_low_semantics(self):
+        """双低值因子语义: 更低的双低值应得到更高的评分"""
+        import pandas as pd
+        s = pd.Series([120, 140, 160])
+        result = _normalize_rank(s, ascending=True)
+        # ascending=True: 最低双低(120)应得分最高
+        assert result.iloc[0] > result.iloc[1] > result.iloc[2]
+
+    def test_normalize_rank_momentum_semantics(self):
+        """动量因子语义: 更高的动量应得到更高的评分"""
+        import pandas as pd
+        s = pd.Series([0.05, 0.02, -0.03])
+        result = _normalize_rank(s, ascending=False)
+        # ascending=False: 最高动量(0.05)应得分最高
+        assert result.iloc[0] > result.iloc[1] > result.iloc[2]
 
     def test_market_state_detection(self):
         """市场状态自动检测"""
@@ -146,14 +159,7 @@ class TestXuanjiEndpointStructure:
     def test_market_weights_endpoint(self):
         """测试市场权重响应结构"""
         from app.api.xuanji import get_market_weights
-        # 同步函数, 直接调用
-        result = None
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(get_market_weights())
-        finally:
-            loop.close()
+        result = get_market_weights()
         assert "states" in result
         assert len(result["states"]) == 5
         for state in result["states"]:
@@ -163,32 +169,30 @@ class TestXuanjiEndpointStructure:
 
     def test_alpha_sources_endpoint(self):
         """测试alpha源响应"""
-        from app.api.xuanji import get_alpha_sources
         import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(get_alpha_sources())
-        finally:
-            loop.close()
+        from unittest.mock import MagicMock
+        from app.api.xuanji import get_alpha_sources
+        mock_request = MagicMock()
+        mock_request.app.state.engine = None
+        result = asyncio.new_event_loop().run_until_complete(get_alpha_sources(mock_request))
         assert "sources" in result
         assert len(result["sources"]) == 12
         ids = [s["id"] for s in result["sources"]]
         assert ids == [f"A{i}" for i in range(1, 13)]
         for s in result["sources"]:
             assert s["status"] == "active"
+            # 验证数据已填充
+            assert s["range"] is not None and s["range"] != ""
+        assert result["total_alpha_potential"] is not None
+        assert result["return_path"] is not None
 
     def test_health_endpoint(self):
         """测试健康检查"""
         from app.api.xuanji import xuanji_health
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(xuanji_health())
-        finally:
-            loop.close()
+        result = xuanji_health()
         assert result["status"] == "ok"
         assert result["strategy"] == "xuanji_twelve_factor"
-        assert result["version"] == "3.0"
+        assert result["version"] == "4.0"
 
 
 if __name__ == "__main__":

@@ -484,13 +484,13 @@ class DataValidator:
     def validate_cb_data(data: Dict) -> bool:
         """验证转债数据"""
         required_fields = ['code', 'name', 'close', 'stock_code']
-        return all(field in data for field in required_fields)
+        return all(f in data for f in required_fields)
 
     @staticmethod
     def validate_signal(signal: Dict) -> bool:
         """验证信号数据"""
         required_fields = ['code', 'action', 'quantity']
-        if not all(field in signal for field in required_fields):
+        if not all(f in signal for f in required_fields):
             return False
 
         if signal['action'] not in ['buy', 'sell', 'hold']:

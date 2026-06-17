@@ -140,10 +140,14 @@ class TestXuanjiSummary:
 
     def test_summary_endpoint(self):
         """测试summary端点"""
+        import asyncio
         from app.api.xuanji import strategy_summary
+        from unittest.mock import MagicMock
+        mock_request = MagicMock()
+        mock_request.app.state.engine = None
         loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(strategy_summary())
+            result = loop.run_until_complete(strategy_summary(mock_request))
         finally:
             loop.close()
 
@@ -152,9 +156,13 @@ class TestXuanjiSummary:
         assert "key_features" in result
         assert "endpoints" in result
         # factor_count = 8个核心因子 (双低/动量/HV/质量/估值/YTM/事件/Delta)
-        assert result["strategy"]["factor_count"] == 8
+        assert result["strategy"]["factor_count"] == 9
         assert result["strategy"]["alpha_sources"] == 12
         assert result["strategy"]["market_state_count"] == 5
+        # target_returns应包含预期收益数据
+        assert result["target_returns"] is not None
+        assert "neutral" in result["target_returns"]
+        assert "optimistic" in result["target_returns"]
 
 
 if __name__ == "__main__":

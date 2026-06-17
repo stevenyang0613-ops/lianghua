@@ -17,10 +17,11 @@ class StrategyParam(BaseModel):
 
 class BacktestConfig(BaseModel):
     """回测配置参数"""
-    commission_pct: float = Field(default=0.001, ge=0, le=0.03, description="佣金率(千分之)")
-    slippage_pct: float = Field(default=0.001, ge=0, le=0.05, description="滑点率")
-    min_commission: float = Field(default=5.0, ge=0, description="最低佣金(元)")
+    commission_pct: float = Field(default=0.0003, ge=0, le=0.03, description="佣金率")
+    slippage_pct: float = Field(default=0.0003, ge=0, le=0.05, description="滑点率")
+    min_commission: float = Field(default=1.0, ge=0, description="最低佣金(元)")
     risk_free_rate: float = Field(default=0.02, ge=0, le=0.1, description="无风险利率(年化)")
+    initial_cash: float = Field(default=1_000_000.0, gt=0, description="初始资金(元), 默认100万")
 
 
 class OptimizationParamRange(BaseModel):
@@ -100,6 +101,7 @@ class PerformanceMetrics(BaseModel):
     profit_loss_ratio: float = 0.0
     total_trades: int = 0
     avg_hold_days: float = 0.0
+    annual_volatility: float = 0.0
 
 
 class BacktestResult(BaseModel):

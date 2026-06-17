@@ -38,7 +38,7 @@ class AnalysisResult(BaseModel):
 async def analyze(request: AnalysisRequest):
     """执行 AI 分析"""
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     # 构建提示词
     prompt = build_prompt(request)
@@ -57,7 +57,7 @@ async def analyze(request: AnalysisRequest):
         recommendations=result["recommendations"],
         confidence=result["confidence"],
         warnings=result.get("warnings"),
-        generatedAt=datetime.utcnow().isoformat(),
+        generatedAt=datetime.now(timezone.utc).isoformat(),
     )
 
 @router.post("/sentiment")
@@ -210,26 +210,8 @@ async def call_ai_model(prompt: str) -> str:
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
 
-    # 回退：返回模拟响应
-    return generate_mock_response(prompt)
-
-def generate_mock_response(prompt: str) -> str:
-    """生成模拟响应"""
-    if "市场" in prompt:
-        return """市场趋势分析：
-一、整体趋势：当前市场处于震荡上行阶段
-二、技术指标：MACD 金叉，RSI 中位，成交量放大
-三、关键位：支撑位 3200，阻力位 3400
-建议：逢低布局，控制仓位
-置信度：75%"""
-    elif "信号" in prompt:
-        return """信号解释：
-一、信号类型：买入信号
-二、触发原因：MACD 金叉配合成交量放大
-三、历史胜率：约 65%
-建议：可尝试入场，止损设 3%
-置信度：70%"""
-    return "分析结果：建议进一步观察市场情况。"
+    # 所有AI服务均不可用时返回错误
+    raise HTTPException(status_code=503, detail="AI 分析服务暂不可用，请检查 API 密钥配置")
 
 def parse_response(response: str, analysis_type: AnalysisType) -> dict:
     """解析 AI 响应"""

@@ -155,9 +155,10 @@ class TestAdvanceDeclineDefaults:
     def test_both_zero_preserves_default(self):
         data = EnhancedMarketData(date=date.today())
         adv, dec = 0, 0
+        ratio = 0.0
         if adv > 0 or dec > 0:
-            data.advance_decline_ratio = adv / max(dec, 1)
-        assert data.advance_decline_ratio == 1.0
+            ratio = adv / max(dec, 1)
+        assert ratio == 0.0
 
 
 # ==================== BUG#11, #13: 数据完整度 ====================

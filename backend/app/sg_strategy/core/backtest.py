@@ -11,6 +11,7 @@ Walk-Forward验证框架:
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Dict, Optional, Tuple, Callable
+import sys
 import pandas as pd
 import numpy as np
 import logging
@@ -489,7 +490,7 @@ class WalkForwardEngine:
             train_end_idx = start_idx + self.config.train_window_months * 21
             test_end_idx = train_end_idx + self.config.test_window_months * 21
 
-            if test_end_idx >= len(dates):
+            if train_end_idx >= len(dates) or test_end_idx >= len(dates):
                 break
 
             # 训练期
@@ -604,6 +605,7 @@ class ParallelBacktestEngine:
         cb_data: pd.DataFrame,
         strategy_func: Optional[Callable] = None,
         show_progress: bool = True,
+        benchmark_data: Optional[pd.DataFrame] = None,
     ) -> BacktestResult:
         """运行并行回测
 
@@ -611,6 +613,7 @@ class ParallelBacktestEngine:
             cb_data: 可转债数据
             strategy_func: 策略函数
             show_progress: 显示进度
+            benchmark_data: 基准数据
 
         Returns:
             回测结果
@@ -623,7 +626,7 @@ class ParallelBacktestEngine:
             PARALLEL_AVAILABLE = False
             logger.warning("[ParallelBacktest] 多进程不可用，使用单进程")
             engine = BacktestEngine(self.config)
-            return engine.run_backtest(cb_data, strategy_func=strategy_func)
+            return engine.run_backtest(cb_data, strategy_func=strategy_func, benchmark_data=benchmark_data)
 
         # 按日期分块
         dates = sorted(cb_data["date"].unique())
@@ -637,10 +640,10 @@ class ParallelBacktestEngine:
 
         if PARALLEL_AVAILABLE and len(chunks) > 1:
             # 并行执行
-            results = self._run_parallel(chunks, cb_data, strategy_func, show_progress)
+            results = self._run_parallel(chunks, cb_data, strategy_func, show_progress, benchmark_data)
         else:
             # 单进程执行
-            results = self._run_sequential(chunks, cb_data, strategy_func, show_progress)
+            results = self._run_sequential(chunks, cb_data, strategy_func, show_progress, benchmark_data)
 
         # 合并结果
         return self._merge_results(results)
@@ -659,6 +662,7 @@ class ParallelBacktestEngine:
         cb_data: pd.DataFrame,
         strategy_func: Optional[Callable],
         show_progress: bool,
+        benchmark_data: Optional[pd.DataFrame] = None,
     ) -> List[Dict]:
         """并行执行"""
         from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -672,6 +676,7 @@ class ParallelBacktestEngine:
                     chunk,
                     cb_data,
                     strategy_func,
+                    benchmark_data,
                 ): chunk
                 for chunk in chunks
             }
@@ -696,11 +701,12 @@ class ParallelBacktestEngine:
         cb_data: pd.DataFrame,
         strategy_func: Optional[Callable],
         show_progress: bool,
+        benchmark_data: Optional[pd.DataFrame] = None,
     ) -> List[Dict]:
         """顺序执行"""
         results = []
         for i, chunk in enumerate(chunks):
-            result = self._run_chunk(chunk, cb_data, strategy_func)
+            result = self._run_chunk(chunk, cb_data, strategy_func, benchmark_data)
             results.append(result)
             if show_progress:
                 progress = (i + 1) / len(chunks) * 100
@@ -712,6 +718,7 @@ class ParallelBacktestEngine:
         chunk: Tuple,
         cb_data: pd.DataFrame,
         strategy_func: Optional[Callable],
+        benchmark_data: Optional[pd.DataFrame] = None,
     ) -> Dict:
         """运行单个分块"""
         start_date, end_date = chunk
@@ -733,7 +740,7 @@ class ParallelBacktestEngine:
 
         # 运行回测
         engine = BacktestEngine(chunk_config)
-        result = engine.run_backtest(chunk_data, strategy_func=strategy_func)
+        result = engine.run_backtest(chunk_data, strategy_func=strategy_func, benchmark_data=benchmark_data)
 
         return {
             'start_date': start_date,
@@ -924,7 +931,6 @@ class MemoryOptimizedBacktest:
             })
 
             # 内存检查
-            import sys
             if sys.getsizeof(daily_values) > self.max_memory_mb * 1024 * 1024:
                 # 压缩历史数据
                 daily_values = self._compress_daily_values(daily_values)

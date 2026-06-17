@@ -4,7 +4,7 @@
 
 export interface DashboardWidget {
   id: string
-  type: 'chart' | 'statistic' | 'table' | 'list' | 'custom'
+  type: 'chart' | 'statistic' | 'table' | 'list' | 'custom' | 'market-summary' | 'top-dual-low' | 'forced-call-alert'
   title: string
   size: 'small' | 'medium' | 'large'
   x: number

@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""PyInstaller entry point for LiangHua backend - 修正路径问题"""
+"""PyInstaller entry point for LiangHua backend"""
 import sys
 import os
 
-# PyInstaller temp path
 if getattr(sys, 'frozen', False):
     BASE_DIR = sys._MEIPASS
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# SSL 证书修复：PyInstaller 打包后 Python 找不到系统证书
-# 必须在所有网络库 import 之前设置
 def _fix_ssl_certs():
-    # 1. certifi 提供的证书（最可靠）
     try:
         import certifi
         cert_path = certifi.where()
@@ -21,13 +17,11 @@ def _fix_ssl_certs():
         return
     except ImportError:
         pass
-    # 2. macOS 系统证书
     macos_cert = '/etc/ssl/cert.pem'
     if os.path.isfile(macos_cert):
         os.environ.setdefault('SSL_CERT_FILE', macos_cert)
         os.environ.setdefault('REQUESTS_CA_BUNDLE', macos_cert)
         return
-    # 3. Homebrew OpenSSL 证书
     brew_cert = '/opt/homebrew/etc/openssl@3/cert.pem'
     if os.path.isfile(brew_cert):
         os.environ.setdefault('SSL_CERT_FILE', brew_cert)
@@ -35,20 +29,31 @@ def _fix_ssl_certs():
 
 _fix_ssl_certs()
 
-# 关键：确保 app/ 目录在 Python path 中
 sys.path.insert(0, BASE_DIR)
 
-# 如果 app 不在 BASE_DIR 下，尝试上一级
 app_path = os.path.join(BASE_DIR, 'app')
 if not os.path.isdir(app_path):
     parent = os.path.dirname(BASE_DIR)
     if os.path.isdir(os.path.join(parent, 'app')):
         sys.path.insert(0, parent)
 
-# Set db_path relative to user data dir instead of bundle
 os.environ.setdefault('LH_DB_PATH', os.path.join(os.path.expanduser('~'), '.lianghua', 'market.db'))
 
+import socket
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)
+multiprocessing.freeze_support()
+
 import argparse
+
+
+def _check_port(host: str, port: int) -> bool:
+    """检查端口是否可用，返回 True 表示可用"""
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return False  # 能连接说明端口已被占用
+    except (ConnectionRefusedError, OSError):
+        return True  # 端口可用
 
 def parse_args():
     parser = argparse.ArgumentParser(description='LiangHua Backend')
@@ -57,26 +62,31 @@ def parse_args():
     return parser.parse_args()
 
 if __name__ == '__main__':
+    print('[LH] Starting LiangHua backend...', flush=True)
     from app.config import settings
+    print(f'[LH] Config loaded: {settings.host}:{settings.port}', flush=True)
 
-    # CLI 参数解析
     cli_args = parse_args()
     if cli_args.host:
         settings.host = cli_args.host
     if cli_args.port:
         settings.port = cli_args.port
 
-    # Apple Silicon + PyInstaller fix: use spawn method for multiprocessing
-    import multiprocessing
-    multiprocessing.set_start_method('spawn', force=True)
-    multiprocessing.freeze_support()
+    # 端口冲突检测：检查目标端口是否已被占用
+    port_available = _check_port(settings.host, settings.port)
+    if not port_available:
+        print(f'[LH] ERROR: Port {settings.port} on {settings.host} is already in use!', flush=True)
+        print(f'[LH] Please kill the existing process first:', flush=True)
+        print(f'[LH]   lsof -ti:{settings.port} | xargs kill -9', flush=True)
+        sys.exit(1)
 
+    print('[LH] Importing app...', flush=True)
+    from app.main import app
+    print('[LH] App imported, starting uvicorn...', flush=True)
     import uvicorn
     uvicorn.run(
-        'app.main:app',
+        app,
         host=settings.host,
         port=settings.port,
         log_level='info' if not settings.debug else 'debug',
-        reload=False,
-        workers=1,
     )

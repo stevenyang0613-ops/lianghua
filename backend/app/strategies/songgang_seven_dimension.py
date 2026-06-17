@@ -506,8 +506,8 @@ class SonggangSevenDimensionStrategy(Strategy):
         change_pct = df['change_pct'].values if 'change_pct' in df.columns else np.zeros(n)
         volume = df['volume'].values if 'volume' in df.columns else np.zeros(n)
         stock_change_pct = df['stock_change_pct'].values if 'stock_change_pct' in df.columns else np.zeros(n)
-        price = df['price'].values if 'price' in df.columns else np.full(n, 100.0)
-        dual_low = df['dual_low'].values if 'dual_low' in df.columns else np.full(n, 150.0)
+        price = df['price'].values if 'price' in df.columns else np.full(n, 0.0)
+        dual_low = df['dual_low'].values if 'dual_low' in df.columns else np.full(n, 0.0)
         premium_ratio = df['premium_ratio'].values if 'premium_ratio' in df.columns else np.zeros(n)
         ytm = df['ytm'].values if 'ytm' in df.columns else np.zeros(n)
         remaining_years = df['remaining_years'].values if 'remaining_years' in df.columns else np.zeros(n)
@@ -964,6 +964,22 @@ class SonggangSevenDimensionStrategy(Strategy):
     def on_init(self, data: pd.DataFrame) -> None:
         """策略初始化"""
         self._data = data.copy()
+        # Defensive: ensure required columns exist with safe defaults
+        if 'premium_ratio' not in self._data.columns:
+            self._data['premium_ratio'] = 15.0
+        self._data['premium_ratio'] = self._data['premium_ratio'].fillna(15.0)
+        if 'change_pct' not in self._data.columns:
+            self._data['change_pct'] = 0.0
+        self._data['change_pct'] = self._data['change_pct'].fillna(0.0)
+        if 'volume' not in self._data.columns:
+            self._data['volume'] = 100000
+        self._data['volume'] = self._data['volume'].fillna(100000)
+        if 'ytm' not in self._data.columns:
+            self._data['ytm'] = 1.0
+        self._data['ytm'] = self._data['ytm'].fillna(0.0)
+        if 'remaining_years' not in self._data.columns:
+            self._data['remaining_years'] = 3.0
+        self._data['remaining_years'] = self._data['remaining_years'].fillna(3.0)
         if 'date' in data.columns and len(data) > 0:
             sample_date = data['date'].iloc[0]
             if isinstance(sample_date, date):

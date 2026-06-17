@@ -50,5 +50,6 @@ export interface ElectronAPI {
   sendToWindow(windowId: number, channel: string, data: unknown): Promise<boolean>
   broadcast(channel: string, data: unknown): void
   onBroadcast(callback: (channel: string, data: unknown) => void): () => void
+  getPrefetchedMarketData(): Promise<any>
 }
 

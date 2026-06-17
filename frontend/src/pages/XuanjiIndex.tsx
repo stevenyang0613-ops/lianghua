@@ -11,7 +11,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Card, Table, Tag, Row, Col, Statistic, Spin, Empty, message, Typography,
   Slider, Select, Space, Button, Progress, Modal, Descriptions,
-  Alert, Divider, Tabs, InputNumber, Tooltip, Badge, Input, Switch
+  Alert, Divider, Tabs, InputNumber, Tooltip, Badge, Input, Switch, DatePicker
 } from 'antd'
 import {
   TrophyOutlined, ReloadOutlined, StarOutlined,
@@ -20,20 +20,25 @@ import {
   LineChartOutlined, DashboardOutlined, FundOutlined,
   DownloadOutlined, BulbOutlined, RocketOutlined, EyeOutlined
 } from '@ant-design/icons'
-import * as echarts from 'echarts'
+import ReactEChartsCore from 'echarts-for-react'
+import dayjs from 'dayjs'
+import { getApiBase } from '../utils/config'
 import {
-  fetchStrategies, runBacktest, runOptimization,
+  fetchStrategies, runBacktestStream,
   fetchXuanjiRanking, fetchXuanjiSingle, fetchXuanjiDeltaCandidates,
   fetchXuanjiGreeks, fetchXuanjiMarketWeights, fetchXuanjiAlphaSources,
   fetchXuanjiStressTest, fetchXuanjiFactorContribution, fetchXuanjiFactorCorrelation,
-  fetchXuanjiComparison,
+  fetchXuanjiComparison, fetchXuanjiDataSourceHealth,
+  fetchXuanjiIcirHistory, postXuanjiCustomRanking,
   type StrategyInfo, type BacktestResult, type XuanjiItem,
   type XuanjiSingleResponse, type XuanjiDeltaCandidate,
   type XuanjiGreeksSummary, type XuanjiMarketWeightsResponse,
   type XuanjiAlphaResponse, type OptimizationResult,
   type XuanjiStressResponse, type XuanjiFactorContributionResponse,
-  type XuanjiFactorCorrelationResponse, type XuanjiComparisonResponse
+  type XuanjiFactorCorrelationResponse, type XuanjiComparisonResponse,
+  type BacktestProgressEvent
 } from '../services/api'
+import { useXuanjiStore } from '../stores/useXuanjiStore'
 
 const { Title, Text } = Typography
 
@@ -49,7 +54,7 @@ const MARKET_STATES = [
 
 const WEIGHT_LABELS: Record<string, string> = {
   dual_low: '双低', momentum: '动量', hv: 'HV', quality: '质量',
-  valuation: '估值', ytm: 'YTM', event: '事件', delta: 'Delta'
+  valuation: '估值', ytm: 'YTM', remaining_years: '期限', event: '事件', delta: 'Delta'
 }
 
 const INDUSTRY_COLORS: Record<string, string> = {
@@ -59,6 +64,18 @@ const INDUSTRY_COLORS: Record<string, string> = {
   '传媒': '#2f54eb', '公用事业': '#52c41a',
 }
 
+// Hash-based color for any industry not in the predefined map
+function getIndustryColor(industry: string): string {
+  if (INDUSTRY_COLORS[industry]) return INDUSTRY_COLORS[industry]
+  // Deterministic hash → color
+  let hash = 0
+  for (let i = 0; i < industry.length; i++) {
+    hash = industry.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  const colors = ['#1677ff','#52c41a','#fa541c','#722ed1','#13c2c2','#eb2f96','#fa8c16','#2f54eb','#a0d911','#f5222d','#1890ff','#389e0d','#d48806','#597ef7','#36cfc9','#f759ab','#ff7a45','#9254de','#40a9ff','#73d13d']
+  return colors[Math.abs(hash) % colors.length]
+}
+
 function loadConfig() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -66,8 +83,9 @@ function loadConfig() {
   } catch { /* ignore */ }
   return {
     topN: 50, marketState: 'mild_bull', holdCount: 20, rebalanceDays: 20,
-    maxPremium: 50, minPrice: 90, maxPrice: 150, volAdjust: 0.85,
+    maxPremium: 50, minPrice: 90, maxPrice: 150, volAdjust: 0.85, stopLossPct: -8,
     autoDetect: true,
+    deltaMinIvHv: 5.0, deltaPremiumLow: 20, deltaPremiumHigh: 80, deltaTopN: 30,
   }
 }
 
@@ -92,17 +110,28 @@ function exportToCSV(data: any[], filename: string) {
   const link = document.createElement('a')
   link.href = url
   link.download = filename
+  document.body.appendChild(link)
   link.click()
-  URL.revokeObjectURL(url)
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 export default function XuanjiIndex() {
   const savedConfig = useMemo(() => loadConfig(), [])
 
+  // Shared store — only keep what's needed for non-local state actions
+  const storeRankingData = useXuanjiStore((s) => s.rankingData)
+  const storeRankingInfo = useXuanjiStore((s) => s.rankingInfo)
+  const storeRankingLoading = useXuanjiStore((s) => s.rankingLoading)
+  const storeLoadRanking = useXuanjiStore((s) => s.loadRanking)
+  const storeLoadStaticData = useXuanjiStore((s) => s.loadStaticData)
+  const storeLoadComputedData = useXuanjiStore((s) => s.loadComputedData)
+  const storeLoadDeltaCandidates = useXuanjiStore((s) => s.loadDeltaCandidates)
+
   const [rankingLoading, setRankingLoading] = useState(false)
   const [rankingData, setRankingData] = useState<XuanjiItem[]>([])
   const [rankingInfo, setRankingInfo] = useState<any>(null)
-const [rankParams, setRankParams] = useState<any>(null)
+  const [rankParams, setRankParams] = useState<any>(null)
   const [topN, setTopN] = useState(savedConfig.topN)
   const [marketState, setMarketState] = useState(savedConfig.marketState)
   const [holdCount, setHoldCount] = useState(savedConfig.holdCount)
@@ -111,11 +140,18 @@ const [rankParams, setRankParams] = useState<any>(null)
   const [minPrice, setMinPrice] = useState(savedConfig.minPrice)
   const [maxPrice, setMaxPrice] = useState(savedConfig.maxPrice)
   const [volAdjust, setVolAdjust] = useState(savedConfig.volAdjust)
+  const [stopLossPct, setStopLossPct] = useState(savedConfig.stopLossPct ?? -8)
   const [autoDetect, setAutoDetect] = useState(savedConfig.autoDetect)
+  const [deltaMinIvHv, setDeltaMinIvHv] = useState(savedConfig.deltaMinIvHv)
+  const [deltaPremiumLow, setDeltaPremiumLow] = useState(savedConfig.deltaPremiumLow)
+  const [deltaPremiumHigh, setDeltaPremiumHigh] = useState(savedConfig.deltaPremiumHigh)
+  const [deltaTopN, setDeltaTopN] = useState(savedConfig.deltaTopN)
 
   // Backtest states
   const [backtestLoading, setBacktestLoading] = useState(false)
+  const [backtestProgress, setBacktestProgress] = useState<BacktestProgressEvent | null>(null)
   const [optimizationLoading, setOptimizationLoading] = useState(false)
+  const [dataStale, setDataStale] = useState(false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null)
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
@@ -145,30 +181,38 @@ const [rankParams, setRankParams] = useState<any>(null)
   const [factorContrib, setFactorContrib] = useState<XuanjiFactorContributionResponse | null>(null)
   const [factorCorr, setFactorCorr] = useState<XuanjiFactorCorrelationResponse | null>(null)
   const [strategyCompare, setStrategyCompare] = useState<XuanjiComparisonResponse | null>(null)
+  const [dataSourceHealth, setDataSourceHealth] = useState<any>(null)
+  const [icirHistory, setIcirHistory] = useState<any>(null)
+  const [customWeights, setCustomWeights] = useState<Record<string, number>>({})
+  const [customRankResult, setCustomRankResult] = useState<any>(null)
+  const [customRankLoading, setCustomRankLoading] = useState(false)
 
   const [activeTab, setActiveTab] = useState('ranking')
 
-  // Charts
-  const equityChartRef = useRef<HTMLDivElement>(null)
-  const equityChart = useRef<echarts.ECharts | null>(null)
-  const weightChartRef = useRef<HTMLDivElement>(null)
-  const weightChart = useRef<echarts.ECharts | null>(null)
-  const radarChartRef = useRef<HTMLDivElement>(null)
-  const radarChart = useRef<echarts.ECharts | null>(null)
-  const industryChartRef = useRef<HTMLDivElement>(null)
-  const industryChart = useRef<echarts.ECharts | null>(null)
+  const effectiveState = useMemo(() => autoDetect ? 'auto' : marketState, [autoDetect, marketState])
 
-  // Load initial data
+  // Sync ranking data from store (for cross-navigation persistence)
+  useEffect(() => { if (storeRankingData.length > 0) setRankingData(storeRankingData) }, [storeRankingData])
+  useEffect(() => { if (storeRankingInfo) setRankingInfo(storeRankingInfo) }, [storeRankingInfo])
+
+  // Combined ranking loading state
+  const rankingLoadingCombined = storeRankingLoading || rankingLoading
+
+  // Load initial data — parallel batch loading
   useEffect(() => {
     fetchStrategies().then(setStrategies).catch(() => {})
-    fetchXuanjiAlphaSources().then(setAlphaSources).catch(() => {})
-    fetchXuanjiMarketWeights().then(setMarketWeights).catch(() => {})
-    fetchXuanjiGreeks().then(setGreeksData).catch(() => {})
-    fetchXuanjiStressTest(50, marketState).then(setStressData).catch(() => {})
-    fetchXuanjiFactorContribution(20, marketState).then(setFactorContrib).catch(() => {})
-    fetchXuanjiFactorCorrelation(50, marketState).then(setFactorCorr).catch(() => {})
-    fetchXuanjiComparison(50).then(setStrategyCompare).catch(() => {})
-  }, [marketState])
+    // Load all static data in parallel via store
+    storeLoadStaticData()
+  }, [])
+
+  useEffect(() => {
+    // Load ranking + computed data in parallel
+    const params = { topN, marketState: autoDetect ? 'auto' : marketState, maxPremium, minPrice, maxPrice, volAdjust }
+    storeLoadRanking(params)
+    storeLoadComputedData({ topN, marketState: autoDetect ? 'auto' : marketState })
+    // Also load delta candidates
+    storeLoadDeltaCandidates({ minIvHv: deltaMinIvHv, premiumLow: deltaPremiumLow, premiumHigh: deltaPremiumHigh, topN: deltaTopN })
+  }, [topN, marketState, maxPremium, minPrice, maxPrice, volAdjust, autoDetect, deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN])
 
   // Load ranking data
   const loadRanking = useCallback(async () => {
@@ -181,6 +225,7 @@ const [rankParams, setRankParams] = useState<any>(null)
       setRankingData(result.items || [])
       setRankingInfo({
         total: result.total,
+        totalUnfiltered: result.total_unfiltered ?? 0,
         returned: result.returned,
         detected: result.market_state_detected,
         actual: result.market_state_actual,
@@ -198,37 +243,84 @@ const [rankParams, setRankParams] = useState<any>(null)
 
   const loadDeltaCandidates = useCallback(async () => {
     try {
-      const result = await fetchXuanjiDeltaCandidates(5.0, 20, 80, 30)
+      const result = await fetchXuanjiDeltaCandidates(deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN)
       setDeltaCandidates(result.items || [])
     } catch (e: any) {
-      // silent fail
+      console.error('[Xuanji] Delta candidates load failed:', e)
+      message.error(`加载Delta候选失败: ${e.message}`)
     }
-  }, [])
+  }, [deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN])
+
+  // Tab change handler — load data on demand
+  const handleTabChange = useCallback((key: string) => {
+    setActiveTab(key)
+    if (key === 'stress' && !stressData) {
+      fetchXuanjiStressTest(50, effectiveState).then(setStressData).catch(() => {})
+    }
+    if (key === 'weights' && !icirHistory) {
+      fetchXuanjiIcirHistory().then(setIcirHistory).catch(() => {})
+    }
+    if (key === 'attribution') {
+      if (!factorContrib) {
+        fetchXuanjiFactorContribution(20, effectiveState).then(setFactorContrib).catch(() => {})
+      }
+      if (!factorCorr) {
+        fetchXuanjiFactorCorrelation(50, effectiveState).then(setFactorCorr).catch(() => {})
+      }
+    }
+    if (key === 'compare' && !strategyCompare) {
+      fetchXuanjiComparison(50, effectiveState).then(setStrategyCompare).catch(() => {})
+    }
+    if (key === 'delta' && deltaCandidates.length === 0) {
+      fetchXuanjiDeltaCandidates(deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN).then(r => setDeltaCandidates(r.items || [])).catch(() => {})
+    }
+    if (key === 'health' && !dataSourceHealth) {
+      fetchXuanjiDataSourceHealth().then(setDataSourceHealth).catch(() => {})
+    }
+  }, [effectiveState, stressData, factorContrib, factorCorr, strategyCompare, deltaCandidates, deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN, dataSourceHealth])
 
   useEffect(() => {
     loadRanking()
     loadDeltaCandidates()
+    fetch(getApiBase() + '/api/v1/backtest/data-freshness')
+      .then(r => r.json())
+      .then(d => { if (d.stale) setDataStale(true) })
+      .catch(() => {})
   }, [loadRanking, loadDeltaCandidates])
 
+  const saveConfigTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    saveConfig({ topN, marketState, holdCount, rebalanceDays, maxPremium, minPrice, maxPrice, volAdjust, autoDetect })
-  }, [topN, marketState, holdCount, rebalanceDays, maxPremium, minPrice, maxPrice, volAdjust, autoDetect])
+    if (saveConfigTimer.current) clearTimeout(saveConfigTimer.current)
+    saveConfigTimer.current = setTimeout(() => {
+      saveConfig({ topN, marketState, holdCount, rebalanceDays, maxPremium, minPrice, maxPrice, volAdjust, stopLossPct, autoDetect, deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN })
+    }, 1000)
+    return () => { if (saveConfigTimer.current) clearTimeout(saveConfigTimer.current) }
+  }, [topN, marketState, holdCount, rebalanceDays, maxPremium, minPrice, maxPrice, volAdjust, autoDetect, deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN])
 
   // Backtest
   const handleRunBacktest = useCallback(async () => {
     setBacktestLoading(true)
+    setBacktestProgress(null)
     try {
-      const result = await runBacktest({
-        strategy: 'xuanji_twelve',
-        params: {
-          hold_count: holdCount,
-          rebalance_days: rebalanceDays,
-          market_state: marketState,
+      const result = await runBacktestStream(
+        {
+          strategy: 'xuanji_twelve',
+          params: {
+            hold_count: holdCount,
+            rebalance_days: rebalanceDays,
+            market_state: effectiveState,
+            max_premium: maxPremium,
+            min_price: minPrice,
+            max_price: maxPrice,
+            vol_adjust: volAdjust,
+            stop_loss_pct: stopLossPct,
+          },
+          start_date: btStartDate,
+          end_date: btEndDate,
+          config: { commission_pct: 0.0003, slippage_pct: 0.0003, min_commission: 1, risk_free_rate: 0.02 },
         },
-        start_date: btStartDate,
-        end_date: btEndDate,
-        config: { commission_pct: 0.001, slippage_pct: 0.001, min_commission: 5, risk_free_rate: 0.02 },
-      })
+        (evt) => setBacktestProgress(evt),
+      )
       if (result.type === 'backtest') {
         setBacktestResult(result.result as BacktestResult)
         setOptimizationResult(null)
@@ -238,33 +330,47 @@ const [rankParams, setRankParams] = useState<any>(null)
       message.error(`回测失败: ${e.message}`)
     } finally {
       setBacktestLoading(false)
+      setBacktestProgress(null)
     }
-  }, [holdCount, rebalanceDays, marketState, btStartDate, btEndDate])
+  }, [holdCount, rebalanceDays, effectiveState, maxPremium, minPrice, maxPrice, volAdjust, stopLossPct, btStartDate, btEndDate])
 
   // Optimization
   const handleRunOptimization = useCallback(async () => {
     setOptimizationLoading(true)
+    setBacktestProgress(null)
     try {
-      const result = await runOptimization({
-        strategy: 'xuanji_twelve',
-        params: { hold_count: holdCount, market_state: marketState },
-        start_date: btStartDate,
-        end_date: btEndDate,
-        config: { commission_pct: 0.001, slippage_pct: 0.001, min_commission: 5, risk_free_rate: 0.02 },
-        optimization: {
-          enabled: true,
-          param_ranges: [
-            { name: 'hold_count', min_val: 10, max_val: 30, step: 5 },
-            { name: 'rebalance_days', min_val: 10, max_val: 30, step: 5 },
-          ],
-          optimize_metric: 'sharpe_ratio',
-          max_iterations: 50,
-          top_n: 10,
-          parallel_workers: 4,
+      const result = await runBacktestStream(
+        {
+          strategy: 'xuanji_twelve',
+          params: {
+            hold_count: holdCount, rebalance_days: rebalanceDays, market_state: effectiveState,
+            max_premium: maxPremium, min_price: minPrice, max_price: maxPrice, vol_adjust: volAdjust,
+            stop_loss_pct: stopLossPct,
+          },
+          start_date: btStartDate,
+          end_date: btEndDate,
+          config: { commission_pct: 0.0003, slippage_pct: 0.0003, min_commission: 1, risk_free_rate: 0.02 },
+          optimization: {
+            enabled: true,
+            param_ranges: [
+              { name: 'hold_count', min_val: 10, max_val: 40, step: 5 },
+              { name: 'rebalance_days', min_val: 5, max_val: 30, step: 5 },
+              { name: 'max_premium', min_val: 20, max_val: 80, step: 10 },
+              { name: 'min_price', min_val: 85, max_val: 105, step: 5 },
+              { name: 'max_price', min_val: 130, max_val: 180, step: 10 },
+              { name: 'vol_adjust', min_val: 0.5, max_val: 1.0, step: 0.1 },
+              { name: 'stop_loss_pct', min_val: -20, max_val: -2, step: 2 },
+            ],
+            optimize_metric: 'sharpe_ratio',
+            max_iterations: 100,
+            top_n: 10,
+            parallel_workers: 1,
+          },
         },
-      })
-      if (result.success) {
-        setOptimizationResult(result.result)
+        (evt) => setBacktestProgress(evt),
+      )
+      if (result.type === 'optimization') {
+        setOptimizationResult(result.result as OptimizationResult)
         setBacktestResult(null)
         message.success('参数优化完成')
       }
@@ -272,8 +378,9 @@ const [rankParams, setRankParams] = useState<any>(null)
       message.error(`优化失败: ${e.message}`)
     } finally {
       setOptimizationLoading(false)
+      setBacktestProgress(null)
     }
-  }, [holdCount, rebalanceDays, marketState, btStartDate, btEndDate])
+  }, [holdCount, rebalanceDays, effectiveState, maxPremium, minPrice, maxPrice, volAdjust, stopLossPct, btStartDate, btEndDate])
 
   // Single bond detail
   const handleViewDetail = useCallback(async (code: string) => {
@@ -281,158 +388,168 @@ const [rankParams, setRankParams] = useState<any>(null)
     setDetailVisible(true)
     setDetailLoading(true)
     try {
-      const detail = await fetchXuanjiSingle(code, marketState === 'auto' ? 'mild_bull' : marketState)
+      const stateForDetail = autoDetect
+        ? (rankingInfo?.actual || 'neutral')
+        : marketState
+      const detail = await fetchXuanjiSingle(code, stateForDetail, maxPremium, minPrice, maxPrice, volAdjust)
       setSelectedDetail(detail)
     } catch (e: any) {
       message.error(`加载详情失败: ${e.message}`)
     } finally {
       setDetailLoading(false)
     }
-  }, [marketState])
+  }, [marketState, autoDetect, rankingInfo, maxPremium, minPrice, maxPrice])
 
-  // Equity curve chart
-  useEffect(() => {
-    if (activeTab === 'backtest' && backtestResult && equityChartRef.current) {
-      if (!equityChart.current) {
-        equityChart.current = echarts.init(equityChartRef.current)
-      }
-      const data = backtestResult.equity_curve || []
-      const dates = data.map((d: any) => d.date)
-      const values = data.map((d: any) => d.value)
-      const benchmark = backtestResult.benchmark_curve?.map((d: any) => d.value) || []
+  const weightChartOption = useMemo(() => {
+    if (!marketWeights?.states) return null
+    const allWeights = marketWeights.states
+    const seriesData = allWeights.map(s => ({
+      name: MARKET_STATES.find(ms => ms.value === s.value)?.label || s.value,
+      value: Object.entries(s.weights).map(([k, v]) => +((v as number) * 100).toFixed(1))
+    }))
+    return {
+      title: { text: '5态市场权重雷达图', left: 'center' },
+      tooltip: {},
+      legend: { data: allWeights.map(s => MARKET_STATES.find(ms => ms.value === s.value)?.label || s.value), top: 30 },
+      radar: { indicator: Object.keys(WEIGHT_LABELS).map(k => ({ name: WEIGHT_LABELS[k], max: 50 })) },
+      series: [{ type: 'radar', data: seriesData }],
+    }
+  }, [marketWeights])
 
-      equityChart.current.setOption({
-        title: { text: '净值曲线', left: 'center' },
-        tooltip: { trigger: 'axis' },
-        legend: { data: ['璇玑十二因子', '中证转债基准'], top: 30 },
-        grid: { top: 70, left: 50, right: 30, bottom: 50 },
-        xAxis: { type: 'category', data: dates, axisLabel: { rotate: 30 } },
-        yAxis: { type: 'value', name: '净值' },
-        series: [
-          { name: '璇玑十二因子', type: 'line', data: values, smooth: true, lineStyle: { color: '#722ed1', width: 2 }, areaStyle: { color: 'rgba(114, 46, 209, 0.1)' } },
-          ...(benchmark.length ? [{ name: '中证转债基准', type: 'line', data: benchmark, smooth: true, lineStyle: { color: '#52c41a', width: 1, type: 'dashed' as const } }] : []),
+  const equityChartOption = useMemo(() => {
+    if (!backtestResult) return null
+    const data = backtestResult.equity_curve || []
+    const dates = data.map((d: any) => d.date)
+    const values = data.map((d: any) => d.value)
+    const benchmark = backtestResult.benchmark_curve?.map((d: any) => d.value) || []
+    return {
+      title: { text: '净值曲线', left: 'center' },
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['璇玑十二因子', '中证转债基准'], top: 30 },
+      grid: { top: 70, left: 50, right: 30, bottom: 50 },
+      xAxis: { type: 'category', data: dates, axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value', name: '净值' },
+      series: [
+        { name: '璇玑十二因子', type: 'line', data: values, smooth: true, lineStyle: { color: '#722ed1', width: 2 }, areaStyle: { color: 'rgba(114, 46, 209, 0.1)' } },
+        ...(benchmark.length ? [{ name: '中证转债基准', type: 'line', data: benchmark, smooth: true, lineStyle: { color: '#52c41a', width: 1, type: 'dashed' as const } }] : []),
+      ],
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+    }
+  }, [backtestResult])
+
+  const industryChartOption = useMemo(() => {
+    if (!rankingData || rankingData.length === 0) return null
+    const industryCount: Record<string, number> = {}
+    rankingData.forEach(item => {
+      const ind = item.industry || '其他'
+      industryCount[ind] = (industryCount[ind] || 0) + 1
+    })
+    const pieData = Object.entries(industryCount).map(([k, v]) => ({ name: k, value: v }))
+    return {
+      title: { text: '行业分布', left: 'center' },
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      series: [{ type: 'pie', radius: ['40%', '70%'], data: pieData, label: { formatter: '{b}\n{d}%' } }],
+    }
+  }, [rankingData])
+
+  const contribChartOption = useMemo(() => {
+    if (!factorContrib) return null
+    const sorted = [...factorContrib.factors].sort((a, b) => b.contribution_pct - a.contribution_pct)
+    return {
+      title: { text: '因子贡献占比', left: 'center' },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { top: 40, left: 60, right: 30, bottom: 50 },
+      xAxis: { type: 'category', data: sorted.map(f => f.name), axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value', name: '占比%' },
+      series: [{
+        type: 'bar', data: sorted.map(f => ({ value: f.contribution_pct, itemStyle: { color: f.contribution_pct > 20 ? '#722ed1' : f.contribution_pct > 10 ? '#1677ff' : '#52c41a' } })),
+        label: { show: true, position: 'top', formatter: '{c}%' },
+      }],
+    }
+  }, [factorContrib])
+
+  const radarChartOption = useMemo(() => {
+    if (!selectedDetail) return null
+    const factorScores = selectedDetail.factor_scores
+    const indicators = Object.keys(factorScores).map(k => ({ name: WEIGHT_LABELS[k] || k, max: 0.5 }))
+    const values = Object.values(factorScores).map(s => s.value)
+    const weights = Object.values(factorScores).map(s => s.weight)
+    return {
+      title: { text: '因子评分雷达', left: 'center' },
+      tooltip: {},
+      legend: { data: ['评分 (0-1)', '权重 (0-0.5)'], top: 30 },
+      radar: { indicator: indicators },
+      series: [{
+        type: 'radar',
+        data: [
+          { name: '评分 (0-1)', value: values, areaStyle: { color: 'rgba(114, 46, 209, 0.3)' }, lineStyle: { color: '#722ed1' } },
+          { name: '权重 (0-0.5)', value: weights, areaStyle: { color: 'rgba(82, 196, 26, 0.2)' }, lineStyle: { color: '#52c41a' } },
         ],
-        dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
-      })
+      }],
     }
-    return () => {
-      if (equityChart.current) {
-        equityChart.current.dispose()
-        equityChart.current = null
+  }, [selectedDetail])
+
+  const heatmapChartOption = useMemo(() => {
+    if (!factorCorr?.correlations || factorCorr.correlations.length === 0) return null
+    const factors = ['dual_low', 'momentum', 'hv', 'quality', 'valuation', 'ytm', 'remaining_years', 'event', 'delta']
+    const n = factors.length
+    const matrix: number[][] = Array.from({ length: n }, () => Array(n).fill(0))
+    const pairMap: Record<string, number> = {}
+    for (const c of factorCorr.correlations) {
+      pairMap[`${c.factor1}:${c.factor2}`] = c.correlation
+      pairMap[`${c.factor2}:${c.factor1}`] = c.correlation
+    }
+    for (let i = 0; i < n; i++) {
+      matrix[i][i] = 1.0
+      for (let j = i + 1; j < n; j++) {
+        const val = pairMap[`${factors[i]}:${factors[j]}`] || 0
+        matrix[i][j] = val
+        matrix[j][i] = val
       }
     }
-  }, [backtestResult, activeTab])
-
-  // Weight radar chart
-  useEffect(() => {
-    if (activeTab === 'weights' && weightChartRef.current) {
-      if (!weightChart.current) {
-        weightChart.current = echarts.init(weightChartRef.current)
-      }
-      const states = rankingInfo?.weights ? [marketState] : ['mild_bull', 'neutral', 'mild_bear']
-      const seriesData = states.map(s => {
-        const w = rankingInfo?.weights || {
-          dual_low: 0.30, momentum: 0.10, hv: 0.20, quality: 0.20,
-          valuation: 0.10, ytm: 0.05, event: 0.03, delta: 0.02
-        }
-        return { name: s, value: Object.values(w).map((v: any) => +(v * 100).toFixed(1)) }
-      })
-
-      weightChart.current.setOption({
-        title: { text: '权重雷达图', left: 'center' },
-        tooltip: {},
-        legend: { data: states, top: 30 },
-        radar: {
-          indicator: Object.keys(WEIGHT_LABELS).map(k => ({ name: WEIGHT_LABELS[k], max: 50 })),
-        },
-        series: [{
-          type: 'radar',
-          data: seriesData,
-        }],
-      })
+    const labels = factors.map(k => WEIGHT_LABELS[k] || k)
+    return {
+      title: { text: '因子相关性热力图', left: 'center' },
+      tooltip: { position: 'top', formatter: (p: any) => `${labels[p.data[0]]} × ${labels[p.data[1]]}: ${p.data[2].toFixed(3)}` },
+      grid: { top: 60, left: 100, right: 40, bottom: 60 },
+      xAxis: { type: 'category', data: labels, axisLabel: { rotate: 30 } },
+      yAxis: { type: 'category', data: labels },
+      visualMap: { min: -1, max: 1, inRange: { color: ['#ff4d4f', '#fff', '#52c41a'] }, calculable: true, orient: 'horizontal', left: 'center', bottom: 0 },
+      series: [{
+        type: 'heatmap', data: matrix.flatMap((row, i) => row.map((v, j) => [j, i, v])),
+        label: { show: true, formatter: (p: any) => p.data[2].toFixed(2), fontSize: 10 },
+        emphasis: { itemStyle: { shadowBlur: 10 } },
+      }],
     }
-    return () => {
-      if (weightChart.current) {
-        weightChart.current.dispose()
-        weightChart.current = null
-      }
-    }
-  }, [activeTab, rankingInfo, marketState])
+  }, [factorCorr])
 
-  // Industry distribution chart
-  useEffect(() => {
-    if (activeTab === 'ranking' && industryChartRef.current && rankingData.length > 0) {
-      if (!industryChart.current) {
-        industryChart.current = echarts.init(industryChartRef.current)
-      }
-      const industryCount: Record<string, number> = {}
-      rankingData.forEach(item => {
-        const ind = item.industry || '其他'
-        industryCount[ind] = (industryCount[ind] || 0) + 1
-      })
-      const pieData = Object.entries(industryCount).map(([k, v]) => ({ name: k, value: v }))
-
-      industryChart.current.setOption({
-        title: { text: '行业分布', left: 'center' },
-        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-        series: [{
-          type: 'pie',
-          radius: ['40%', '70%'],
-          data: pieData,
-          label: { formatter: '{b}\n{d}%' },
-        }],
-      })
+  const icirChartOption = useMemo(() => {
+    if (!icirHistory?.scenarios) return null
+    const labels = Object.keys(WEIGHT_LABELS).map(k => WEIGHT_LABELS[k])
+    const states = icirHistory.scenarios
+    return {
+      title: { text: 'ICIR动态权重 vs 基准权重对比', left: 'center' },
+      tooltip: { trigger: 'axis' },
+      legend: { data: states.map((s: any) => `${s.state_name} ICIR`), top: 30 },
+      grid: { top: 70, left: 60, right: 30, bottom: 60 },
+      xAxis: { type: 'category', data: labels, axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value', name: '权重', max: 0.5 },
+      series: states.map((s: any) => ({
+        name: `${s.state_name} ICIR`,
+        type: 'bar',
+        data: Object.keys(WEIGHT_LABELS).map(k => (s.icir_weights[k] || 0) * 100),
+        label: { show: true, position: 'top', formatter: (p: any) => `${p.data.toFixed(0)}%`, fontSize: 9 },
+      })),
     }
-    return () => {
-      if (industryChart.current) {
-        industryChart.current.dispose()
-        industryChart.current = null
-      }
-    }
-  }, [activeTab, rankingData])
+  }, [icirHistory])
 
-  // Single bond radar
-  useEffect(() => {
-    if (detailVisible && selectedDetail && radarChartRef.current) {
-      if (!radarChart.current) {
-        radarChart.current = echarts.init(radarChartRef.current)
-      }
-      const factorScores = selectedDetail.factor_scores
-      const indicators = Object.keys(factorScores).map(k => ({
-        name: WEIGHT_LABELS[k] || k,
-        max: 1,
-      }))
-      const values = Object.values(factorScores).map(s => s.value)
-      const weights = Object.values(factorScores).map(s => s.weight)
-
-      radarChart.current.setOption({
-        title: { text: '因子评分雷达', left: 'center' },
-        tooltip: {},
-        radar: { indicator: indicators },
-        series: [{
-          type: 'radar',
-          data: [
-            { name: '评分', value: values, areaStyle: { color: 'rgba(114, 46, 209, 0.3)' }, lineStyle: { color: '#722ed1' } },
-            { name: '权重(%)', value: weights, areaStyle: { color: 'rgba(82, 196, 26, 0.2)' }, lineStyle: { color: '#52c41a' } },
-          ],
-        }],
-      })
-    }
-    return () => {
-      if (radarChart.current) {
-        radarChart.current.dispose()
-        radarChart.current = null
-      }
-    }
-  }, [detailVisible, selectedDetail])
-
-  const scoreColor = (v: number, max: number = 1) => {
+  const scoreColor = useCallback((v: number, max: number = 1): string => {
     const ratio = v / max
     if (ratio >= 0.8) return '#52c41a'
     if (ratio >= 0.6) return '#1677ff'
     if (ratio >= 0.4) return '#faad14'
     return '#ff4d4f'
-  }
+  }, [])
 
   const rankingColumns = [
     {
@@ -463,11 +580,75 @@ const [rankParams, setRankParams] = useState<any>(null)
     },
     {
       title: '行业', dataIndex: 'industry', key: 'industry', width: 80,
-      render: (v: string) => <Tag color={INDUSTRY_COLORS[v] || 'default'}>{v || '其他'}</Tag>,
+      render: (v: string) => <Tag color={getIndustryColor(v)}>{v || '其他'}</Tag>,
     },
     {
       title: '评级', dataIndex: 'rating', key: 'rating', width: 60,
       render: (v: string) => <Tag color={v === 'AAA' ? 'gold' : v === 'AA+' ? 'orange' : 'blue'}>{v}</Tag>,
+    },
+    {
+      title: 'ROE', dataIndex: 'roe', key: 'roe', width: 65,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 15 ? '#52c41a' : v < 5 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'PE', dataIndex: 'pe', key: 'pe', width: 60,
+      render: (v: number | null) => v != null ? <Text style={{ color: v < 20 ? '#52c41a' : v > 60 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'PB', dataIndex: 'pb', key: 'pb', width: 60,
+      render: (v: number | null) => v != null ? <Text style={{ color: v < 2 ? '#52c41a' : v > 5 ? '#ff4d4f' : undefined }}>{v?.toFixed(2)}</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'GPM', dataIndex: 'gpm', key: 'gpm', width: 65,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 30 ? '#52c41a' : v < 10 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: 'CAGR', dataIndex: 'cagr', key: 'cagr', width: 70,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 20 ? '#52c41a' : v < 0 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '负债率', dataIndex: 'debt_ratio', key: 'debt_ratio', width: 70,
+      render: (v: number | null) => v != null ? <Text style={{ color: v < 50 ? '#52c41a' : v > 70 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '流动比', dataIndex: 'current_ratio', key: 'current_ratio', width: 70,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 2 ? '#52c41a' : v < 1 ? '#ff4d4f' : undefined }}>{v?.toFixed(2)}</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '换手率', dataIndex: 'turnover_rate', key: 'turnover_rate', width: 70,
+      render: (v: number | null) => v != null ? <Text>{v?.toFixed(2)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '主力净流入', dataIndex: 'net_capital_flow', key: 'net_capital_flow', width: 95,
+      render: (v: number | null) => {
+        if (v == null) return <Text type="secondary">-</Text>
+        const wan = v / 1e4
+        return <Text style={{ color: wan > 0 ? '#52c41a' : wan < 0 ? '#ff4d4f' : undefined }}>{wan > 0 ? '+' : ''}{wan.toFixed(0)}万</Text>
+      },
+    },
+    {
+      title: '20日动量', dataIndex: 'momentum_20d', key: 'momentum_20d', width: 80,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 0 ? '#52c41a' : v < 0 ? '#ff4d4f' : undefined }}>{v > 0 ? '+' : ''}{v.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '60日动量', dataIndex: 'momentum_60d', key: 'momentum_60d', width: 80,
+      render: (v: number | null) => v != null ? <Text style={{ color: v > 0 ? '#52c41a' : v < 0 ? '#ff4d4f' : undefined }}>{v > 0 ? '+' : ''}{v.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '质押率', dataIndex: 'pledge_ratio', key: 'pledge_ratio', width: 70,
+      render: (v: number | null) => v != null ? <Text style={{ color: v < 30 ? '#52c41a' : v > 50 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '剩余期限', dataIndex: 'remaining_years', key: 'remaining_years', width: 70,
+      render: (v: number | null) => v != null ? <Text>{v.toFixed(2)}年</Text> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '事件', dataIndex: 'event_score', key: 'event_score', width: 70,
+      render: (v: number | null, r: XuanjiItem) => {
+        if (v != null && v > 0.5) return <Tooltip title={r.event_detail || ''}><Tag color="green">利好</Tag></Tooltip>
+        if (v != null && v < 0.3) return <Tooltip title={r.event_detail || ''}><Tag color="red">利空</Tag></Tooltip>
+        return <Tag>中性</Tag>
+      },
     },
     {
       title: '综合评分', dataIndex: 'score', key: 'score', width: 130,
@@ -479,8 +660,6 @@ const [rankParams, setRankParams] = useState<any>(null)
 
   const backtestMetrics = backtestResult?.metrics
 
-  const marketStateConfig = MARKET_STATES.find(s => s.value === marketState) || MARKET_STATES[1]
-
   return (
     <div style={{ padding: 16 }}>
       <Card>
@@ -489,7 +668,7 @@ const [rankParams, setRankParams] = useState<any>(null)
             <Title level={4} style={{ margin: 0 }}>
               <StarOutlined style={{ marginRight: 8, color: '#722ed1' }} />
               璇玑十二因子指增策略
-              <Tag color="purple" style={{ marginLeft: 8 }}>v3.0</Tag>
+              <Tag color="purple" style={{ marginLeft: 8 }}>v4.0</Tag>
             </Title>
             <Text type="secondary" style={{ fontSize: 12 }}>
               12因子 × 5态市场 × 12 Alpha源
@@ -503,7 +682,7 @@ const [rankParams, setRankParams] = useState<any>(null)
                   检测:{MARKET_STATES.find(s => s.value === rankingInfo.actual)?.label}
                 </Tag>
               )}
-              <Button icon={<ReloadOutlined />} onClick={loadRanking} loading={rankingLoading}>
+              <Button icon={<ReloadOutlined />} onClick={loadRanking} loading={rankingLoadingCombined}>
                 刷新
               </Button>
               <Button icon={<DownloadOutlined />} onClick={() => exportToCSV(rankingData, '璇玑排名.csv')}>
@@ -513,7 +692,7 @@ const [rankParams, setRankParams] = useState<any>(null)
           </Col>
         </Row>
 
-        <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
+        <Tabs activeKey={activeTab} onChange={handleTabChange} items={[
           {
             key: 'ranking',
             label: <span><TrophyOutlined /> 十二因子排名</span>,
@@ -548,7 +727,7 @@ const [rankParams, setRankParams] = useState<any>(null)
                       <InputNumber min={0.5} max={1.0} step={0.05} value={volAdjust} onChange={v => setVolAdjust(v || 0.85)} style={{ width: '100%' }} />
                     </Col>
                     <Col span={4}>
-                      <Button type="primary" icon={<BulbOutlined />} onClick={loadRanking} loading={rankingLoading} block style={{ marginTop: 18 }}>
+                      <Button type="primary" icon={<BulbOutlined />} onClick={loadRanking} loading={rankingLoadingCombined} block style={{ marginTop: 18 }}>
                         计算评分
                       </Button>
                     </Col>
@@ -556,14 +735,14 @@ const [rankParams, setRankParams] = useState<any>(null)
                 </Card>
 
                 <Row gutter={16} style={{ marginBottom: 16 }}>
+                  <Col span={3}><Statistic title="全市场" value={rankingInfo?.totalUnfiltered ?? 0} suffix="只" /></Col>
                   <Col span={3}><Statistic title="筛选池" value={rankingInfo?.total || 0} suffix="只" /></Col>
                   <Col span={3}><Statistic title="返回" value={rankingInfo?.returned || 0} suffix="只" /></Col>
                   <Col span={3}><Statistic title="市场状态" value={rankingInfo?.actual ? (MARKET_STATES.find(s => s.value === rankingInfo.actual)?.label || rankingInfo.actual) : '-'} /></Col>
                   <Col span={3}><Statistic title="波动率调权" value={rankParams?.vol_adjust?.toFixed(2) || '-'} suffix="×" /></Col>
                   <Col span={3}><Statistic title="溢价上限" value={rankParams?.max_premium || '-'} suffix="%" /></Col>
                   <Col span={3}><Statistic title="价格区间" value={rankParams ? `${rankParams.min_price}-${rankParams.max_price}` : '-'} /></Col>
-                  <Col span={3}><Statistic title="IC衰减" value="×0.85" /></Col>
-                  <Col span={3}><Statistic title="回撤控制" value="<8%" /></Col>
+                  <Col span={3}><Statistic title="因子数" value={rankingInfo?.weights ? Object.keys(rankingInfo.weights).length : '-'} /></Col>
                 </Row>
 
                 <Row gutter={16} style={{ marginBottom: 16 }}>
@@ -575,14 +754,18 @@ const [rankParams, setRankParams] = useState<any>(null)
                     />
                   </Col>
                   <Col span={8}>
-                    <div ref={industryChartRef} style={{ height: 80 }} />
+                    {industryChartOption ? (
+                    <ReactEChartsCore option={industryChartOption} style={{ height: 200 }} notMerge={true} />
+                  ) : (
+                    <div style={{ height: 200 }} />
+                  )}
                   </Col>
                 </Row>
 
-                <Spin spinning={rankingLoading}>
+                <Spin spinning={rankingLoadingCombined}>
                   {rankingData.length > 0 ? (
                     <Table dataSource={rankingData} columns={rankingColumns} rowKey="code" size="small"
-                      pagination={{ pageSize: 20, showSizeChanger: true, showQuickJumper: true }} scroll={{ x: 1100 }} />
+                      pagination={{ pageSize: 20, showSizeChanger: true, showQuickJumper: true }} scroll={{ x: 1700 }} />
                   ) : (
                     <Empty description="暂无数据" />
                   )}
@@ -591,7 +774,7 @@ const [rankParams, setRankParams] = useState<any>(null)
             ),
           },
           {
-            key: 'weights',
+key: 'weights',
             label: <span><DashboardOutlined /> 5态权重</span>,
             children: (
               <>
@@ -604,43 +787,52 @@ const [rankParams, setRankParams] = useState<any>(null)
                     </Col>
                     <Col span={18}>
                       <Text type="secondary">
-                        5态市场: 极端牛(动量30%) / 温和牛(动量25%) / 震荡(均衡) / 温和熊(防御) / 极端熊(双低50%)
+                        5态市场: 极端牛(动量28%) / 温和牛(动量24%) / 震荡(均衡) / 温和熊(防御) / 极端熊(双低47%)
                       </Text>
                     </Col>
                   </Row>
                 </Card>
-                <Row gutter={[16, 16]}>
-                  <Col span={14}>
-                    <div ref={weightChartRef} style={{ height: 400 }} />
-                  </Col>
-                  <Col span={10}>
-                    {MARKET_STATES.map(state => {
-                      const w = (rankingInfo?.actual === state.value && rankingInfo?.weights) ?
-                        rankingInfo.weights : null
-                      return (
-                        <Card size="small" key={state.value}
-                          style={{ marginBottom: 8, border: marketState === state.value ? `2px solid ${state.color}` : undefined }}>
-                          <Title level={5} style={{ color: state.color, margin: 0 }}>
-                            {state.icon} {state.label}
-                            {marketState === state.value && <Tag color="blue" style={{ marginLeft: 8 }}>当前</Tag>}
-                          </Title>
-                          {w ? (
-                            <Row gutter={[4, 4]} style={{ marginTop: 8 }}>
-                              {Object.entries(w).map(([key, val]) => (
-                                <Col span={6} key={key}>
-                                  <Statistic title={WEIGHT_LABELS[key] || key} value={Math.round((val as number) * 100)} suffix="%"
-                                    valueStyle={{ fontSize: 12, color: (val as number) > 0.2 ? state.color : undefined }} />
-                                </Col>
-                              ))}
-                            </Row>
-                          ) : (
-                            <Text type="secondary" style={{ fontSize: 12 }}>该状态下权重配置</Text>
-                          )}
-                        </Card>
-                      )
-                    })}
-                  </Col>
-                </Row>
+                {weightChartOption ? (
+                  <ReactEChartsCore option={weightChartOption} style={{ height: 450 }} notMerge={true} />
+                ) : (
+                  <div style={{ height: 450, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>加载中...</div>
+                )}
+                <Row gutter={[8, 8]}>
+                  {MARKET_STATES.map(state => {
+                     const w = (rankingInfo?.actual === state.value && rankingInfo?.weights) ?
+                       rankingInfo.weights : (marketWeights?.states?.find(s => s.value === state.value)?.weights || null)
+                     return (
+                       <Col span={4} key={state.value} style={{ display: 'flex' }}>
+                         <Card size="small" style={{ flex: 1, border: marketState === state.value ? `2px solid ${state.color}` : undefined }}>
+                           <Title level={5} style={{ color: state.color, margin: 0, fontSize: 13 }}>
+                             {state.icon} {state.label}
+                             {marketState === state.value && <Tag color="blue" style={{ marginLeft: 4, fontSize: 10 }}>当前</Tag>}
+                           </Title>
+                           {w ? (
+                             <div style={{ marginTop: 4 }}>
+                               {Object.entries(w).map(([key, val]) => (
+                                 <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '1px 0', borderBottom: '1px solid #f0f0f0' }}>
+                                   <span style={{ color: '#888' }}>{WEIGHT_LABELS[key] || key}</span>
+                                   <span style={{ fontWeight: 600, color: (val as number) > 0.2 ? state.color : '#666' }}>{Math.round((val as number) * 100)}%</span>
+                                 </div>
+                               ))}
+                             </div>
+                           ) : (
+                             <Text type="secondary" style={{ fontSize: 12 }}>加载中...</Text>
+                           )}
+                         </Card>
+                       </Col>
+                     )
+                   })}
+                 </Row>
+                <Divider>ICIR动态权重 (模拟)</Divider>
+                {icirChartOption ? (
+                  <ReactEChartsCore option={icirChartOption} style={{ height: 400 }} notMerge={true} />
+                ) : (
+                  <Card size="small">
+                    <Button onClick={() => fetchXuanjiIcirHistory().then(setIcirHistory).catch(() => {})}>加载ICIR数据</Button>
+                  </Card>
+                )}
                 <Divider>因子分组</Divider>
                 <Row gutter={[16, 16]}>
                   {[
@@ -694,14 +886,14 @@ const [rankParams, setRankParams] = useState<any>(null)
                 <Divider>收益增厚路径</Divider>
                 <Card size="small">
                   <Row gutter={16}>
-                    {alphaSources?.return_path?.map((r, i) => (
+                    {Array.isArray(alphaSources?.return_path) && alphaSources.return_path.map((r: any, i: number) => (
                       <Col span={5} key={r.version}>
                         <Statistic title={r.version} value={r.neutral}
                           valueStyle={{ fontSize: 14, color: i === alphaSources.return_path.length - 1 ? '#722ed1' : '#1677ff' }} />
                         <Text type="secondary" style={{ fontSize: 12 }}>乐观 {r.optimistic}</Text>
                       </Col>
                     ))}
-                    {alphaSources?.return_path && alphaSources.return_path.length > 0 && (
+                    {Array.isArray(alphaSources?.return_path) && alphaSources.return_path.length > 0 && (
                       <Col span={1} style={{ display: 'flex', alignItems: 'center' }}>
                         <RocketOutlined style={{ fontSize: 24, color: '#722ed1' }} />
                       </Col>
@@ -716,30 +908,39 @@ const [rankParams, setRankParams] = useState<any>(null)
             label: <span><ExperimentOutlined /> 回测</span>,
             children: (
               <>
+                {dataStale && (
+                  <Alert type="warning" showIcon message="历史数据已过期 (>7天)，建议先运行种子接口 /backtest/seed 更新数据" closable onClose={() => setDataStale(false)} style={{ marginBottom: 12 }} />
+                )}
                 <Card size="small" style={{ marginBottom: 16 }}>
                   <Row gutter={16}>
-                    <Col span={4}>
+                    <Col span={3}>
                       <Text>开始</Text>
-                      <Input style={{ width: '100%' }} value={btStartDate} onChange={e => setBtStartDate(e.target.value)} />
-                    </Col>
-                    <Col span={4}>
-                      <Text>结束</Text>
-                      <Input style={{ width: '100%' }} value={btEndDate} onChange={e => setBtEndDate(e.target.value)} />
+                      <DatePicker style={{ width: '100%' }} value={btStartDate ? dayjs(btStartDate) : undefined} onChange={d => setBtStartDate(d ? d.format('YYYY-MM-DD') : '')} />
                     </Col>
                     <Col span={3}>
+                      <Text>结束</Text>
+                      <DatePicker style={{ width: '100%' }} value={btEndDate ? dayjs(btEndDate) : undefined} onChange={d => setBtEndDate(d ? d.format('YYYY-MM-DD') : '')} />
+                    </Col>
+                    <Col span={2}>
                       <Text>持有数</Text>
                       <InputNumber min={5} max={50} value={holdCount} onChange={v => setHoldCount(v || 20)} style={{ width: '100%' }} />
                     </Col>
-                    <Col span={3}>
+                    <Col span={2}>
                       <Text>调仓天</Text>
                       <InputNumber min={5} max={60} value={rebalanceDays} onChange={v => setRebalanceDays(v || 20)} style={{ width: '100%' }} />
                     </Col>
-                    <Col span={4}>
+                    <Col span={3}>
                       <Text>市场状态</Text>
                       <Select style={{ width: '100%' }} value={marketState} onChange={setMarketState}
                         options={MARKET_STATES.map(s => ({ value: s.value, label: s.label }))} />
                     </Col>
-                    <Col span={6}>
+                    <Col span={2}>
+                      <Tooltip title="单券止损阈值%, -8表示亏8%卖出">
+                        <Text>止损%</Text>
+                      </Tooltip>
+                      <InputNumber min={-20} max={-2} step={1} value={stopLossPct} onChange={v => setStopLossPct(v ?? -8)} style={{ width: '100%' }} />
+                    </Col>
+                    <Col span={9}>
                       <Space style={{ marginTop: 18 }}>
                         <Button type="primary" icon={<ExperimentOutlined />} onClick={handleRunBacktest} loading={backtestLoading}>
                           策略回测
@@ -747,6 +948,9 @@ const [rankParams, setRankParams] = useState<any>(null)
                         <Button icon={<RocketOutlined />} onClick={handleRunOptimization} loading={optimizationLoading}>
                           参数优化
                         </Button>
+                        {backtestProgress && (backtestLoading || optimizationLoading) && (
+                          <Text type="secondary" style={{ fontSize: 12 }}>{backtestProgress.msg} ({backtestProgress.pct}%)</Text>
+                        )}
                       </Space>
                     </Col>
                   </Row>
@@ -772,7 +976,11 @@ const [rankParams, setRankParams] = useState<any>(null)
                     </Row>
 
                     <Card size="small" title="净值曲线" style={{ marginBottom: 16 }}>
-                      <div ref={equityChartRef} style={{ height: 400 }} />
+                      {equityChartOption ? (
+                      <ReactEChartsCore option={equityChartOption} style={{ height: 400 }} notMerge={true} />
+                    ) : (
+                      <div style={{ height: 400 }} />
+                    )}
                     </Card>
 
                     {backtestResult.trades && backtestResult.trades.length > 0 && (
@@ -838,12 +1046,35 @@ const [rankParams, setRankParams] = useState<any>(null)
                   description="当IV > HV时, 市场高估转债波动率, 买入转债+做空正股捕获波动率溢价"
                   type="info" showIcon style={{ marginBottom: 16 }}
                 />
+                <Card size="small" style={{ marginBottom: 16, background: '#fafafa' }}>
+                  <Row gutter={16} align="middle">
+                    <Col span={5}>
+                      <Text>最小IV-HV差 (%)</Text>
+                      <InputNumber min={0} max={50} step={0.5} value={deltaMinIvHv} onChange={v => setDeltaMinIvHv(v ?? 5)} style={{ width: '100%' }} />
+                    </Col>
+                    <Col span={5}>
+                      <Text>溢价率下限 (%)</Text>
+                      <InputNumber min={0} max={100} value={deltaPremiumLow} onChange={v => setDeltaPremiumLow(v ?? 20)} style={{ width: '100%' }} />
+                    </Col>
+                    <Col span={5}>
+                      <Text>溢价率上限 (%)</Text>
+                      <InputNumber min={0} max={100} value={deltaPremiumHigh} onChange={v => setDeltaPremiumHigh(v ?? 80)} style={{ width: '100%' }} />
+                    </Col>
+                    <Col span={5}>
+                      <Text>Top N</Text>
+                      <InputNumber min={5} max={100} value={deltaTopN} onChange={v => setDeltaTopN(v ?? 30)} style={{ width: '100%' }} />
+                    </Col>
+                    <Col span={4}>
+                      <Button type="primary" onClick={loadDeltaCandidates} style={{ marginTop: 18, width: '100%' }}>应用筛选</Button>
+                    </Col>
+                  </Row>
+                </Card>
                 <Row gutter={16} style={{ marginBottom: 16 }}>
                   <Col span={4}><Statistic title="候选总数" value={deltaCandidates.length} suffix="只" /></Col>
                   <Col span={4}><Statistic title="平均IV-HV" value={deltaCandidates.length > 0 ? (deltaCandidates.reduce((s, c) => s + c.iv_hv_diff, 0) / deltaCandidates.length).toFixed(1) : '0'} suffix="%" valueStyle={{ color: '#52c41a' }} /></Col>
                   <Col span={4}><Statistic title="最大IV-HV" value={deltaCandidates.length > 0 ? Math.max(...deltaCandidates.map(c => c.iv_hv_diff)).toFixed(1) : '0'} suffix="%" valueStyle={{ color: '#ff4d4f' }} /></Col>
                   <Col span={4}><Statistic title="对冲α" value={deltaCandidates.length > 0 ? `${(deltaCandidates[0]?.iv_hv_diff || 0).toFixed(1)}bp` : '-'} valueStyle={{ color: '#722ed1' }} /></Col>
-                  <Col span={4}><Statistic title="回撤改善" value={greeksData ? `${(greeksData.summary.theta_mean * 365 * 100).toFixed(1)}bp/年` : '-'} valueStyle={{ color: '#52c41a' }} /></Col>
+                  <Col span={4}><Statistic title="时间价值" value={greeksData ? `${(Math.abs(greeksData.summary.theta_mean) * 365 * 100).toFixed(1)}bp/年` : '-'} valueStyle={{ color: '#52c41a' }} /></Col>
                   <Col span={4}><Button onClick={loadDeltaCandidates}>刷新候选</Button></Col>
                 </Row>
                 <Table
@@ -853,9 +1084,10 @@ const [rankParams, setRankParams] = useState<any>(null)
                     { title: '排名', key: 'rank', width: 60, render: (_: any, _r: any, i: number) => <span style={{ color: i < 3 ? '#faad14' : undefined, fontWeight: 'bold' }}>#{i + 1}</span> },
                     { title: '代码', dataIndex: 'code', width: 90, render: (c: string) => <a onClick={() => handleViewDetail(c)}>{c}</a> },
                     { title: '名称', dataIndex: 'name', width: 100 },
+                    { title: '行业', dataIndex: 'industry', width: 80, render: (v: string) => <Tag color={getIndustryColor(v)}>{v || '其他'}</Tag> },
                     { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => v?.toFixed(2) },
-                    { title: 'IV', dataIndex: 'iv', width: 80, render: (v: number) => `${v}%` },
-                    { title: 'HV', dataIndex: 'hv', width: 80, render: (v: number) => `${v}%` },
+                    { title: 'IV', dataIndex: 'iv', width: 80, render: (v: number, r: XuanjiDeltaCandidate) => <Tooltip title={`来源: ${r.iv_source || '-'}`}>{v}%</Tooltip> },
+                    { title: 'HV', dataIndex: 'hv', width: 80, render: (v: number, r: XuanjiDeltaCandidate) => <Tooltip title={`来源: ${r.hv_source || '-'}`}>{v}%</Tooltip> },
                     { title: 'IV-HV差', dataIndex: 'iv_hv_diff', width: 100, render: (v: number) => <Text style={{ color: '#52c41a', fontWeight: 'bold' }}>+{v}%</Text> },
                     { title: '溢价率', dataIndex: 'premium_ratio', width: 90, render: (v: number) => `${v}%` },
                     { title: 'Delta', dataIndex: 'delta', width: 80, render: (v: number) => v?.toFixed(3) },
@@ -871,11 +1103,12 @@ const [rankParams, setRankParams] = useState<any>(null)
                       <Col span={4}><Card size="small"><Statistic title="Vega ν" value={greeksData.summary.vega_mean?.toFixed(3)} valueStyle={{ color: '#faad14' }} /></Card></Col>
                       <Col span={4}><Card size="small"><Statistic title="Theta θ" value={greeksData.summary.theta_mean?.toFixed(6)} valueStyle={{ color: '#52c41a' }} /></Card></Col>
                       <Col span={4}><Card size="small"><Statistic title="IV均值" value={greeksData.summary.iv_mean?.toFixed(1)} suffix="%" /></Card></Col>
-                      <Col span={4}><Card size="small"><Statistic title="高Delta" value={greeksData.distribution.high_delta} suffix="只" valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
+                      <Col span={4}><Card size="small"><Statistic title="低Delta(<0.3, 防守型)" value={greeksData.distribution.low_delta} suffix="只" valueStyle={{ color: '#52c41a' }} /></Card></Col>
                     </Row>
                     <Row gutter={16}>
-                      <Col span={12}><Card size="small"><Statistic title="高Delta(>0.7, 进攻型)" value={greeksData.distribution.high_delta} suffix="只" /></Card></Col>
-                      <Col span={12}><Card size="small"><Statistic title="中Delta(0.3-0.7, 平衡型)" value={greeksData.distribution.mid_delta} suffix="只" /></Card></Col>
+                      <Col span={8}><Card size="small"><Statistic title="高Delta(>0.7, 进攻型)" value={greeksData.distribution.high_delta} suffix="只" /></Card></Col>
+                      <Col span={8}><Card size="small"><Statistic title="中Delta(0.3-0.7, 平衡型)" value={greeksData.distribution.mid_delta} suffix="只" /></Card></Col>
+                      <Col span={8}><Card size="small"><Statistic title="低Delta(<0.3, 防守型)" value={greeksData.distribution.low_delta} suffix="只" /></Card></Col>
                     </Row>
                   </>
                 )}
@@ -896,7 +1129,7 @@ const [rankParams, setRankParams] = useState<any>(null)
                   <Col span={6}><Statistic title="筛选池" value={strategyCompare?.total_bonds || 0} suffix="只" /></Col>
                   <Col span={6}><Statistic title="Top N" value={strategyCompare?.top_n || 50} /></Col>
                   <Col span={6}><Statistic title="策略数" value={strategyCompare?.strategies?.length || 0} /></Col>
-                  <Col span={6}><Button onClick={() => fetchXuanjiComparison(50).then(setStrategyCompare)}>刷新对比</Button></Col>
+                  <Col span={6}><Button onClick={() => fetchXuanjiComparison(50, effectiveState).then(setStrategyCompare)}>刷新对比</Button></Col>
                 </Row>
                 <Table
                   dataSource={strategyCompare?.strategies?.map((s, i) => ({ key: String(i), ...s })) || []}
@@ -918,9 +1151,9 @@ const [rankParams, setRankParams] = useState<any>(null)
                   dataSource={[
                     { key: '1', metric: '因子数量', xuanji: '12', multi: '5', songgang: '11' },
                     { key: '2', metric: '市场状态', xuanji: '5态自适应', multi: '静态', songgang: '静态' },
-                    { key: '3', metric: '选中重叠%', xuanji: `100%`, multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.overlap_with_sg?.toFixed(0) + '%' || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.overlap_with_mf?.toFixed(0) + '%' || '-' },
-                    { key: '4', metric: '平均价格', xuanji: strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_price?.toFixed(1) || '-', multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_price?.toFixed(1) || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_price?.toFixed(1) || '-' },
-                    { key: '5', metric: '平均评分', xuanji: strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_score?.toFixed(3) || '-', multi: strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_score?.toFixed(3) || '-', songgang: strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_score?.toFixed(3) || '-' },
+                    { key: '3', metric: '选中重叠%', xuanji: `100%`, multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.overlap_with_sg; return v != null ? `${v.toFixed(0)}%` : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.overlap_with_mf; return v != null ? `${v.toFixed(0)}%` : '-' })() },
+                    { key: '4', metric: '平均价格', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_price; return v != null ? v.toFixed(1) : '-' })() },
+                    { key: '5', metric: '平均评分', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_score; return v != null ? v.toFixed(3) : '-' })() },
                   ]}
                   size="small" pagination={false}
                   columns={[
@@ -942,8 +1175,11 @@ const [rankParams, setRankParams] = useState<any>(null)
                   message="6种极端场景压力测试"
                   description="评估璇玑策略在牛市/熊市/暴跌/震荡/利率上行/信用风险等场景下的表现"
                   type="warning" showIcon style={{ marginBottom: 16 }}
+                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiStressTest(50, effectiveState).then(setStressData).catch(() => {})}>刷新</Button>}
                 />
-                {stressData && (
+                {!stressData ? (
+                  <Empty description="点击「刷新」加载压力测试数据" />
+                ) : (
                   <>
                     <Row gutter={16} style={{ marginBottom: 16 }}>
                       <Col span={6}><Statistic title="平均收益" value={stressData.summary.avg_return} suffix="%" valueStyle={{ color: stressData.summary.avg_return > 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
@@ -969,6 +1205,52 @@ const [rankParams, setRankParams] = useState<any>(null)
             ),
           },
           {
+            key: 'sources',
+            label: <span><DashboardOutlined /> 数据源</span>,
+            children: (
+              <>
+                <Alert
+                  message="数据源覆盖度监控"
+                  description="检查各个维度的缓存数据覆盖率和健康状态"
+                  type="info" showIcon style={{ marginBottom: 16 }}
+                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiDataSourceHealth().then(setDataSourceHealth).catch(() => {})}>刷新</Button>}
+                />
+                {!dataSourceHealth ? (
+                  <Empty description="加载数据源状态..." />
+                ) : (
+                  <>
+                    <Row gutter={16} style={{ marginBottom: 16 }}>
+                      <Col span={4}><Statistic title="可转债总数" value={dataSourceHealth.total_bonds || 0} suffix="只" /></Col>
+                      <Col span={4}><Statistic title="数据源" value={dataSourceHealth.summary?.sources_with_data || 0} suffix={`/${dataSourceHealth.summary?.total_sources || 0}`} /></Col>
+                      <Col span={4}><Statistic title="平均覆盖率" value={dataSourceHealth.summary?.avg_coverage_pct || 0} suffix="%" /></Col>
+                      <Col span={4}>
+                        <Statistic title="正股代码已加载" value={dataSourceHealth.bond_stock_codes_loaded ? '是' : '否'}
+                          valueStyle={{ color: dataSourceHealth.bond_stock_codes_loaded ? '#52c41a' : '#ff4d4f' }} />
+                      </Col>
+                    </Row>
+                    <Table
+                      dataSource={(dataSourceHealth.sources || []).map((s: any, i: number) => ({ key: String(i), ...s }))}
+                      size="small" pagination={false}
+                      columns={[
+                        { title: '数据源', dataIndex: 'label', width: 130, render: (v: string) => <Tag color="blue">{v}</Tag> },
+                        { title: '名称', dataIndex: 'name', width: 100 },
+                        { title: '条目数', dataIndex: 'count', width: 70, render: (v: number) => <Text strong>{v}</Text> },
+                        { title: '覆盖率', dataIndex: 'coverage_pct', width: 90, render: (v: number) => <Progress percent={Math.min(v, 100)} size="small" strokeColor={v > 80 ? '#52c41a' : v > 30 ? '#faad14' : '#ff4d4f'} format={(p) => `${p}%`} /> },
+                        { title: '最后更新', dataIndex: 'last_update', width: 100, render: (v: string, r: any) => {
+                          if (!v) return <Text type="secondary">未更新</Text>
+                          const age = Date.now() / 1000 - (r.last_update_ts || 0)
+                          const stale = age > 3600 * 6
+                          return <Text style={{ color: stale ? '#ff4d4f' : undefined }}>{v}</Text>
+                        }},
+                        { title: '状态', dataIndex: 'has_data', width: 70, render: (v: boolean) => v ? <Tag color="green">有</Tag> : <Tag color="red">无</Tag> },
+                      ]}
+                    />
+                  </>
+                )}
+              </>
+            ),
+          },
+          {
             key: 'attribution',
             label: <span><FundOutlined /> 因子归因</span>,
             children: (
@@ -978,7 +1260,9 @@ const [rankParams, setRankParams] = useState<any>(null)
                   description="评估各因子对综合评分的实际贡献，识别冗余因子以优化权重配置"
                   type="info" showIcon style={{ marginBottom: 16 }}
                 />
-                {factorContrib && (
+                {!factorContrib ? (
+                  <Empty description="点击「刷新」加载因子贡献数据" />
+                ) : (
                   <>
                     <Title level={5}>因子贡献度 (Top{factorContrib.top_n})</Title>
                     <Row gutter={16} style={{ marginBottom: 16 }}>
@@ -987,6 +1271,11 @@ const [rankParams, setRankParams] = useState<any>(null)
                       <Col span={6}><Statistic title="平均溢价" value={factorContrib.selection?.avg_premium} suffix="%" /></Col>
                       <Col span={6}><Statistic title="平均HV" value={factorContrib.selection?.avg_hv} suffix="%" /></Col>
                     </Row>
+                    {contribChartOption ? (
+                    <ReactEChartsCore option={contribChartOption} style={{ height: 300 }} notMerge={true} />
+                  ) : (
+                    <div style={{ height: 300 }} />
+                  )}
                     <Table
                       dataSource={factorContrib.factors.map((f, i) => ({ key: String(i), ...f }))}
                       size="small" pagination={false}
@@ -1005,12 +1294,14 @@ const [rankParams, setRankParams] = useState<any>(null)
                   </>
                 )}
                 <Divider>因子相关性分析 (识别冗余)</Divider>
-                {factorCorr && (
+                {!factorCorr ? (
+                  <Empty description="点击「刷新」加载因子相关性数据" />
+                ) : (
                   <>
                     <Row gutter={16} style={{ marginBottom: 16 }}>
                       <Col span={6}><Statistic title="相关性对数" value={factorCorr.total_pairs} /></Col>
                       <Col span={6}><Statistic title="高冗余对" value={factorCorr.high_redundancy_pairs} valueStyle={{ color: '#ff4d4f' }} /></Col>
-                      <Col span={6}><Statistic title="市场状态" value={factorCorr.market_state} /></Col>
+                       <Col span={6}><Statistic title="市场状态" value={MARKET_STATES.find(s => s.value === factorCorr.market_state)?.label || factorCorr.market_state || '-'} /></Col>
                       <Col span={6}><Statistic title="样本数" value={factorCorr.top_n} /></Col>
                     </Row>
                     {factorCorr.high_redundancy_pairs > 0 && (
@@ -1031,8 +1322,102 @@ const [rankParams, setRankParams] = useState<any>(null)
                         { title: '冗余度', dataIndex: 'redundancy', render: (v: string) => <Tag color={v === 'high' ? 'red' : v === 'medium' ? 'orange' : 'blue'}>{v}</Tag> },
                       ]}
                     />
+                    <Divider>相关性热力图</Divider>
+                    {heatmapChartOption ? (
+                      <ReactEChartsCore option={heatmapChartOption} style={{ height: 400 }} notMerge={true} />
+                    ) : (
+                      <Text type="secondary">数据不足以生成热力图（需要≥2个债券）</Text>
+                    )}
                   </>
                 )}
+              </>
+            ),
+          },
+          {
+            key: 'custom',
+            label: <span><ExperimentOutlined /> 自定义权重</span>,
+            children: (
+              <>
+                <Alert
+                  message="自定义因子权重组合"
+                  description="拖动滑块调整各因子权重，实时查看自定义排名"
+                  type="info" showIcon style={{ marginBottom: 16 }}
+                />
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Card size="small" title="因子权重配置">
+                      {Object.entries(WEIGHT_LABELS).map(([key, label]) => (
+                        <div key={key} style={{ marginBottom: 12 }}>
+                          <Row align="middle">
+                            <Col span={4}><Text style={{ fontSize: 12 }}>{label}</Text></Col>
+                            <Col span={14}>
+                              <Slider
+                                min={0} max={100} step={1}
+                                value={customWeights[key] ?? Math.round(((rankingInfo?.weights?.[key] || 0.11) * 100))}
+                                onChange={(v) => setCustomWeights(prev => ({ ...prev, [key]: v }))}
+                              />
+                            </Col>
+                            <Col span={4} offset={1}>
+                              <InputNumber
+                                min={0} max={100} style={{ width: 60 }}
+                                value={customWeights[key] ?? Math.round(((rankingInfo?.weights?.[key] || 0.11) * 100))}
+                                onChange={(v) => setCustomWeights(prev => ({ ...prev, [key]: v ?? 0 }))}
+                              />
+                            </Col>
+                          </Row>
+                        </div>
+                      ))}
+                      <Divider />
+                      <Button
+                        type="primary" icon={<BulbOutlined />} block
+                        loading={customRankLoading}
+                        onClick={async () => {
+                          setCustomRankLoading(true)
+                          try {
+                            const result = await postXuanjiCustomRanking({
+                              weights: Object.fromEntries(
+                                Object.entries(customWeights).map(([k, v]) => [k, v / 100])
+                              ),
+                              top_n: topN,
+                              market_state: autoDetect ? 'auto' : marketState,
+                              max_premium: maxPremium,
+                              min_price: minPrice,
+                              max_price: maxPrice,
+                            })
+                            setCustomRankResult(result)
+                            message.success(`自定义排名计算完成: ${result.returned} 只`)
+                          } catch (e: any) {
+                            message.error(`自定义排名失败: ${e.message}`)
+                          } finally {
+                            setCustomRankLoading(false)
+                          }
+                        }}
+                      >
+                        计算自定义排名
+                      </Button>
+                    </Card>
+                  </Col>
+                  <Col span={12}>
+                    <Card size="small" title="自定义排名结果">
+                      {!customRankResult ? (
+                        <Empty description="调整左侧权重后点击「计算自定义排名」" />
+                      ) : (
+                        <Table
+                          dataSource={customRankResult.items}
+                          rowKey="code" size="small" pagination={{ pageSize: 10 }}
+                          columns={[
+                            { title: '排名', key: 'rank', width: 50, render: (_: any, _r: any, i: number) => <Tag color="purple">#{i + 1}</Tag> },
+                            { title: '代码', dataIndex: 'code', width: 80, render: (c: string) => <a onClick={() => handleViewDetail(c)}>{c}</a> },
+                            { title: '名称', dataIndex: 'name', width: 100 },
+                            { title: '价格', dataIndex: 'price', width: 70, render: (v: number) => v?.toFixed(2) },
+                            { title: '行业', dataIndex: 'industry', width: 80, render: (v: string) => <Tag color={getIndustryColor(v)}>{v || '其他'}</Tag> },
+                            { title: '自定义评分', dataIndex: 'score', width: 120, render: (v: number) => <Progress percent={Math.min(v * 100, 100)} size="small" strokeColor={scoreColor(v)} format={(p) => p?.toFixed(1)} /> },
+                          ]}
+                        />
+                      )}
+                    </Card>
+                  </Col>
+                </Row>
               </>
             ),
           },
@@ -1051,14 +1436,23 @@ const [rankParams, setRankParams] = useState<any>(null)
           {selectedDetail && (
             <>
               <Row gutter={16} style={{ marginBottom: 16 }}>
-                <Col span={8}><Statistic title="综合评分" value={(selectedDetail.composite_score * 100).toFixed(1)} suffix="/100" valueStyle={{ color: '#722ed1' }} /></Col>
-                <Col span={8}><Statistic title="波动率调权" value={selectedDetail.vol_factor?.toFixed(3)} valueStyle={{ color: '#1677ff' }} /></Col>
-                <Col span={8}><Statistic title="市场状态" value={selectedDetail.market_state} valueStyle={{ color: '#fa8c16' }} /></Col>
+                <Col span={6}><Statistic title="综合评分" value={(selectedDetail.composite_score * 100).toFixed(1)} suffix="/100" valueStyle={{ color: '#722ed1' }} /></Col>
+                <Col span={6}><Statistic title="波动率调权" value={selectedDetail.vol_factor?.toFixed(3)} valueStyle={{ color: '#1677ff' }} /></Col>
+                <Col span={6}><Statistic title="市场状态" value={MARKET_STATES.find(s => s.value === selectedDetail.market_state)?.label || selectedDetail.market_state} valueStyle={{ color: '#fa8c16' }} /></Col>
+                <Col span={6}>
+                  <Statistic
+                    title="全市场排名"
+                    value={selectedDetail.rank_in_universe ? `${selectedDetail.rank_in_universe}/${selectedDetail.total_in_universe}` : '-'}
+                    valueStyle={{ color: '#722ed1' }}
+                  />
+                </Col>
               </Row>
               <Row gutter={16}>
                 <Col span={12}>
                   <Title level={5}>12因子评分</Title>
-                  <div ref={radarChartRef} style={{ height: 300 }} />
+                  <div style={{ height: 300 }}>
+                    {radarChartOption ? <ReactEChartsCore option={radarChartOption} style={{ height: 300 }} notMerge={true} /> : null}
+                  </div>
                 </Col>
                 <Col span={12}>
                   <Title level={5}>因子明细</Title>
@@ -1084,10 +1478,24 @@ const [rankParams, setRankParams] = useState<any>(null)
                 <Descriptions.Item label="溢价率">{selectedDetail.basic_info.premium_ratio}%</Descriptions.Item>
                 <Descriptions.Item label="双低值">{selectedDetail.basic_info.dual_low}</Descriptions.Item>
                 <Descriptions.Item label="涨跌%">{selectedDetail.basic_info.change_pct}</Descriptions.Item>
-                <Descriptions.Item label="YTM">{selectedDetail.basic_info.ytm || '-'}%</Descriptions.Item>
+                <Descriptions.Item label="YTM">{selectedDetail.basic_info.ytm != null ? `${selectedDetail.basic_info.ytm}%` : '-'}</Descriptions.Item>
                 <Descriptions.Item label="剩余年限">{selectedDetail.basic_info.remaining_years || '-'}</Descriptions.Item>
                 <Descriptions.Item label="正股价">{selectedDetail.basic_info.stock_price || '-'}</Descriptions.Item>
                 <Descriptions.Item label="转股价值">{selectedDetail.basic_info.conversion_value || '-'}</Descriptions.Item>
+                <Descriptions.Item label="ROE">{selectedDetail.basic_info.roe != null ? `${selectedDetail.basic_info.roe}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="毛利率">{selectedDetail.basic_info.gpm != null ? `${selectedDetail.basic_info.gpm}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="CAGR">{selectedDetail.basic_info.cagr != null ? `${selectedDetail.basic_info.cagr}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="负债率">{selectedDetail.basic_info.debt_ratio != null ? `${selectedDetail.basic_info.debt_ratio}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="PE">{selectedDetail.basic_info.pe ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="PB">{selectedDetail.basic_info.pb ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="IV">{selectedDetail.basic_info.iv != null ? `${selectedDetail.basic_info.iv}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="流动比">{selectedDetail.basic_info.current_ratio ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="质押率">{selectedDetail.basic_info.pledge_ratio != null ? `${selectedDetail.basic_info.pledge_ratio}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="换手率">{selectedDetail.basic_info.turnover_rate != null ? `${selectedDetail.basic_info.turnover_rate}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="5日动量">{selectedDetail.basic_info.momentum_5d != null ? `${selectedDetail.basic_info.momentum_5d}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="20日动量">{selectedDetail.basic_info.momentum_20d != null ? `${selectedDetail.basic_info.momentum_20d}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="60日动量">{selectedDetail.basic_info.momentum_60d != null ? `${selectedDetail.basic_info.momentum_60d}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="事件">{selectedDetail.basic_info.event_detail || '-'}</Descriptions.Item>
               </Descriptions>
               <Divider>Greeks近似</Divider>
               <Row gutter={16}>

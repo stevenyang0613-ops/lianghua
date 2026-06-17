@@ -48,6 +48,8 @@ function openDB(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error)
     request.onsuccess = () => {
       db = request.result
+      // 清理旧 localStorage 缓存条目
+      migrateLocalStorageCache()
       resolve(db)
     }
 
@@ -331,7 +333,6 @@ export async function saveToCache(key: string, data: unknown, ttlMs: number = 24
 // 从缓存读取数据
 export async function getFromCache<T>(key: string): Promise<T | null> {
   try {
-    // 先尝试 IndexedDB
     const database = await openDB()
     const tx = database.transaction('cache', 'readonly')
     const store = tx.objectStore('cache')
@@ -343,34 +344,52 @@ export async function getFromCache<T>(key: string): Promise<T | null> {
         if (entry && entry.expiresAt > Date.now()) {
           resolve(entry.data as T)
         } else {
-          // 尝试从 localStorage 读取
-          try {
-            const backup = localStorage.getItem(`cache_${key}`)
-            if (backup) {
-              const backupEntry = JSON.parse(backup) as CacheEntry
-              if (backupEntry.expiresAt > Date.now()) {
-                resolve(backupEntry.data as T)
-                return
-              }
-            }
-          } catch { /* ignore cache errors */ }
           resolve(null)
         }
       }
       request.onerror = () => resolve(null)
     })
   } catch {
-    // 尝试从 localStorage 读取
-    try {
-      const backup = localStorage.getItem(`cache_${key}`)
-      if (backup) {
-        const entry = JSON.parse(backup) as CacheEntry
-        if (entry.expiresAt > Date.now()) {
-          return entry.data as T
+    return null
+  }
+}
+
+// 获取原始缓存条目（含过期信息，供 getCacheStatus 使用）
+export async function getCacheEntry(key: string): Promise<{ timestamp: number; expiresAt: number } | null> {
+  try {
+    const database = await openDB()
+    const tx = database.transaction('cache', 'readonly')
+    const store = tx.objectStore('cache')
+    const request = store.get(key)
+
+    return new Promise((resolve) => {
+      request.onsuccess = () => {
+        const entry = request.result as CacheEntry | undefined
+        if (entry) {
+          resolve({ timestamp: entry.timestamp, expiresAt: entry.expiresAt })
+        } else {
+          resolve(null)
         }
       }
-    } catch { /* ignore cache errors */ }
+      request.onerror = () => resolve(null)
+    })
+  } catch {
     return null
+  }
+}
+
+// 迁移并清理旧 localStorage 缓存条目
+export async function migrateLocalStorageCache(): Promise<void> {
+  const keysToRemove: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key?.startsWith('cache_')) {
+      keysToRemove.push(key)
+    }
+  }
+  keysToRemove.forEach(key => localStorage.removeItem(key))
+  if (keysToRemove.length > 0) {
+    console.log(`[Cache] Migrated ${keysToRemove.length} localStorage cache entries to IndexedDB`)
   }
 }
 

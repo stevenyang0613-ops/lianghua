@@ -52,8 +52,19 @@ export function setWsAuthToken(token: string): void {
 }
 
 /**
- * 检测是否在 Electron 环境中（有 IPC 代理可用）
- * 只检查 httpRequest 是否存在，不依赖 isElectron 标志
+ * 检测是否在 Electron 环境中
+ * 先检查 IPC 代理 (electronAPI.httpRequest)，再通过用户代理字符串兜底
+ * 双重检测确保即使在 preload 加载异常时仍能正确识别 Electron 环境
+ */
+function isElectronEnv(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.electronAPI?.httpRequest) return true
+  // 用户代理兜底检测
+  return navigator.userAgent.includes('Electron')
+}
+
+/**
+ * 检测是否有 IPC 代理可用
  */
 function hasElectronAPI(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.httpRequest
@@ -64,7 +75,7 @@ function hasElectronAPI(): boolean {
  * Electron 环境使用绝对地址，浏览器环境使用相对路径
  */
 export function getApiBase(): string {
-  return hasElectronAPI() ? ENV.BACKEND_URL : ''
+  return isElectronEnv() ? ENV.BACKEND_URL : ''
 }
 
 /**
@@ -72,7 +83,7 @@ export function getApiBase(): string {
  * Electron 环境使用 ws://127.0.0.1:8765，浏览器环境基于当前页面协议
  */
 export function getWsBase(): string {
-  if (hasElectronAPI()) {
+  if (isElectronEnv()) {
     return ENV.WS_URL
   }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -83,7 +94,7 @@ export function getWsBase(): string {
  * 获取 HTTP 基础 URL（用于 health check 等）
  */
 export function getHttpBase(): string {
-  if (hasElectronAPI()) {
+  if (isElectronEnv()) {
     return ENV.BACKEND_URL
   }
   return `${window.location.protocol}//${window.location.host}`

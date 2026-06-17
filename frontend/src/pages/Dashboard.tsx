@@ -3,26 +3,129 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Button, Space, Typography, Row, Col, Statistic, Table, List, Tag, Select, Modal, Input, message, Dropdown, Empty } from 'antd'
-import { SettingOutlined, PlusOutlined, DeleteOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, SaveOutlined } from '@ant-design/icons'
+import { Card, Button, Space, Typography, Row, Col, Statistic, Table, List, Tag, Select, Modal, Input, message, Dropdown, Empty, Spin } from 'antd'
+import { SettingOutlined, PlusOutlined, DeleteOutlined, CopyOutlined, DownloadOutlined, UploadOutlined, SaveOutlined, RiseOutlined, FallOutlined, DashboardOutlined, AlertOutlined } from '@ant-design/icons'
 import { getLayouts, getCurrentLayout, setCurrentLayout, createLayout, deleteLayout, addWidget, deleteWidget, duplicateLayout, exportLayout, importLayout, type DashboardLayout, type DashboardWidget } from '../utils/dashboardLayout'
+import { useMarketStore } from '../stores/useMarketStore'
+import { useAppStore } from '../stores/useAppStore'
 import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
 interface WidgetRendererProps {
   widget: DashboardWidget
-  data?: Record<string, unknown>
+}
+
+// Market summary widget
+function MarketSummaryWidget() {
+  const allBonds = useMarketStore((s) => s.allBonds)
+  const updatedAt = useMarketStore((s) => s.updatedAt)
+
+  const stats = useMemo(() => {
+    if (!allBonds.length) return { total: 0, avgPrice: 0, avgPremium: 0, avgDualLow: 0, riseCount: 0, fallCount: 0 }
+    const total = allBonds.length
+    const avgPrice = allBonds.reduce((s, b) => s + (b.price || 0), 0) / total
+    const avgPremium = allBonds.reduce((s, b) => s + (b.premium_ratio || 0), 0) / total
+    const avgDualLow = allBonds.reduce((s, b) => s + (b.dual_low || 0), 0) / total
+    const riseCount = allBonds.filter(b => (b.change_pct ?? 0) > 0).length
+    const fallCount = allBonds.filter(b => (b.change_pct ?? 0) < 0).length
+    return { total, avgPrice, avgPremium, avgDualLow, riseCount, fallCount }
+  }, [allBonds])
+
+  return (
+    <Card size="small" style={{ height: '100%' }}>
+      <Row gutter={8}>
+        <Col span={8}><Statistic title="可转债总数" value={stats.total} prefix={<DashboardOutlined />} /></Col>
+        <Col span={8}><Statistic title="上涨" value={stats.riseCount} valueStyle={{ color: '#cf1322' }} prefix={<RiseOutlined />} /></Col>
+        <Col span={8}><Statistic title="下跌" value={stats.fallCount} valueStyle={{ color: '#3f8600' }} prefix={<FallOutlined />} /></Col>
+      </Row>
+      <Row gutter={8} style={{ marginTop: 12 }}>
+        <Col span={8}><Statistic title="均价" value={stats.avgPrice} precision={2} /></Col>
+        <Col span={8}><Statistic title="均溢价率" value={stats.avgPremium} precision={1} suffix="%" /></Col>
+        <Col span={8}><Statistic title="均双低" value={stats.avgDualLow} precision={1} /></Col>
+      </Row>
+      {updatedAt && <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>更新: {updatedAt}</div>}
+    </Card>
+  )
+}
+
+// Top dual-low bonds widget
+function TopDualLowWidget() {
+  const allBonds = useMarketStore((s) => s.allBonds)
+
+  const topBonds = useMemo(() => {
+    return [...allBonds]
+      .filter(b => (b.dual_low ?? 0) > 0 && (b.price ?? 0) > 0)
+      .sort((a, b) => (a.dual_low ?? 0) - (b.dual_low ?? 0))
+      .slice(0, 5)
+  }, [allBonds])
+
+  return (
+    <Card size="small" title="双低TOP5" style={{ height: '100%' }}>
+      {topBonds.length === 0 ? (
+        <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <List
+          size="small"
+          dataSource={topBonds}
+          renderItem={(item) => (
+            <List.Item>
+              <span>{item.code} {item.name}</span>
+              <Tag color={(item.dual_low ?? 0) < 130 ? 'green' : (item.dual_low ?? 0) < 150 ? 'blue' : 'orange'}>{fmt(item.dual_low)}</Tag>
+            </List.Item>
+          )}
+        />
+      )}
+    </Card>
+  )
+}
+
+// Forced call alert widget
+function ForcedCallAlertWidget() {
+  const allBonds = useMarketStore((s) => s.allBonds)
+
+  const forcedCallBonds = useMemo(() => {
+    return allBonds
+      .filter(b => (b.forced_call_days ?? 0) >= 5 || b.is_called)
+      .sort((a, b) => (b.forced_call_days ?? 0) - (a.forced_call_days ?? 0))
+      .slice(0, 5)
+  }, [allBonds])
+
+  return (
+    <Card size="small" title={<span><AlertOutlined style={{ color: '#faad14' }} /> 强赎预警</span>} style={{ height: '100%' }}>
+      {forcedCallBonds.length === 0 ? (
+        <Empty description="暂无强赎预警" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <List
+          size="small"
+          dataSource={forcedCallBonds}
+          renderItem={(item) => (
+            <List.Item>
+              <span>{item.code} {item.name}</span>
+              <Tag color={item.is_called ? 'red' : (item.forced_call_days ?? 0) >= 10 ? 'red' : 'orange'}>
+                {item.is_called ? '已公告' : `${item.forced_call_days}/15天`}
+              </Tag>
+            </List.Item>
+          )}
+        />
+      )}
+    </Card>
+  )
 }
 
 // 小组件渲染器
-function WidgetRenderer({ widget, data }: WidgetRendererProps) {
+function WidgetRenderer({ widget }: WidgetRendererProps) {
+  // Built-in data-driven widgets
+  if (widget.type === 'market-summary') return <MarketSummaryWidget />
+  if (widget.type === 'top-dual-low') return <TopDualLowWidget />
+  if (widget.type === 'forced-call-alert') return <ForcedCallAlertWidget />
+
+  // Legacy static widgets
   switch (widget.type) {
     case 'statistic': {
-      const value = data?.[widget.config.field as string] || 0
       return (
         <Card size="small" style={{ height: '100%' }}>
-          <Statistic title={widget.title} value={value as number} />
+          <Statistic title={widget.title} value={0} />
         </Card>
       )
     }
@@ -37,39 +140,17 @@ function WidgetRenderer({ widget, data }: WidgetRendererProps) {
       )
 
     case 'list': {
-      const items = data?.signals || []
       return (
         <Card size="small" title={widget.title} style={{ height: '100%' }}>
-          <List
-            size="small"
-            dataSource={(items as any[]).slice(0, (widget.config.maxItems as number) || 5)}
-            renderItem={(item: any) => (
-              <List.Item>
-                <Text>{item.code} - {item.name}</Text>
-                <Tag color={item.action === 'buy' ? 'green' : 'red'}>{item.action}</Tag>
-              </List.Item>
-            )}
-          />
+          <Empty description="请使用市场概览组件" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </Card>
       )
     }
 
     case 'table': {
-      const positions = data?.positions || []
       return (
         <Card size="small" title={widget.title} style={{ height: '100%' }}>
-          <Table
-            size="small"
-            dataSource={positions as any[]}
-            columns={[
-              { title: '代码', dataIndex: 'code', width: 80 },
-              { title: '名称', dataIndex: 'name', width: 100 },
-              { title: '持仓', dataIndex: 'volume', width: 80 },
-              { title: '盈亏', dataIndex: 'profit', width: 100, render: (v: number) => <Text style={{ color: (v ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>{fmt(v)}%</Text> },
-            ]}
-            pagination={false}
-            scroll={{ y: 200 }}
-          />
+          <Empty description="请使用双低TOP5或强赎预警组件" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </Card>
       )
     }
@@ -81,6 +162,15 @@ function WidgetRenderer({ widget, data }: WidgetRendererProps) {
         </Card>
       )
   }
+}
+
+// Default dashboard layout with real data widgets
+function getDefaultWidgets(): DashboardWidget[] {
+  return [
+    { id: 'w-market', type: 'market-summary', title: '市场概览', size: 'large', visible: true, x: 0, y: 0, w: 12, h: 2, config: {} },
+    { id: 'w-dual-low', type: 'top-dual-low', title: '双低TOP5', size: 'small', visible: true, x: 0, y: 2, w: 6, h: 1, config: {} },
+    { id: 'w-forced-call', type: 'forced-call-alert', title: '强赎预警', size: 'small', visible: true, x: 6, y: 2, w: 6, h: 1, config: {} },
+  ]
 }
 
 export default function Dashboard() {
@@ -97,21 +187,6 @@ export default function Dashboard() {
     w: 3,
     h: 1,
   })
-  const mockData = useMemo(() => ({
-    totalAsset: 1256789.56,
-    todayProfit: 12345.67,
-    positionCount: 15,
-    alertCount: 3,
-    signals: [
-      { code: '110001', name: '示例转债1', action: 'buy' },
-      { code: '110002', name: '示例转债2', action: 'sell' },
-      { code: '110003', name: '示例转债3', action: 'buy' },
-    ],
-    positions: [
-      { code: '110001', name: '示例转债1', volume: 100, profit: 2.5 },
-      { code: '110002', name: '示例转债2', volume: 200, profit: -1.2 },
-    ],
-  }), [])
 
   useEffect(() => {
     loadLayouts()
@@ -289,7 +364,7 @@ export default function Dashboard() {
                       style={{ position: 'absolute', top: 8, right: 8, zIndex: 10 }}
                     />
                   )}
-                  <WidgetRenderer widget={widget} data={mockData} />
+                  <WidgetRenderer widget={widget} />
                 </div>
               </Col>
             ))}
@@ -342,6 +417,9 @@ export default function Dashboard() {
                 { value: 'chart', label: '图表' },
                 { value: 'list', label: '列表' },
                 { value: 'table', label: '表格' },
+                { value: 'market-summary', label: '市场概览' },
+                { value: 'top-dual-low', label: '双低TOP5' },
+                { value: 'forced-call-alert', label: '强赎预警' },
               ]}
             />
           </div>

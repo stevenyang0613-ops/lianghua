@@ -33,14 +33,14 @@ export default function ReportCenter() {
       setGenerating(true)
 
       try {
-        // 模拟生成报告数据
-        const mockData = generateMockData(values.type)
+        message.warning('报告生成需要真实数据支持，请等待数据源就绪后重试')
+        return
 
         const config: ReportConfig = {
           title: values.title,
           type: values.type,
           format: values.format,
-          data: mockData,
+          data: [],
           includeCharts: values.includeCharts || false,
           dateRange: values.dateRange?.map((d: dayjs.Dayjs) => d.format('YYYY-MM-DD')) as [string, string],
         }
@@ -77,68 +77,6 @@ export default function ReportCenter() {
     clearReports()
     loadReports()
     message.success('所有报告已清除')
-  }
-
-  // 模拟数据生成
-  const generateMockData = (type: string): Record<string, unknown>[] => {
-    const count = Math.floor(Math.random() * 100) + 50
-
-    switch (type) {
-      case 'trade':
-        return Array.from({ length: count }, (_, i) => ({
-          序号: i + 1,
-          时间: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toLocaleString('zh-CN'),
-          代码: `11000${(i % 9) + 1}`,
-          名称: `示例转债${i + 1}`,
-          操作: Math.random() > 0.5 ? '买入' : '卖出',
-          价格: (100 + Math.random() * 50).toFixed(2),
-          数量: Math.floor(Math.random() * 1000),
-          金额: (Math.random() * 100000).toFixed(2),
-          状态: Math.random() > 0.1 ? '成功' : '失败',
-        }))
-
-      case 'performance':
-        return Array.from({ length: 30 }, (_, i) => ({
-          日期: dayjs().subtract(29 - i, 'day').format('YYYY-MM-DD'),
-          总资产: (1000000 + Math.random() * 100000).toFixed(2),
-          收益: (Math.random() * 20000 - 10000).toFixed(2),
-          收益率: ((Math.random() - 0.5) * 5).toFixed(2) + '%',
-          交易次数: Math.floor(Math.random() * 20),
-          胜率: (50 + Math.random() * 30).toFixed(1) + '%',
-        }))
-
-      case 'position':
-        return Array.from({ length: 20 }, (_, i) => ({
-          代码: `11000${(i % 9) + 1}`,
-          名称: `示例转债${i + 1}`,
-          持仓: Math.floor(Math.random() * 1000),
-          可用: Math.floor(Math.random() * 500),
-          成本: (100 + Math.random() * 30).toFixed(2),
-          现价: (100 + Math.random() * 50).toFixed(2),
-          市值: (Math.random() * 100000).toFixed(2),
-          盈亏: ((Math.random() - 0.5) * 20).toFixed(2) + '%',
-        }))
-
-      case 'signal':
-        return Array.from({ length: count }, (_, i) => ({
-          时间: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toLocaleString('zh-CN'),
-          策略: ['MACD金叉', '均线交叉', 'RSI反转', '布林带'][i % 4],
-          代码: `11000${(i % 9) + 1}`,
-          名称: `示例转债${i + 1}`,
-          信号: Math.random() > 0.5 ? '买入' : '卖出',
-          价格: (100 + Math.random() * 50).toFixed(2),
-          置信度: (0.6 + Math.random() * 0.4).toFixed(2),
-          状态: Math.random() > 0.3 ? '已执行' : '待执行',
-        }))
-
-      default:
-        return Array.from({ length: count }, (_, i) => ({
-          序号: i + 1,
-          字段1: `数据${i + 1}`,
-          字段2: Math.random().toFixed(2),
-          字段3: new Date().toLocaleDateString(),
-        }))
-    }
   }
 
   const columns: ColumnsType<GeneratedReport> = [

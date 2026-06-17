@@ -23,10 +23,25 @@ class Strategy(ABC):
     def get_param(self, name: str):
         val = self._params.get(name)
         ptype = self._param_type_map.get(name)
+        if val is None:
+            # 尝试从 param 定义获取默认值
+            for p in self.params:
+                if p.name == name:
+                    val = p.default
+                    self._params[name] = val
+                    break
+            if val is None:
+                return None
         if ptype == "int":
-            return int(val)
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return 0
         if ptype == "float":
-            return float(val)
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return 0.0
         return val
 
     @abstractmethod

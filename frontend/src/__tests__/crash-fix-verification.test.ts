@@ -185,11 +185,12 @@ describe('RiskControl join 崩溃保护', () => {
 // ============================================================
 describe('RiskHeatmap 数据解构崩溃保护', () => {
   it('params.data为undefined时不应崩溃', () => {
-    const params: { data: [number, number, number] } | undefined = undefined
-    if (!params?.data) {
-      expect(true).toBe(true) // Should early return
+    const params = undefined as { data: [number, number, number] } | undefined
+    if (!params) {
+      expect(true).toBe(true)
     } else {
-      throw new Error('Should not reach here')
+      const [x, y, value] = params.data
+      expect(typeof x).toBe('number')
     }
   })
 

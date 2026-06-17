@@ -58,6 +58,8 @@ const ThemeConfig = lazy(() => import('./pages/ThemeConfig'))
 const DataImportExport = lazy(() => import('./pages/DataImportExport'))
 const OpsDashboard = lazy(() => import('./components/OpsDashboard'))
 const ExchangeableBonds = lazy(() => import('./pages/ExchangeableBonds'))
+const SectorRotation = lazy(() => import('./pages/SectorRotation'))
+const SectorRotationStock = lazy(() => import('./pages/SectorRotationStock'))
 
 // 注册 Service Worker (仅在浏览器/PWA 环境下, Electron 不支持 Service Worker)
 function registerServiceWorker() {
@@ -170,6 +172,8 @@ export default function App() {
         <Route path="/" element={<ErrorBoundary><Market /></ErrorBoundary>} />
         <Route path="/market" element={<ErrorBoundary><Market /></ErrorBoundary>} />
         <Route path="/exchangeable" element={<ErrorBoundary><ExchangeableBonds /></ErrorBoundary>} />
+        <Route path="/sector-rotation" element={<ErrorBoundary><SectorRotation /></ErrorBoundary>} />
+        <Route path="/sector-rotation-stock" element={<ErrorBoundary><SectorRotationStock /></ErrorBoundary>} />
         <Route path="/watchlist" element={<ErrorBoundary><Watchlist /></ErrorBoundary>} />
         <Route path="/backtest" element={<ErrorBoundary><Backtest /></ErrorBoundary>} />
         <Route path="/trade" element={<ErrorBoundary><Trade /></ErrorBoundary>} />

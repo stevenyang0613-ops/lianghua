@@ -294,7 +294,7 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
     manager = get_data_source_manager()
     config = config or {}
 
-    # 注册东方财富（默认可用，无需认证）
+    # 注册东方财富（默认可用，无需认证）- 全数据类型支持
     if config.get('eastmoney', {}).get('enabled', True):
         from .adapters.eastmoney_adapter import EastmoneyAdapter
         adapter = EastmoneyAdapter(DataSourceConfig(name='eastmoney'))
@@ -302,11 +302,14 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
             name='eastmoney',
             adapter=adapter,
             priority=100,
-            data_types=[DataType.QUOTE, DataType.CONVERTIBLE],
+            data_types=[
+                DataType.QUOTE, DataType.CONVERTIBLE, DataType.STOCK,
+                DataType.FINANCIAL, DataType.INDUSTRY, DataType.MACRO,
+            ],
             is_primary=True,
         )
 
-    # 注册巨潮资讯
+    # 注册巨潮资讯 - 公告数据源
     if config.get('cninfo', {}).get('enabled', True):
         from .adapters.cninfo_adapter import CNInfoAdapter
         adapter = CNInfoAdapter(DataSourceConfig(name='cninfo'))
@@ -316,6 +319,7 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
             priority=50,
             data_types=[DataType.ANNOUNCEMENT],
             is_primary=True,
+            failover_to='eastmoney',
         )
 
     # 注册Wind（需要授权）
@@ -346,6 +350,24 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
             adapter=adapter,
             priority=20,
             data_types=[DataType.QUOTE, DataType.CONVERTIBLE, DataType.FINANCIAL],
+            is_primary=False,
+            failover_to='eastmoney',
+        )
+
+    # 注册通达信（默认启用，无需认证）- 低延迟行情备份
+    if config.get('tdx', {}).get('enabled', True):
+        from .adapters.tdx_data_adapter import TdxDataAdapter
+        adapter = TdxDataAdapter(DataSourceConfig(
+            name='tdx',
+            timeout=config.get('tdx', {}).get('timeout', 5),
+        ))
+        manager.register(
+            name='tdx',
+            adapter=adapter,
+            priority=60,
+            data_types=[
+                DataType.QUOTE, DataType.STOCK, DataType.FINANCIAL,
+            ],
             is_primary=False,
             failover_to='eastmoney',
         )

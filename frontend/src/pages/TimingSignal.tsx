@@ -32,33 +32,7 @@ const TimingSignalPage: React.FC<TimingSignalProps> = ({ enhanced = true }) => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const getMockSignal = (): TimingSignal => ({
-    totalScore: 62,
-    positionLimit: 0.55,
-    marketEnv: 'neutral',
-    modelVersion: 'v4.0-enhanced',
-    quality: 'good',
-    confidence: 0.72,
-    consensusScore: 65,
-    hedgeRecommended: false,
-    riskAlerts: [],
-    crossValidation: { bullishCount: 3, bearishCount: 1, totalCount: 6 },
-    factors: [
-      { name: '估值面', score: 65, maxScore: 100, weight: 0.14, status: 'good', description: '转股溢价率中位数合理偏低', icon: 'valuation', subFactors: [{ name: '转股溢价率中位数', score: 70, weight: 0.35, signal: 'bullish', description: '溢价率中位数25%' }, { name: '纯债YTM中位数', score: 60, weight: 0.20, signal: 'neutral', description: 'YTM 1.5%' }, { name: '转债价格中位数', score: 55, weight: 0.15, signal: 'neutral', description: '中位数价位118元' }, { name: 'PE历史分位数', score: 65, weight: 0.15, signal: 'bullish', description: 'PE 45%分位' }, { name: 'PB历史分位数', score: 70, weight: 0.15, signal: 'bullish', description: 'PB 35%分位' }] },
-      { name: '基本面', score: 58, maxScore: 100, weight: 0.10, status: 'warning', description: '经济增长平稳，企业盈利温和改善', icon: 'fundamental', subFactors: [{ name: '盈利超预期比例', score: 60, weight: 0.25, signal: 'bullish', description: '55%公司超预期' }, { name: 'GDP增速', score: 50, weight: 0.20, signal: 'neutral', description: 'GDP同比5.0%' }, { name: '工业增加值增速', score: 55, weight: 0.20, signal: 'neutral', description: '工业增加值同比5.2%' }, { name: 'PE/PB综合估值', score: 65, weight: 0.15, signal: 'bullish', description: 'PE/PB合理' }, { name: '股息吸引力', score: 55, weight: 0.10, signal: 'neutral', description: 'PE=18' }, { name: '社零增速', score: 52, weight: 0.10, signal: 'neutral', description: '社零同比4.8%' }] },
-      { name: '筹码面', score: 52, maxScore: 100, weight: 0.08, status: 'warning', description: '机构持仓稳定，筹码结构均衡', icon: 'chip', subFactors: [{ name: '机构持仓变化', score: 50, weight: 0.30, signal: 'neutral', description: '机构持仓+0.3%' }, { name: '融资余额占比', score: 55, weight: 0.20, signal: 'neutral', description: '融资买入占比8.5%' }, { name: '转债破面比例', score: 50, weight: 0.25, signal: 'neutral', description: '低于面值占比4.2%' }, { name: '供给压力评估', score: 55, weight: 0.25, signal: 'neutral', description: 'PE分位45%供给适中' }] },
-      { name: '资金面', score: 60, maxScore: 100, weight: 0.12, status: 'good', description: '转债成交活跃，主力小幅流入', icon: 'capital', subFactors: [{ name: '转债日均成交额', score: 65, weight: 0.20, signal: 'bullish', description: '日均成交550亿' }, { name: '主力资金净流入', score: 58, weight: 0.18, signal: 'neutral', description: '主力净流入+25亿' }, { name: '北向资金净流入', score: 55, weight: 0.18, signal: 'neutral', description: '北向资金+15亿' }, { name: '融资余额变化', score: 52, weight: 0.16, signal: 'neutral', description: '融资余额+8亿' }, { name: '全市场换手率', score: 60, weight: 0.14, signal: 'neutral', description: '换手率2.8%' }, { name: '行业资金流向', score: 55, weight: 0.14, signal: 'neutral', description: '多数行业均衡' }] },
-      { name: '流动性面', score: 72, maxScore: 100, weight: 0.10, status: 'good', description: '流动性整体充裕', icon: 'liquidity', subFactors: [{ name: 'Shibor隔夜', score: 75, weight: 0.18, signal: 'bullish', description: 'Shibor隔夜1.1%' }, { name: '10年国债收益率', score: 70, weight: 0.18, signal: 'bullish', description: '10年国债2.3%' }, { name: '2年国债收益率', score: 65, weight: 0.12, signal: 'bullish', description: '2年国债1.9%' }, { name: '期限利差', score: 60, weight: 0.15, signal: 'neutral', description: '利差100bp' }, { name: '信用利差', score: 55, weight: 0.15, signal: 'neutral', description: '信用利差95bp' }, { name: 'M2增速', score: 80, weight: 0.12, signal: 'bullish', description: 'M2同比11.5%' }, { name: '社融增速', score: 75, weight: 0.10, signal: 'bullish', description: '社融同比12%' }] },
-      { name: '技术面', score: 48, maxScore: 100, weight: 0.16, status: 'warning', description: '指数横盘整理，MACD中性', icon: 'technical', subFactors: [{ name: '均线排列', score: 45, weight: 0.20, signal: 'neutral', description: '均线交叉排列' }, { name: 'MACD信号', score: 50, weight: 0.18, signal: 'neutral', description: 'MACD中性' }, { name: 'RSI(14)', score: 48, weight: 0.15, signal: 'neutral', description: 'RSI=48' }, { name: '布林带位置', score: 50, weight: 0.12, signal: 'neutral', description: '布林带中轨' }, { name: '量价关系', score: 52, weight: 0.15, signal: 'neutral', description: '量比1.0' }, { name: '指数均线关系', score: 45, weight: 0.10, signal: 'neutral', description: '指数vs均线' }, { name: '转债指数均线', score: 50, weight: 0.10, signal: 'neutral', description: '转债指数中性' }] },
-      { name: '情绪面', score: 55, maxScore: 100, weight: 0.10, status: 'warning', description: '市场情绪中性，局部活跃', icon: 'sentiment', subFactors: [{ name: '涨跌比', score: 60, weight: 0.20, signal: 'neutral', description: '涨跌比1.2' }, { name: '涨停/跌停比', score: 55, weight: 0.18, signal: 'neutral', description: '涨停50/跌停15' }, { name: '新高/新低比', score: 58, weight: 0.15, signal: 'neutral', description: '新高80/新低25' }, { name: '认沽/认购比', score: 55, weight: 0.15, signal: 'neutral', description: 'PCR=0.95' }, { name: '波动率指数', score: 60, weight: 0.12, signal: 'neutral', description: 'VIX=22' }, { name: '融资买入占比', score: 50, weight: 0.10, signal: 'neutral', description: '融资占比8.5%' }, { name: '市场换手率', score: 52, weight: 0.10, signal: 'neutral', description: '换手率2.5%' }] },
-      { name: '消息面', score: 55, maxScore: 100, weight: 0.07, status: 'warning', description: '政策信号中性，产业链平稳', icon: 'news', subFactors: [{ name: '政策信号', score: 55, weight: 0.40, signal: 'neutral', description: '政策中性' }, { name: '事件冲击', score: 50, weight: 0.30, signal: 'neutral', description: '无重大事件' }, { name: '产业链景气', score: 58, weight: 0.30, signal: 'neutral', description: '景气度平稳' }] },
-      { name: '宏观面', score: 52, maxScore: 100, weight: 0.15, status: 'warning', description: 'PMI在荣枯线附近，经济复苏待确认', icon: 'macro', subFactors: [{ name: 'PMI', score: 50, weight: 0.25, signal: 'neutral', description: 'PMI=50.5/50.2' }, { name: 'CPI-PPI剪刀差', score: 55, weight: 0.15, signal: 'neutral', description: 'CPI 2.0/PPI 0.5' }, { name: '出口增速', score: 50, weight: 0.15, signal: 'neutral', description: '出口同比5.8%' }, { name: 'GDP增速', score: 50, weight: 0.20, signal: 'neutral', description: 'GDP 5.0%' }, { name: '工业增加值', score: 52, weight: 0.15, signal: 'neutral', description: '工业增加值5.2%' }, { name: '社零增速', score: 55, weight: 0.10, signal: 'neutral', description: '社零4.8%' }] },
-    ],
-    recommendation: '多维度信号偏中性，建议仓位55%，均衡配置低估值+高评级品种',
-    timestamp: new Date().toISOString(),
-  });
-
-  const getScoreColor = (score: number) => {
+const getScoreColor = (score: number) => {
     if (score >= 70) return '#52c41a';
     if (score >= 50) return '#1890ff';
     if (score >= 30) return '#faad14';
@@ -96,17 +70,11 @@ const TimingSignalPage: React.FC<TimingSignalProps> = ({ enhanced = true }) => {
         setSignal(data);
         setLoadError(null);
       } else {
-        setLoadError('API返回数据为空，显示示例数据');
-        if (!signal) {
-          setSignal(getMockSignal());
-        }
+        setLoadError('API返回数据为空，请检查数据源');
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : '网络请求失败';
-      setLoadError(`数据加载失败: ${msg}，显示缓存数据`);
-      if (!signal) {
-        setSignal(getMockSignal());
-      }
+      setLoadError(`数据加载失败: ${msg}`);
     } finally {
       setLoading(false);
     }

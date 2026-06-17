@@ -22,6 +22,10 @@ class DualLowStrategy(Strategy):
     def on_init(self, data: pd.DataFrame) -> None:
         # data 需包含字段: code, date, price, premium_ratio
         self._data = data.copy()
+        # Defensive: ensure required columns exist with safe defaults
+        if 'premium_ratio' not in self._data.columns:
+            self._data['premium_ratio'] = 15.0  # reasonable default
+        self._data['premium_ratio'] = self._data['premium_ratio'].fillna(15.0)
         self._data['dual_low'] = self._data['price'] + self._data['premium_ratio']
         self._dates = sorted(self._data['date'].unique())
         # 预构建日期索引，避免 on_data 中 O(n) 过滤

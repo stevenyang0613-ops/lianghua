@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import List, Dict, Optional, Callable, Any
 from enum import Enum
+from abc import ABC, abstractmethod
 import json
 import logging
 import hashlib

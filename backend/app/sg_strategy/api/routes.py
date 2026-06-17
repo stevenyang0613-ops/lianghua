@@ -341,27 +341,28 @@ if FASTAPI_AVAILABLE:
         import numpy as np
         from datetime import timedelta
 
-        # 生成模拟数据
-        dates = pd.date_range(request.start_date, request.end_date, freq='B')
-        n_bonds = 50
-        codes = [f"110{i:03d}" for i in range(n_bonds)]
-
-        rows = []
-        np.random.seed(42)
-
-        for d in dates:
-            for code in codes:
-                base_price = 100 + np.random.randn() * 10
+        # 从 AKShare 获取历史数据
+        try:
+            from app.sg_strategy.core.data_adapter import AkshareDataSource
+            ds = AkshareDataSource()
+            cb_list = ds.fetch_all_cb_data()
+            if not cb_list:
+                raise HTTPException(status_code=503, detail="无法获取可转债历史数据，请稍后重试")
+            rows = []
+            for cb in cb_list:
                 rows.append({
-                    'date': d.date(),
-                    'code': code,
-                    'name': f"转债{code[-3:]}",
-                    'close': max(80, min(150, base_price + np.random.randn() * 2)),
-                    'premium_ratio': np.random.uniform(5, 40),
-                    'volume': np.random.uniform(1000, 10000),
+                    'date': cb.date,
+                    'code': cb.code,
+                    'name': cb.name,
+                    'close': cb.close,
+                    'premium_ratio': cb.conversion_premium,
+                    'volume': cb.volume,
                 })
-
-        cb_data = pd.DataFrame(rows)
+            cb_data = pd.DataFrame(rows)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"获取历史数据失败: {e}")
 
         # 运行回测
         config = BacktestConfig(
@@ -446,4 +447,5 @@ if FASTAPI_AVAILABLE:
 
     if __name__ == "__main__":
         import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        from app.config import settings
+        uvicorn.run(app, host=settings.host, port=settings.port)

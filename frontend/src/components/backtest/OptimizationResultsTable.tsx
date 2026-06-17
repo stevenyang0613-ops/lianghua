@@ -122,7 +122,7 @@ const OptimizationResultsTable = memo(function OptimizationResultsTable({
       <Card title={`Top ${optResult.top_results.length} 参数组合排名`} size="small">
         <Table
           dataSource={optResult.top_results}
-          rowKey={(_, i) => String(i)}
+          rowKey={(_: any, i: number | undefined) => String(i ?? 0)}
           size="small"
           pagination={{ pageSize: 10, showSizeChanger: false }}
           columns={optColumns}

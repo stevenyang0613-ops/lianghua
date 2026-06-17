@@ -9,17 +9,10 @@ export default defineConfig({
     react(),
     // echartsSafePlugin(),
     {
-      name: 'remove-crossorigin-and-module',
+      name: 'remove-crossorigin',
       transformIndexHtml(html: string) {
-        // 去掉crossorigin和type="module"（IIFE格式不需要，file://下会导致CORS错误）
-        let result = html.replace(/\s+crossorigin/g, '').replace(/ type="module"/g, '')
-        // 将head中的script移到body末尾：去掉type="module"后普通script在head中同步执行，
-        // 此时body未解析，React createRoot找不到root元素（error #299）
-        const scriptMatch = result.match(/<script (src="[^"]*")><\/script>/)
-        if (scriptMatch) {
-          result = result.replace(/<script src="[^"]*"><\/script>/, '')
-          result = result.replace('</body>', `<script ${scriptMatch[1]}></script>\n</body>`)
-        }
+        // Remove crossorigin attributes (not needed for same-origin HTTP server)
+        let result = html.replace(/\s+crossorigin/g, '')
         return result
       },
     },
@@ -40,21 +33,43 @@ export default defineConfig({
     },
   },
   build: {
-    // Electron file:// 协议下 ES module code splitting 会引发循环依赖问题
-    // 使用 IIFE 格式打包为单个文件，彻底避免所有模块加载问题
+    // When served via local HTTP server (port 8766), we can use ES module code splitting.
+    // Electron file:// protocol doesn't support ES modules, so we keep IIFE as fallback.
+    // The frontend server in main.ts serves the dist output over HTTP.
     modulePreload: false,
     rollupOptions: {
       output: {
-        format: 'iife',
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name][extname]',
-        // IIFE 格式不支持 code splitting，所有代码打包到单个入口
-        inlineDynamicImports: true,
+        format: 'es',
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        manualChunks(id) {
+          // Split large dependencies into separate chunks for parallel loading
+          // IMPORTANT: DO NOT split packages that import from each other into separate
+          // chunks — this creates circular ES module dependencies that cause runtime
+          // 'undefined' errors (e.g. React.createContext on undefined).
+          // vendor-misc, vendor-react, and vendor-antd all import from each other
+          // (circular deps), so they must stay in the SAME chunk: vendor-core.
+          if (id.includes('node_modules/echarts') || id.includes('node_modules/zrender')) {
+            return 'vendor-echarts'
+          }
+          // Merge all packages that have mutual imports into a single chunk
+          // to avoid circular ES module dependency issues at runtime
+          if (id.includes('node_modules/antd') || id.includes('node_modules/@ant-design') ||
+              id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/scheduler') ||
+              id.includes('node_modules/@reduxjs') || id.includes('node_modules/redux') || id.includes('node_modules/zustand') ||
+              id.includes('node_modules/echarts-for-react') ||
+              id.includes('node_modules')) {
+            return 'vendor-core'
+          }
+          if (id.includes('node_modules/dayjs')) {
+            return 'vendor-dayjs'
+          }
+        },
       },
     },
-    chunkSizeWarningLimit: 3000,
+    chunkSizeWarningLimit: 1000,
     minify: 'esbuild',
-    cssCodeSplit: false,
+    cssCodeSplit: true,
   },
 })

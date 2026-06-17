@@ -1,3 +1,4 @@
+import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -30,12 +31,36 @@ class DataStorage:
             self._init_tables()
             if checkpoint_interval > 0:
                 self._start_checkpoint_timer()
+        self._qh_upsert_sql: str = self._build_qh_upsert_sql()
+        self._qh_actual_columns: set[str] = self._detect_qh_actual_columns()
+        self._qh_schema_version: str = (
+            "matched" if self._qh_actual_columns >= set(self._QH_INSERT_COLS)
+            else f"missing:{set(self._QH_INSERT_COLS) - self._qh_actual_columns}"
+        )
+        if self._qh_schema_version != "matched":
+            logger.warning(
+                f"[Storage] quotes_history schema mismatch: {self._qh_schema_version}; "
+                f"expected {self._QH_UPSERT_VERSION}"
+            )
+        self._qh_schema_timer: threading.Timer | None = None
+        if not read_only:
+            self._start_schema_recheck_timer()
         logger.info(f"[Storage] Connected to {db_path}{' (read-only)' if read_only else ''}")
 
     def _connect_with_recovery(self, db_path: str, read_only: bool):
+        """
+        连接 DuckDB，自动处理锁冲突。
+
+        策略:
+        1. 直接连接
+        2. 失败 → 删除 WAL 重试
+        3. 仍失败 → 自动查找并杀死持有锁的进程
+        4. 再失败 → 抛出明确错误
+        """
         try:
             return duckdb.connect(db_path, read_only=read_only)
         except Exception as e:
+            # Step 1: 删除 WAL 文件重试（安全操作）
             logger.warning(f"[Storage] duckdb.connect failed: {e}, attempting WAL recovery")
             wal_path = db_path + ".wal"
             try:
@@ -44,19 +69,14 @@ class DataStorage:
                     logger.info(f"[Storage] Deleted WAL file, retrying connect")
                 return duckdb.connect(db_path, read_only=read_only)
             except Exception as e2:
-                logger.warning(f"[Storage] Connect after WAL delete failed: {e2}, deleting DB and WAL")
-                try:
-                    if Path(wal_path).exists():
-                        Path(wal_path).unlink()
-                    if Path(db_path).exists():
-                        Path(db_path).unlink()
-                    logger.warning(f"[Storage] Deleted DB and WAL files (history data lost), retrying connect")
-                    return duckdb.connect(db_path, read_only=read_only)
-                except Exception as e3:
-                    raise RuntimeError(
-                        f"Cannot open DuckDB at {db_path} even after deleting DB and WAL. "
-                        f"Original error: {e}. WAL-delete error: {e2}. Full-delete error: {e3}"
-                    ) from e3
+                # Step 2: 自动查找并杀死持有锁的进程 — 危险！子进程可能杀死父进程
+                # 已禁用：此逻辑会导致子进程（如 score history bootstrap）杀死主进程
+                # 改为直接报错
+                logger.warning(f"[Storage] WAL recovery failed, database is locked")
+                raise RuntimeError(
+                    f"Cannot open DuckDB at {db_path}. Database is locked by another process.\n"
+                    f"Original errors: {e} / {e2}"
+                ) from e2
 
     @property
     def conn(self):
@@ -120,6 +140,18 @@ class DataStorage:
             "ALTER TABLE quotes_history ADD COLUMN last_trade_date DATE",
             "ALTER TABLE quotes_history ADD COLUMN maturity_date DATE",
             "ALTER TABLE quotes_history ADD COLUMN redemption_price DOUBLE DEFAULT 0",
+            "ALTER TABLE quotes_history ADD COLUMN stock_code VARCHAR DEFAULT ''",
+            "ALTER TABLE quotes_history ADD COLUMN roe DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN gpm DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN cagr DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN debt_ratio DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN pe DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN pb DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN iv DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN buyback_amount DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN mgmt_buy_price DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN industry VARCHAR",
+            "ALTER TABLE quotes_history ADD COLUMN rating VARCHAR",
         ):
             try:
                 self._conn.execute(ddl)
@@ -130,6 +162,10 @@ class DataStorage:
                     self._conn.execute("ROLLBACK")
                 except Exception:
                     pass
+            try:
+                self._conn.execute("COMMIT")
+            except Exception:
+                pass
 
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_snapshots (
@@ -141,9 +177,115 @@ class DataStorage:
                 close_price DOUBLE,
                 volume DOUBLE,
                 snapshot_date DATE,
+                premium_ratio DOUBLE DEFAULT 0,
+                change_pct DOUBLE DEFAULT 0,
+                stock_price DOUBLE DEFAULT 0,
+                conversion_value DOUBLE DEFAULT 0,
+                dual_low DOUBLE DEFAULT 0,
+                ytm DOUBLE DEFAULT 0,
+                remaining_years DOUBLE DEFAULT 0,
+                roe DOUBLE,
+                gpm DOUBLE,
+                cagr DOUBLE,
+                debt_ratio DOUBLE,
+                pe DOUBLE,
+                pb DOUBLE,
+                iv DOUBLE,
+                buyback_amount DOUBLE,
+                mgmt_buy_price DOUBLE,
+                industry VARCHAR,
+                rating VARCHAR,
+                outstanding_scale DOUBLE DEFAULT 0,
+                stock_code VARCHAR DEFAULT '',
                 UNIQUE(snapshot_date, code)
             )
         """)
+
+        _NEW_QH_COLS = [
+            "ALTER TABLE quotes_history ADD COLUMN iv_source VARCHAR",
+            "ALTER TABLE quotes_history ADD COLUMN turnover_rate DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN current_ratio DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN outstanding_scale DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN net_capital_flow DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN net_capital_flow_pct DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN net_super_flow DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN net_big_flow DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN pledge_ratio DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN momentum_5d DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN momentum_10d DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN momentum_20d DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN momentum_60d DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN event_score DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN event_detail VARCHAR",
+            "ALTER TABLE quotes_history ADD COLUMN bond_value DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN stock_name VARCHAR",
+            "ALTER TABLE quotes_history ADD COLUMN concepts JSON",
+        ]
+        for ddl in _NEW_QH_COLS:
+            try:
+                self._conn.execute(ddl)
+                col_name = ddl.split("ADD COLUMN")[-1].strip()
+                logger.info(f"[Storage] Migrated quotes_history: {col_name}")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+            try:
+                self._conn.execute("COMMIT")
+            except Exception:
+                pass
+
+        for ddl in (
+            "ALTER TABLE daily_snapshots ADD COLUMN premium_ratio DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN change_pct DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN stock_price DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN conversion_value DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN dual_low DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN ytm DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN remaining_years DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN roe DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN gpm DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN cagr DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN debt_ratio DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN pe DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN pb DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN iv DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN buyback_amount DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN mgmt_buy_price DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN industry VARCHAR",
+            "ALTER TABLE daily_snapshots ADD COLUMN rating VARCHAR",
+            "ALTER TABLE daily_snapshots ADD COLUMN outstanding_scale DOUBLE DEFAULT 0",
+            "ALTER TABLE daily_snapshots ADD COLUMN stock_code VARCHAR DEFAULT ''",
+            "ALTER TABLE daily_snapshots ADD COLUMN iv_source VARCHAR",
+            "ALTER TABLE daily_snapshots ADD COLUMN turnover_rate DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN current_ratio DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN net_capital_flow DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN net_capital_flow_pct DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN net_super_flow DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN net_big_flow DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN pledge_ratio DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN momentum_5d DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN momentum_10d DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN momentum_20d DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN momentum_60d DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN event_score DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN event_detail VARCHAR",
+            "ALTER TABLE daily_snapshots ADD COLUMN bond_value DOUBLE",
+        ):
+            try:
+                self._conn.execute(ddl)
+                col_name = ddl.split("ADD COLUMN")[-1].strip()
+                logger.info(f"[Storage] Migrated daily_snapshots: {col_name}")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+            try:
+                self._conn.execute("COMMIT")
+            except Exception:
+                pass
 
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes_history(code)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_timestamp ON quotes_history(timestamp)")
@@ -383,65 +525,164 @@ class DataStorage:
             )
         """)
 
+        # 通知渠道表
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS notification_channels (
+                id INTEGER PRIMARY KEY,
+                channel_type VARCHAR,
+                name VARCHAR,
+                config VARCHAR,
+                enabled BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP
+            )
+        """)
+
     def _query_to_dicts(self, cursor) -> list[dict]:
         """从 cursor.description 获取列名，兼容别名和 JOIN 查询"""
         columns = [desc[0] for desc in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def save_quote(self, quote: ConvertibleQuote) -> None:
+        cols = ", ".join(self._QH_INSERT_COLS)
+        phs = ", ".join("?" for _ in self._QH_INSERT_COLS)
+        row = self._get_qh_row(quote)
         with self._write() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO quotes_history
-                (code, name, price, change_pct, stock_price, stock_change_pct,
-                 conversion_price, conversion_value, premium_ratio, dual_low,
-                 ytm, volume, remaining_years, forced_call_days,
-                 is_called, call_status, last_trade_date, maturity_date, redemption_price,
-                 timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
-            """, (
-                quote.code, quote.name, quote.price, quote.change_pct,
-                quote.stock_price, quote.stock_change_pct, quote.conversion_price,
-                quote.conversion_value, quote.premium_ratio, quote.dual_low,
-                quote.ytm, quote.volume, quote.remaining_years, quote.forced_call_days,
-                bool(getattr(quote, "is_called", False)),
-                str(getattr(quote, "call_status", "") or ""),
-                getattr(quote, "last_trade_date", None),
-                getattr(quote, "maturity_date", None),
-                float(getattr(quote, "redemption_price", 0.0) or 0.0),
-                quote.timestamp
-            ))
+            conn.execute(f"INSERT OR REPLACE INTO quotes_history ({cols}) VALUES ({phs})", row)
+
+    _QH_INSERT_COLS = [
+        "code", "name", "price", "change_pct", "stock_price", "stock_change_pct",
+        "conversion_price", "conversion_value", "premium_ratio", "dual_low",
+        "ytm", "volume", "remaining_years", "forced_call_days",
+        "is_called", "call_status", "last_trade_date", "maturity_date", "redemption_price",
+        "timestamp", "stock_code", "stock_name", "concepts", "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv",
+        "iv_source", "buyback_amount", "mgmt_buy_price", "industry", "rating",
+        "turnover_rate", "current_ratio", "outstanding_scale",
+        "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
+        "pledge_ratio",
+        "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
+        "event_score", "event_detail", "bond_value",
+    ]
+    _QH_ALWAYS_OVERWRITE = {"price"}
+    _QH_COALESCE_MERGE = {
+        "change_pct", "stock_price", "stock_change_pct", "conversion_value",
+        "premium_ratio", "dual_low", "ytm", "volume", "stock_code", "stock_name", "concepts",
+        "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv", "iv_source",
+        "buyback_amount", "mgmt_buy_price", "industry", "rating",
+        "turnover_rate", "current_ratio", "outstanding_scale",
+        "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
+        "pledge_ratio",
+        "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
+        "event_score", "event_detail", "bond_value",
+    }
+    _QH_UPSERT_VERSION = "v2"
+
+    def _build_qh_upsert_sql(self) -> str:
+        cols = self._QH_INSERT_COLS
+        placeholders = ", ".join("?" for _ in cols)
+        col_list = ", ".join(cols)
+        set_parts = []
+        for c in cols:
+            if c in self._QH_ALWAYS_OVERWRITE:
+                set_parts.append(f"{c} = EXCLUDED.{c}")
+            elif c in self._QH_COALESCE_MERGE:
+                set_parts.append(f"{c} = COALESCE(EXCLUDED.{c}, quotes_history.{c})")
+        return (
+            f"INSERT INTO quotes_history ({col_list}) VALUES ({placeholders}) "
+            f"ON CONFLICT DO UPDATE SET {', '.join(set_parts)}"
+        )
+
+    def _detect_qh_actual_columns(self) -> set[str]:
+        try:
+            rows = self.conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'quotes_history'"
+            ).fetchall()
+            return {r[0] for r in rows}
+        except Exception as e:
+            logger.debug(f"[Storage] Column detection failed (table may not exist): {e}")
+            return set()
+
+    _QH_SCHEMA_RECHECK_INTERVAL = 300  # 5 minutes
+
+    def _start_schema_recheck_timer(self):
+        self._qh_schema_timer = threading.Timer(self._QH_SCHEMA_RECHECK_INTERVAL, self._qh_schema_recheck_loop)
+        self._qh_schema_timer.daemon = True
+        self._qh_schema_timer.start()
+
+    def _qh_schema_recheck_loop(self):
+        try:
+            new_cols = self._detect_qh_actual_columns()
+            new_version = (
+                "matched" if new_cols >= set(self._QH_INSERT_COLS)
+                else f"missing:{set(self._QH_INSERT_COLS) - new_cols}"
+            )
+            if new_version != self._qh_schema_version:
+                self._qh_actual_columns = new_cols
+                self._qh_schema_version = new_version
+                self._qh_upsert_sql = self._build_qh_upsert_sql()
+                logger.info(
+                    f"[Storage] quotes_history schema changed: {new_version}; "
+                    f"upsert SQL rebuilt"
+                )
+        except Exception as e:
+            logger.debug(f"[Storage] Schema recheck failed: {e}")
+        finally:
+            self._start_schema_recheck_timer()
+
+    def _get_qh_row(self, q):
+        """Build a tuple for quotes_history upsert matching _QH_INSERT_COLS order"""
+        return (
+            q.code, q.name, q.price, q.change_pct,
+            q.stock_price, q.stock_change_pct, q.conversion_price,
+            q.conversion_value, q.premium_ratio, q.dual_low,
+            q.ytm, q.volume, q.remaining_years, q.forced_call_days,
+            bool(getattr(q, "is_called", False)),
+            str(getattr(q, "call_status", "") or ""),
+            getattr(q, "last_trade_date", None),
+            getattr(q, "maturity_date", None),
+            float(getattr(q, "redemption_price", 0.0) or 0.0),
+            q.timestamp,
+            getattr(q, "stock_code", None) or None,
+            getattr(q, "stock_name", None) or None,
+            json.dumps(getattr(q, "concepts", None) or []) if getattr(q, "concepts", None) else None,
+            getattr(q, "roe", None),
+            getattr(q, "gpm", None),
+            getattr(q, "cagr", None),
+            getattr(q, "debt_ratio", None),
+            getattr(q, "pe", None),
+            getattr(q, "pb", None),
+            getattr(q, "iv", None),
+            getattr(q, "iv_source", None),
+            getattr(q, "buyback_amount", None),
+            getattr(q, "mgmt_buy_price", None),
+            getattr(q, "industry", None),
+            getattr(q, "rating", None),
+            getattr(q, "turnover_rate", None),
+            getattr(q, "current_ratio", None),
+            getattr(q, "outstanding_scale", None),
+            getattr(q, "net_capital_flow", None),
+            getattr(q, "net_capital_flow_pct", None),
+            getattr(q, "net_super_flow", None),
+            getattr(q, "net_big_flow", None),
+            getattr(q, "pledge_ratio", None),
+            getattr(q, "momentum_5d", None),
+            getattr(q, "momentum_10d", None),
+            getattr(q, "momentum_20d", None),
+            getattr(q, "momentum_60d", None),
+            getattr(q, "event_score", None),
+            getattr(q, "event_detail", None),
+            getattr(q, "bond_value", None),
+        )
 
     def save_quotes_batch(self, quotes: list[ConvertibleQuote]) -> None:
         if not quotes:
             return
-        rows = [
-            (q.code, q.name, q.price, q.change_pct,
-             q.stock_price, q.stock_change_pct, q.conversion_price,
-             q.conversion_value, q.premium_ratio, q.dual_low,
-             q.ytm, q.volume, q.remaining_years, q.forced_call_days,
-             bool(getattr(q, "is_called", False)),
-             str(getattr(q, "call_status", "") or ""),
-             getattr(q, "last_trade_date", None),
-             getattr(q, "maturity_date", None),
-             float(getattr(q, "redemption_price", 0.0) or 0.0),
-             q.timestamp)
-            for q in quotes
-        ]
+        rows = [self._get_qh_row(q) for q in quotes]
         try:
+            sql = self._qh_upsert_sql
             with self._write() as conn:
-                conn.executemany("""
-                    INSERT INTO quotes_history
-                    (code, name, price, change_pct, stock_price, stock_change_pct,
-                     conversion_price, conversion_value, premium_ratio, dual_low,
-                     ytm, volume, remaining_years, forced_call_days,
-                     is_called, call_status, last_trade_date, maturity_date, redemption_price,
-                     timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT DO NOTHING
-                """, rows)
-            logger.debug(f"[Storage] Saved {len(quotes)} quotes")
+                conn.executemany(sql, rows)
+
+            logger.debug(f"[Storage] Saved {len(quotes)} quotes (upsert)")
             try:
                 revision_count = self.detect_and_save_revisions(quotes)
                 if revision_count > 0:
@@ -450,24 +691,206 @@ class DataStorage:
                 logger.warning(f"[Storage] Revision detection failed: {e}")
         except Exception as e:
             logger.error(f"Batch insert failed: {e}")
+            # 自动检测 schema 变化并重建 upsert SQL
+            if "does not have a column" in str(e):
+                try:
+                    self.conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                logger.warning(f"[Storage] Schema mismatch detected, re-detecting columns...")
+                new_cols = self._detect_qh_actual_columns()
+                if new_cols:
+                    # 只插入实际存在的列
+                    valid_cols = [c for c in self._QH_INSERT_COLS if c in new_cols]
+                    if valid_cols:
+                        logger.info(f"[Storage] Falling back to {len(valid_cols)}/{len(self._QH_INSERT_COLS)} columns")
+                        try:
+                            self._qh_actual_columns = new_cols
+                            self._qh_schema_version = "fallback"
+                            old_sql = self._qh_upsert_sql
+                            self._qh_upsert_sql = self._build_qh_upsert_sql_with_cols(valid_cols)
+                            rows_filtered = [self._get_qh_row_filtered(q, valid_cols) for q in quotes]
+                            with self._write() as conn:
+                                conn.executemany(self._qh_upsert_sql, rows_filtered)
+                            logger.info(f"[Storage] Fallback batch insert succeeded for {len(quotes)} quotes")
+                        except Exception as e2:
+                            logger.error(f"[Storage] Fallback batch insert also failed: {e2}")
+    
+    def _build_qh_upsert_sql_with_cols(self, cols: list[str]) -> str:
+        placeholders = ", ".join("?" for _ in cols)
+        col_list = ", ".join(cols)
+        set_parts = []
+        for c in cols:
+            if c in self._QH_ALWAYS_OVERWRITE:
+                set_parts.append(f"{c} = EXCLUDED.{c}")
+            elif c in self._QH_COALESCE_MERGE:
+                set_parts.append(f"{c} = COALESCE(EXCLUDED.{c}, quotes_history.{c})")
+        return (
+            f"INSERT INTO quotes_history ({col_list}) VALUES ({placeholders}) "
+            f"ON CONFLICT DO UPDATE SET {', '.join(set_parts)}"
+        )
+    
+    @staticmethod
+    def _get_qh_row_filtered(q, cols: list[str]) -> tuple:
+        row_map = {
+            "code": q.code, "name": q.name, "price": q.price, "change_pct": q.change_pct,
+            "stock_price": q.stock_price, "stock_change_pct": q.stock_change_pct,
+            "conversion_price": q.conversion_price, "conversion_value": q.conversion_value,
+            "premium_ratio": q.premium_ratio, "dual_low": q.dual_low,
+            "ytm": q.ytm, "volume": q.volume, "remaining_years": q.remaining_years,
+            "forced_call_days": q.forced_call_days,
+            "is_called": bool(getattr(q, "is_called", False)),
+            "call_status": str(getattr(q, "call_status", "") or ""),
+            "last_trade_date": getattr(q, "last_trade_date", None),
+            "maturity_date": getattr(q, "maturity_date", None),
+            "redemption_price": float(getattr(q, "redemption_price", 0.0) or 0.0),
+            "timestamp": q.timestamp,
+            "stock_code": getattr(q, "stock_code", None) or None,
+            "roe": getattr(q, "roe", None),
+            "gpm": getattr(q, "gpm", None),
+            "cagr": getattr(q, "cagr", None),
+            "debt_ratio": getattr(q, "debt_ratio", None),
+            "pe": getattr(q, "pe", None),
+            "pb": getattr(q, "pb", None),
+            "iv": getattr(q, "iv", None),
+            "iv_source": getattr(q, "iv_source", None),
+            "buyback_amount": getattr(q, "buyback_amount", None),
+            "mgmt_buy_price": getattr(q, "mgmt_buy_price", None),
+            "industry": getattr(q, "industry", None),
+            "rating": getattr(q, "rating", None),
+            "turnover_rate": getattr(q, "turnover_rate", None),
+            "current_ratio": getattr(q, "current_ratio", None),
+            "outstanding_scale": getattr(q, "outstanding_scale", None),
+            "net_capital_flow": getattr(q, "net_capital_flow", None),
+            "net_capital_flow_pct": getattr(q, "net_capital_flow_pct", None),
+            "net_super_flow": getattr(q, "net_super_flow", None),
+            "net_big_flow": getattr(q, "net_big_flow", None),
+            "pledge_ratio": getattr(q, "pledge_ratio", None),
+            "momentum_5d": getattr(q, "momentum_5d", None),
+            "momentum_10d": getattr(q, "momentum_10d", None),
+            "momentum_20d": getattr(q, "momentum_20d", None),
+            "momentum_60d": getattr(q, "momentum_60d", None),
+            "event_score": getattr(q, "event_score", None),
+            "event_detail": getattr(q, "event_detail", None),
+            "bond_value": getattr(q, "bond_value", None),
+        }
+        return tuple(row_map.get(c) for c in cols)
 
     def save_daily_snapshot(self, quotes: list[ConvertibleQuote], snapshot_date: Optional[date] = None) -> None:
         snapshot_date = snapshot_date or date.today()
+        _DS_COLS = [
+            "code", "name", "open_price", "high_price", "low_price", "close_price", "volume", "snapshot_date",
+            "premium_ratio", "change_pct", "stock_price", "conversion_value", "dual_low",
+            "ytm", "remaining_years", "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv", "iv_source",
+            "buyback_amount", "mgmt_buy_price", "industry", "rating", "outstanding_scale", "stock_code",
+            "turnover_rate", "current_ratio",
+            "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
+            "pledge_ratio",
+            "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
+            "event_score", "event_detail", "bond_value",
+        ]
         with self._write() as conn:
             for quote in quotes:
-                conn.execute("""
-                    INSERT INTO daily_snapshots
-                    (code, name, open_price, high_price, low_price, close_price, volume, snapshot_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (snapshot_date, code) DO UPDATE SET
-                        close_price = excluded.close_price,
-                        high_price = GREATEST(high_price, excluded.high_price),
-                        low_price = LEAST(low_price, excluded.low_price),
-                        volume = excluded.volume
-                """, (
+                def _g(f, default=None):
+                    return getattr(quote, f, default)
+                row = (
                     quote.code, quote.name, quote.price, quote.price, quote.price,
-                    quote.price, quote.volume, snapshot_date
-                ))
+                    quote.price, quote.volume, snapshot_date,
+                    _g('premium_ratio', 0) or 0, _g('change_pct', 0) or 0,
+                    _g('stock_price', 0) or 0, _g('conversion_value', 0) or 0,
+                    _g('dual_low', 0) or 0, _g('ytm', 0) or 0,
+                    _g('remaining_years', 0) or 0, _g('roe'), _g('gpm'), _g('cagr'),
+                    _g('debt_ratio'), _g('pe'), _g('pb'), _g('iv'), _g('iv_source'),
+                    _g('buyback_amount'), _g('mgmt_buy_price'), _g('industry'), _g('rating'),
+                    _g('outstanding_scale', 0) or 0, _g('stock_code', '') or '',
+                    _g('turnover_rate'), _g('current_ratio'),
+                    _g('net_capital_flow'), _g('net_capital_flow_pct'),
+                    _g('net_super_flow'), _g('net_big_flow'),
+                    _g('pledge_ratio'),
+                    _g('momentum_5d'), _g('momentum_10d'), _g('momentum_20d'), _g('momentum_60d'),
+                    _g('event_score'), _g('event_detail'), _g('bond_value'),
+                )
+                cols = ", ".join(_DS_COLS)
+                phs = ", ".join("?" for _ in _DS_COLS)
+                update_set = ", ".join(f"{c} = COALESCE(EXCLUDED.{c}, daily_snapshots.{c})" for c in _DS_COLS if c not in ("code", "name", "snapshot_date"))
+                conn.execute(
+                    f"INSERT INTO daily_snapshots ({cols}) VALUES ({phs}) "
+                    f"ON CONFLICT (snapshot_date, code) DO UPDATE SET {update_set}",
+                    row
+                )
+        # 前向填充 iv/pe — 在写锁内部执行
+        try:
+            self._conn.execute('''
+                UPDATE daily_snapshots
+                SET iv = (
+                    SELECT prev.iv FROM daily_snapshots prev
+                    WHERE prev.code = daily_snapshots.code
+                      AND prev.snapshot_date = (
+                          SELECT MAX(sd.snapshot_date) FROM daily_snapshots sd
+                          WHERE sd.code = daily_snapshots.code AND sd.snapshot_date < daily_snapshots.snapshot_date
+                      )
+                      AND prev.iv IS NOT NULL AND prev.iv > 0
+                )
+                WHERE snapshot_date = ?
+                  AND (iv IS NULL OR iv = 0)
+            ''', (snapshot_date,))
+        except Exception:
+            pass
+
+        # 全局前向填充: 对所有历史日期中 iv 为空的记录
+        try:
+            self._conn.execute('''
+                UPDATE daily_snapshots d
+                SET iv = (
+                    SELECT d2.iv FROM daily_snapshots d2
+                    WHERE d2.code = d.code
+                      AND d2.snapshot_date < d.snapshot_date
+                      AND d2.iv IS NOT NULL
+                      AND d2.iv > 0
+                    ORDER BY d2.snapshot_date DESC
+                    LIMIT 1
+                )
+                WHERE d.iv IS NULL OR d.iv = 0
+            ''')
+        except Exception as e:
+            logger.debug(f"[Storage] Global iv forward-fill: {e}")
+
+        # 前向填充 pe（当前日期）
+        try:
+            self._conn.execute('''
+                UPDATE daily_snapshots
+                SET pe = (
+                    SELECT prev.pe FROM daily_snapshots prev
+                    WHERE prev.code = daily_snapshots.code
+                      AND prev.snapshot_date = (
+                          SELECT MAX(sd.snapshot_date) FROM daily_snapshots sd
+                          WHERE sd.code = daily_snapshots.code AND sd.snapshot_date < daily_snapshots.snapshot_date
+                      )
+                      AND prev.pe IS NOT NULL AND prev.pe > 0
+                )
+                WHERE snapshot_date = ?
+                  AND (pe IS NULL OR pe = 0)
+            ''', (snapshot_date,))
+        except Exception:
+            pass
+
+        # 全局前向填充 pe
+        try:
+            self._conn.execute('''
+                UPDATE daily_snapshots d
+                SET pe = (
+                    SELECT d2.pe FROM daily_snapshots d2
+                    WHERE d2.code = d.code
+                      AND d2.snapshot_date < d.snapshot_date
+                      AND d2.pe IS NOT NULL
+                      AND d2.pe > 0
+                    ORDER BY d2.snapshot_date DESC
+                    LIMIT 1
+                )
+                WHERE d.pe IS NULL OR d.pe = 0
+            ''')
+        except Exception as e:
+            logger.debug(f"[Storage] Global pe forward-fill: {e}")
         logger.info(f"[Storage] Saved daily snapshot for {snapshot_date}, {len(quotes)} bonds")
 
     def get_quote_history(self, code: str, limit: int = 100) -> list[dict]:
@@ -1280,10 +1703,30 @@ class DataStorage:
 
     @contextmanager
     def _write(self):
-        """获取写锁并确保连接可用"""
+        """获取写锁并确保连接可用 — 带BusyError重试"""
         with self._write_lock:
             self.ensure_connection()
             yield self._conn
+
+    def _execute_with_retry(self, sql: str, params=None, max_retries: int = 3) -> None:
+        """执行SQL，遇到 DuckDB BusyError 自动重试"""
+        import time as _time
+        for attempt in range(max_retries + 1):
+            try:
+                if params:
+                    self._conn.execute(sql, params)
+                else:
+                    self._conn.execute(sql)
+                return
+            except Exception as e:
+                err_str = str(e).lower()
+                is_busy = "busy" in err_str or "timeout" in err_str or "lock" in err_str
+                if is_busy and attempt < max_retries:
+                    wait = 0.2 * (2 ** attempt)
+                    _time.sleep(wait)
+                    self.ensure_connection()
+                    continue
+                raise
 
     def checkpoint(self):
         """执行 DuckDB WAL checkpoint，将 WAL 数据写入主文件"""

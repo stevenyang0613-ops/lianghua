@@ -252,8 +252,31 @@ async def backfill_history(
             if top_n > 0:
                 bonds = bonds[:top_n]
             codes = [b.code for b in bonds]
+            factor_snapshot = {}
+            for b in bonds:
+                factor_snapshot[b.code] = {
+                    "premium_ratio": b.premium_ratio or 0,
+                    "change_pct": b.change_pct or 0,
+                    "stock_price": b.stock_price or 0,
+                    "conversion_value": b.conversion_value or 0,
+                    "dual_low": b.dual_low or 0,
+                    "ytm": b.ytm or 0,
+                    "remaining_years": b.remaining_years or 0,
+                    "roe": getattr(b, 'roe', None),
+                    "gpm": getattr(b, 'gpm', None),
+                    "cagr": getattr(b, 'cagr', None),
+                    "debt_ratio": getattr(b, 'debt_ratio', None),
+                    "pe": getattr(b, 'pe', None),
+                    "pb": getattr(b, 'pb', None),
+                    "iv": getattr(b, 'iv', None),
+                    "buyback_amount": getattr(b, 'buyback_amount', None),
+                    "mgmt_buy_price": getattr(b, 'mgmt_buy_price', None),
+                    "industry": getattr(b, 'industry', None),
+                    "rating": getattr(b, 'rating', None),
+                    "outstanding_scale": getattr(b, 'outstanding_scale', 0) or 0,
+                }
             loader = HistoricalDataLoader(storage)
-            await loader.seed_historical_data(codes, days=days)
+            await loader.seed_historical_data(codes, days=days, factor_snapshot=factor_snapshot)
         except Exception as e:
             import logging
             logging.getLogger(__name__).exception(f"[Backfill] failed: {e}")
