@@ -9,16 +9,34 @@ dependencies = [
     "websockets>=12.0",
     "duckdb>=1.0.0",
     "akshare>=1.14.0",
+    "akshare-proxy-patch>=0.5.0",
     "pandas>=2.2.0",
     "numpy>=1.26.0",
     "pydantic>=2.6.0",
     "pydantic-settings>=2.2.0",
+    "jieba>=0.42",
+    "python-multipart>=0.0.6",
+    "sqlalchemy>=2.0.25",
+    "aiosqlite>=0.19.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "httpx>=0.26.0",
+    "redis>=5.0.1",
+    "openai>=1.10.0",
+    "anthropic>=0.18.0",
+    "aiofiles>=23.2.1",
+    "aiohttp>=3.9.0",
+    "python-dotenv>=1.0.0",
+    "prometheus-client>=0.19.0",
+    "structlog>=24.1.0",
+    "celery>=5.3.0",
+    "certifi>=2024.2.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
+    "pytest-asyncio>=0.23.0,<2.0.0",
     "httpx>=0.27.0",
     "ruff>=0.3.0",
     "mypy>=1.9.0",
@@ -30,6 +48,9 @@ monitoring = [
     "psutil>=5.9.0",
 ]
 
+[project.scripts]
+sync-requirements = "scripts.sync_requirements:main"
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
@@ -38,6 +59,16 @@ line-length = 100
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# 标记配置：serial 标记的测试默认运行，但需要 pytest-xdist 的 --dist loadgroup
+# 或 --dist loadfile 才会真正生效（同一 marker 在同一 worker）。
+# 单进程运行时 serial 标记仅作文档作用。
+markers = [
+    "serial: 标记该测试必须串行执行（不可与其他测试并行）。适用于存在 fixture 共享状态竞争的测试。",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:py_mini_racer",
+    "ignore::SyntaxWarning:jieba",
+    "ignore::DeprecationWarning:crypt",
+    "ignore::DeprecationWarning:jose",
+    "ignore::DeprecationWarning:passlib",
 ]

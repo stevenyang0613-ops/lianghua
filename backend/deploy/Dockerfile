@@ -1,9 +1,9 @@
-# 松岗量化可转债策略 V3.0 - Docker镜像
+# 西部量化可转债策略 V3.0 - Docker镜像
 FROM python:3.11-slim
 
-LABEL maintainer="Songgang Quant Team"
+LABEL maintainer="Xibu Quant Team"
 LABEL version="3.0.0"
-LABEL description="松岗量化可转债策略微服务镜像"
+LABEL description="西部量化可转债策略微服务镜像"
 
 # 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -45,4 +45,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000 50051 9090
 
 # 启动命令
-CMD ["python", "-m", "uvicorn", "app.sg_strategy.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

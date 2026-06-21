@@ -17,6 +17,7 @@
     "build:electron-ts": "cd electron && npx tsc",
     "build:backend": "cd backend && pyinstaller lianghua-backend.spec",
     "validate": "bash scripts/validate-build.sh",
+    "sync:dev-bundled": "bash scripts/sync-dev-to-bundled.sh",
     "build:electron": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder",
     "build:mac": "npm run validate && npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --mac",
     "build:win": "npm run build:electron-ts && cd frontend && npm run build && cd .. && npx electron-builder --win",

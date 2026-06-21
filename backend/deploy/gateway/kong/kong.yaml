@@ -1,16 +1,16 @@
-# 松岗量化可转债策略 V3.0 - API网关配置
+# 西部量化可转债策略 V3.0 - API网关配置
 # Kong配置
 
 _format_version: "3.0"
 
 _transformations:
-  - description: "松岗量化策略API网关配置"
+  - description: "西部量化策略API网关配置"
     mappings: []
 
 services:
   # ============ 打分服务 ============
   - name: scoring-service
-    url: http://scoring-service.sg-strategy.svc.cluster.local:8000
+    url: http://scoring-service.xb-strategy.svc.cluster.local:8000
     routes:
       - name: scoring-route
         paths:
@@ -36,7 +36,7 @@ services:
 
   # ============ 信号服务 ============
   - name: signal-service
-    url: http://signal-service.sg-strategy.svc.cluster.local:8001
+    url: http://signal-service.xb-strategy.svc.cluster.local:8001
     routes:
       - name: signal-route
         paths:
@@ -55,7 +55,7 @@ services:
 
   # ============ 执行服务 ============
   - name: execution-service
-    url: http://execution-service.sg-strategy.svc.cluster.local:8002
+    url: http://execution-service.xb-strategy.svc.cluster.local:8002
     routes:
       - name: execution-route
         paths:
@@ -84,7 +84,7 @@ services:
 
   # ============ 风控服务 ============
   - name: risk-service
-    url: http://risk-service.sg-strategy.svc.cluster.local:8003
+    url: http://risk-service.xb-strategy.svc.cluster.local:8003
     routes:
       - name: risk-route
         paths:
@@ -101,7 +101,7 @@ services:
 
   # ============ 数据服务 ============
   - name: data-service
-    url: http://data-service.sg-strategy.svc.cluster.local:8004
+    url: http://data-service.xb-strategy.svc.cluster.local:8004
     routes:
       - name: data-route
         paths:
@@ -122,7 +122,7 @@ services:
 
   # ============ 回测服务 ============
   - name: backtest-service
-    url: http://backtest-service.sg-strategy.svc.cluster.local:8005
+    url: http://backtest-service.xb-strategy.svc.cluster.local:8005
     routes:
       - name: backtest-route
         paths:
@@ -206,13 +206,13 @@ plugins:
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
-  name: sg-strategy-api
-  namespace: sg-strategy
+  name: xb-strategy-api
+  namespace: xb-strategy
 spec:
   hosts:
-    - api.sg-strategy.com
+    - api.xb-strategy.com
   gateways:
-    - sg-strategy-gateway
+    - xb-strategy-gateway
   http:
     # 打分服务路由
     - match:
@@ -286,7 +286,7 @@ apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
 metadata:
   name: scoring-service
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   host: scoring-service
   trafficPolicy:
@@ -324,8 +324,8 @@ spec:
 apiVersion: networking.istio.io/v1beta1
 kind: Gateway
 metadata:
-  name: sg-strategy-gateway
-  namespace: sg-strategy
+  name: xb-strategy-gateway
+  namespace: xb-strategy
 spec:
   selector:
     istio: ingressgateway
@@ -335,7 +335,7 @@ spec:
         name: http
         protocol: HTTP
       hosts:
-        - api.sg-strategy.com
+        - api.xb-strategy.com
       tls:
         httpsRedirect: true
     - port:
@@ -343,10 +343,10 @@ spec:
         name: https
         protocol: HTTPS
       hosts:
-        - api.sg-strategy.com
+        - api.xb-strategy.com
       tls:
         mode: SIMPLE
-        credentialName: sg-strategy-tls
+        credentialName: xb-strategy-tls
 
 ---
 # Istio AuthorizationPolicy配置
@@ -354,14 +354,14 @@ spec:
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
-  name: sg-strategy-authz
-  namespace: sg-strategy
+  name: xb-strategy-authz
+  namespace: xb-strategy
 spec:
   rules:
     - from:
         - source:
             principals:
-              - cluster.local/ns/sg-strategy/sa/api-gateway
+              - cluster.local/ns/xb-strategy/sa/api-gateway
       to:
         - operation:
             methods:
@@ -390,7 +390,7 @@ apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
 metadata:
   name: default
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   mtls:
     mode: STRICT

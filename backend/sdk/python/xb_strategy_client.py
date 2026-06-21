@@ -1,4 +1,4 @@
-"""松岗量化可转债策略 V3.0 Python SDK
+"""西部量化可转债策略 V3.0 Python SDK
 
 功能:
 - API客户端封装
@@ -42,7 +42,7 @@ class ClientConfig:
     """客户端配置"""
     api_key: str
     api_secret: str
-    base_url: str = "https://api.sg-strategy.com"
+    base_url: str = "https://api.xb-strategy.com"
     timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -104,7 +104,7 @@ class SignatureAuth:
 # ============ 同步客户端 ============
 
 class SGStrategyClient:
-    """松岗策略客户端（同步）"""
+    """西部策略客户端（同步）"""
 
     def __init__(self, config: ClientConfig):
         if not REQUESTS_AVAILABLE:
@@ -338,7 +338,7 @@ class SGStrategyClient:
 # ============ 异步客户端 ============
 
 class AsyncSGStrategyClient:
-    """松岗策略客户端（异步）"""
+    """西部策略客户端（异步）"""
 
     def __init__(self, config: ClientConfig):
         if not AIOHTTP_AVAILABLE:
@@ -440,7 +440,7 @@ def create_client(api_key: str, api_secret: str, base_url: str = None) -> SGStra
     config = ClientConfig(
         api_key=api_key,
         api_secret=api_secret,
-        base_url=base_url or "https://api.sg-strategy.com",
+        base_url=base_url or "https://api.xb-strategy.com",
     )
     return SGStrategyClient(config)
 
@@ -450,7 +450,7 @@ def create_async_client(api_key: str, api_secret: str, base_url: str = None) -> 
     config = ClientConfig(
         api_key=api_key,
         api_secret=api_secret,
-        base_url=base_url or "https://api.sg-strategy.com",
+        base_url=base_url or "https://api.xb-strategy.com",
     )
     return AsyncSGStrategyClient(config)
 
@@ -459,7 +459,7 @@ def create_async_client(api_key: str, api_secret: str, base_url: str = None) -> 
 
 """
 # 同步使用示例
-from sg_strategy_client import create_client
+from xb_strategy_client import create_client
 
 client = create_client("your_api_key", "your_api_secret")
 
@@ -480,7 +480,7 @@ client.close()
 
 # 异步使用示例
 import asyncio
-from sg_strategy_client import create_async_client
+from xb_strategy_client import create_async_client
 
 async def main():
     async with create_async_client("your_api_key", "your_api_secret") as client:

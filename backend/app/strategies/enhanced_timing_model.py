@@ -1041,7 +1041,7 @@ class EnhancedTimingModel:
         
         # 5.6 M2增速
         m2 = data.m2_growth
-        m2_score = safe_score(m2, lambda v: sigmoid_score(v, 10, steepness=2))
+        m2_score = safe_score(m2, lambda v: sigmoid_score(v, 10, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="M2增速", score=m2_score, weight=0.12,
             category="liquidity", raw_value=m2,
@@ -1051,7 +1051,7 @@ class EnhancedTimingModel:
         
         # 5.7 社融增速
         sf = data.social_financing_growth
-        sf_score = safe_score(sf, lambda v: sigmoid_score(v, 10, steepness=2))
+        sf_score = safe_score(sf, lambda v: sigmoid_score(v, 10, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="社融增速", score=sf_score, weight=0.10,
             category="liquidity", raw_value=sf,

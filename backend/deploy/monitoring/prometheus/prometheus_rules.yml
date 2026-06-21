@@ -1,4 +1,4 @@
-# 松岗量化可转债策略 V3.0 - Prometheus告警规则
+# 西部量化可转债策略 V3.0 - Prometheus告警规则
 # 文件: prometheus_rules.yml
 
 groups:
@@ -8,7 +8,7 @@ groups:
     rules:
       # 服务可用性
       - alert: ServiceDown
-        expr: up{job="sg-strategy"} == 0
+        expr: up{job="xb-strategy"} == 0
         for: 1m
         labels:
           severity: critical
@@ -16,12 +16,12 @@ groups:
         annotations:
           summary: "服务不可用: {{ $labels.instance }}"
           description: "服务 {{ $labels.job }} 在实例 {{ $labels.instance }} 上已停止响应超过1分钟"
-          runbook_url: "https://wiki.sg-strategy.com/runbook/service-down"
+          runbook_url: "https://wiki.xb-strategy.com/runbook/service-down"
 
       # 高CPU使用率
       - alert: HighCPUUsage
         expr: |
-          100 - (avg by(instance) (rate(process_cpu_seconds_total{job="sg-strategy"}[5m])) * 100) > 80
+          100 - (avg by(instance) (rate(process_cpu_seconds_total{job="xb-strategy"}[5m])) * 100) > 80
         for: 5m
         labels:
           severity: warning
@@ -33,7 +33,7 @@ groups:
       # 高内存使用
       - alert: HighMemoryUsage
         expr: |
-          (process_resident_memory_bytes{job="sg-strategy"} / (1024 * 1024 * 1024)) > 1.5
+          (process_resident_memory_bytes{job="xb-strategy"} / (1024 * 1024 * 1024)) > 1.5
         for: 5m
         labels:
           severity: warning
@@ -61,7 +61,7 @@ groups:
       # 请求错误率
       - alert: HighErrorRate
         expr: |
-          sum(rate(sg_strategy_scoring_errors_total[5m])) / sum(rate(sg_strategy_scoring_requests_total[5m])) > 0.05
+          sum(rate(xb_strategy_scoring_errors_total[5m])) / sum(rate(xb_strategy_scoring_requests_total[5m])) > 0.05
         for: 3m
         labels:
           severity: critical
@@ -69,12 +69,12 @@ groups:
         annotations:
           summary: "API错误率过高"
           description: "打分服务错误率超过5%，当前值: {{ $value | printf \"%.2f\" }}%"
-          runbook_url: "https://wiki.sg-strategy.com/runbook/high-error-rate"
+          runbook_url: "https://wiki.xb-strategy.com/runbook/high-error-rate"
 
       # 请求延迟
       - alert: HighLatency
         expr: |
-          histogram_quantile(0.95, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le)) > 1
+          histogram_quantile(0.95, sum(rate(xb_strategy_scoring_duration_seconds_bucket[5m])) by (le)) > 1
         for: 5m
         labels:
           severity: warning
@@ -86,7 +86,7 @@ groups:
       # 请求速率异常
       - alert: RequestRateAnomaly
         expr: |
-          abs((rate(sg_strategy_scoring_requests_total[5m]) - deriv(rate(sg_strategy_scoring_requests_total[1h])[30m:5m])) / rate(sg_strategy_scoring_requests_total[5m])) > 0.5
+          abs((rate(xb_strategy_scoring_requests_total[5m]) - deriv(rate(xb_strategy_scoring_requests_total[1h])[30m:5m])) / rate(xb_strategy_scoring_requests_total[5m])) > 0.5
         for: 10m
         labels:
           severity: warning
@@ -102,7 +102,7 @@ groups:
       # 白名单更新失败
       - alert: WhitelistUpdateFailed
         expr: |
-          increase(sg_strategy_whitelist_update_errors_total[1h]) > 0
+          increase(xb_strategy_whitelist_update_errors_total[1h]) > 0
         for: 1m
         labels:
           severity: critical
@@ -110,12 +110,12 @@ groups:
         annotations:
           summary: "白名单更新失败"
           description: "过去1小时内有 {{ $value }} 次白名单更新失败"
-          runbook_url: "https://wiki.sg-strategy.com/runbook/whitelist-update"
+          runbook_url: "https://wiki.xb-strategy.com/runbook/whitelist-update"
 
       # 信号生成异常
       - alert: SignalGenerationAnomaly
         expr: |
-          rate(sg_strategy_trading_signal_total[1h]) == 0 and hour() >= 9 and hour() <= 15
+          rate(xb_strategy_trading_signal_total[1h]) == 0 and hour() >= 9 and hour() <= 15
         for: 30m
         labels:
           severity: critical
@@ -127,7 +127,7 @@ groups:
       # 持仓超限
       - alert: PositionLimitExceeded
         expr: |
-          sg_strategy_position_weight > 0.1
+          xb_strategy_position_weight > 0.1
         for: 5m
         labels:
           severity: warning
@@ -139,7 +139,7 @@ groups:
       # 回撤预警
       - alert: DrawdownWarning
         expr: |
-          sg_strategy_portfolio_drawdown > 0.05
+          xb_strategy_portfolio_drawdown > 0.05
         for: 5m
         labels:
           severity: warning
@@ -151,7 +151,7 @@ groups:
       # 回撤严重
       - alert: DrawdownCritical
         expr: |
-          sg_strategy_portfolio_drawdown > 0.10
+          xb_strategy_portfolio_drawdown > 0.10
         for: 1m
         labels:
           severity: critical
@@ -159,7 +159,7 @@ groups:
         annotations:
           summary: "组合回撤严重"
           description: "组合回撤超过10%，当前值: {{ $value | printf \"%.2f\" }}%，建议启动熔断机制"
-          runbook_url: "https://wiki.sg-strategy.com/runbook/drawdown-critical"
+          runbook_url: "https://wiki.xb-strategy.com/runbook/drawdown-critical"
 
   # ============ 数据告警 ============
   - name: data_alerts
@@ -168,7 +168,7 @@ groups:
       # 数据源异常
       - alert: DataSourceDown
         expr: |
-          sg_strategy_data_source_status == 0
+          xb_strategy_data_source_status == 0
         for: 5m
         labels:
           severity: critical
@@ -176,12 +176,12 @@ groups:
         annotations:
           summary: "数据源不可用: {{ $labels.source }}"
           description: "数据源 {{ $labels.source }} 连接失败超过5分钟"
-          runbook_url: "https://wiki.sg-strategy.com/runbook/data-source-down"
+          runbook_url: "https://wiki.xb-strategy.com/runbook/data-source-down"
 
       # 数据同步延迟
       - alert: DataSyncDelayed
         expr: |
-          time() - sg_strategy_data_last_sync_timestamp > 3600
+          time() - xb_strategy_data_last_sync_timestamp > 3600
         for: 10m
         labels:
           severity: warning
@@ -193,7 +193,7 @@ groups:
       # 数据质量下降
       - alert: DataQualityDegraded
         expr: |
-          sg_strategy_data_quality_score < 0.8
+          xb_strategy_data_quality_score < 0.8
         for: 30m
         labels:
           severity: warning
@@ -209,7 +209,7 @@ groups:
       # Pod重启频繁
       - alert: PodRestartingFrequently
         expr: |
-          increase(kube_pod_container_status_restarts_total{namespace="sg-strategy"}[1h]) > 5
+          increase(kube_pod_container_status_restarts_total{namespace="xb-strategy"}[1h]) > 5
         for: 5m
         labels:
           severity: warning
@@ -221,7 +221,7 @@ groups:
       # Pod状态异常
       - alert: PodNotReady
         expr: |
-          kube_pod_status_phase{namespace="sg-strategy", phase!="Running"} == 1
+          kube_pod_status_phase{namespace="xb-strategy", phase!="Running"} == 1
         for: 5m
         labels:
           severity: critical
@@ -233,7 +233,7 @@ groups:
       # HPA触发
       - alert: HPAScaling
         expr: |
-          kube_hpa_status_current_replicas{namespace="sg-strategy"} != kube_hpa_status_desired_replicas{namespace="sg-strategy"}
+          kube_hpa_status_current_replicas{namespace="xb-strategy"} != kube_hpa_status_desired_replicas{namespace="xb-strategy"}
         for: 5m
         labels:
           severity: info
@@ -249,7 +249,7 @@ groups:
       # 登录失败过多
       - alert: TooManyFailedLogins
         expr: |
-          increase(sg_strategy_auth_failures_total[5m]) > 10
+          increase(xb_strategy_auth_failures_total[5m]) > 10
         for: 1m
         labels:
           severity: warning
@@ -261,7 +261,7 @@ groups:
       # API限流触发
       - alert: RateLimitTriggered
         expr: |
-          increase(sg_strategy_rate_limit_blocked_total[5m]) > 100
+          increase(xb_strategy_rate_limit_blocked_total[5m]) > 100
         for: 5m
         labels:
           severity: warning
@@ -273,7 +273,7 @@ groups:
       # SQL注入检测
       - alert: SQLInjectionAttempt
         expr: |
-          increase(sg_strategy_security_sql_injection_total[1h]) > 0
+          increase(xb_strategy_security_sql_injection_total[1h]) > 0
         for: 1m
         labels:
           severity: critical
@@ -285,7 +285,7 @@ groups:
       # 异常IP访问
       - alert: SuspiciousIPAccess
         expr: |
-          increase(sg_strategy_blocked_ip_total[5m]) > 5
+          increase(xb_strategy_blocked_ip_total[5m]) > 5
         for: 1m
         labels:
           severity: warning

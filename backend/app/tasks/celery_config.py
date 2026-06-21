@@ -205,8 +205,8 @@ def update_score_ranking() -> Dict:
     logger.info("[Data] Updating score ranking...")
 
     try:
-        # 调用松岗七维打分
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        # 调用西部七维打分
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
         # 这里需要实际数据
         # result = strategy.calculate(...)

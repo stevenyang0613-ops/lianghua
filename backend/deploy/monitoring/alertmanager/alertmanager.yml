@@ -1,11 +1,11 @@
-# 松岗量化可转债策略 V3.0 - AlertManager配置
+# 西部量化可转债策略 V3.0 - AlertManager配置
 # 文件: alertmanager.yml
 
 global:
   # SMTP配置
-  smtp_smarthost: 'smtp.sg-strategy.com:587'
-  smtp_from: 'alerts@sg-strategy.com'
-  smtp_auth_username: 'alerts@sg-strategy.com'
+  smtp_smarthost: 'smtp.xb-strategy.com:587'
+  smtp_from: 'alerts@xb-strategy.com'
+  smtp_auth_username: 'alerts@xb-strategy.com'
   smtp_auth_password: 'smtp_password'
   smtp_require_tls: true
 
@@ -87,7 +87,7 @@ receivers:
   # 默认接收者
   - name: 'default-receiver'
     slack_configs:
-      - channel: '#sg-strategy-alerts'
+      - channel: '#xb-strategy-alerts'
         send_resolved: true
         title: '{{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'
@@ -96,13 +96,13 @@ receivers:
   # 严重告警 - 多渠道通知
   - name: 'critical-alerts'
     slack_configs:
-      - channel: '#sg-strategy-critical'
+      - channel: '#xb-strategy-critical'
         send_resolved: true
         title: '🚨 [CRITICAL] {{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'
         color: 'danger'
     email_configs:
-      - to: 'oncall@sg-strategy.com'
+      - to: 'oncall@xb-strategy.com'
         send_resolved: true
         html: '{{ template "email.html" . }}'
     pagerduty_configs:
@@ -110,13 +110,13 @@ receivers:
         severity: critical
         description: '{{ template "pagerduty.description" . }}'
     webhook_configs:
-      - url: 'https://api.sg-strategy.com/webhooks/alerts'
+      - url: 'https://api.xb-strategy.com/webhooks/alerts'
         send_resolved: true
 
   # 警告告警
   - name: 'warning-alerts'
     slack_configs:
-      - channel: '#sg-strategy-warnings'
+      - channel: '#xb-strategy-warnings'
         send_resolved: true
         title: '⚠️ [WARNING] {{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'
@@ -128,7 +128,7 @@ receivers:
       - channel: '#risk-alerts'
         send_resolved: true
     email_configs:
-      - to: 'risk@sg-strategy.com'
+      - to: 'risk@xb-strategy.com'
         send_resolved: true
 
   # 风控严重
@@ -137,10 +137,10 @@ receivers:
       - channel: '#risk-critical'
         send_resolved: true
     email_configs:
-      - to: 'risk@sg-strategy.com'
+      - to: 'risk@xb-strategy.com'
         send_resolved: true
     webhook_configs:
-      - url: 'https://api.sg-strategy.com/webhooks/risk-alerts'
+      - url: 'https://api.xb-strategy.com/webhooks/risk-alerts'
         send_resolved: true
 
   # 数据团队
@@ -149,7 +149,7 @@ receivers:
       - channel: '#data-alerts'
         send_resolved: true
     email_configs:
-      - to: 'data@sg-strategy.com'
+      - to: 'data@xb-strategy.com'
         send_resolved: true
 
   # 安全团队
@@ -158,10 +158,10 @@ receivers:
       - channel: '#security-alerts'
         send_resolved: true
     email_configs:
-      - to: 'security@sg-strategy.com'
+      - to: 'security@xb-strategy.com'
         send_resolved: true
     webhook_configs:
-      - url: 'https://api.sg-strategy.com/webhooks/security-alerts'
+      - url: 'https://api.xb-strategy.com/webhooks/security-alerts'
         send_resolved: true
 
   # 平台团队
@@ -170,7 +170,7 @@ receivers:
       - channel: '#platform-alerts'
         send_resolved: true
     email_configs:
-      - to: 'platform@sg-strategy.com'
+      - to: 'platform@xb-strategy.com'
         send_resolved: true
 
   # 策略团队
@@ -179,7 +179,7 @@ receivers:
       - channel: '#strategy-alerts'
         send_resolved: true
     email_configs:
-      - to: 'strategy@sg-strategy.com'
+      - to: 'strategy@xb-strategy.com'
         send_resolved: true
 
 # 抑制规则
@@ -211,5 +211,5 @@ inhibit_rules:
 #       - alertname = "InfoAlert"
 #     starts_at: "2024-01-01T00:00:00Z"
 #     ends_at: "2024-12-31T23:59:59Z"
-#     created_by: "admin@sg-strategy.com"
+#     created_by: "admin@xb-strategy.com"
 #     comment: "Silence info alerts"

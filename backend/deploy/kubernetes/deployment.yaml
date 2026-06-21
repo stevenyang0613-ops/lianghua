@@ -1,12 +1,12 @@
-# 松岗量化可转债策略 V3.0 - Kubernetes部署配置
+# 西部量化可转债策略 V3.0 - Kubernetes部署配置
 ---
 # Namespace
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: sg-strategy
+  name: xb-strategy
   labels:
-    app: sg-strategy
+    app: xb-strategy
     environment: production
 
 ---
@@ -14,8 +14,8 @@ metadata:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: sg-strategy-config
-  namespace: sg-strategy
+  name: xb-strategy-config
+  namespace: xb-strategy
 data:
   LOG_LEVEL: "INFO"
   ENVIRONMENT: "production"
@@ -30,11 +30,11 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sg-strategy-secrets
-  namespace: sg-strategy
+  name: xb-strategy-secrets
+  namespace: xb-strategy
 type: Opaque
 stringData:
-  DATABASE_URL: "postgresql://user:password@postgres-service:5432/sg_strategy"
+  DATABASE_URL: "postgresql://user:password@postgres-service:5432/xb_strategy"
   REDIS_PASSWORD: "redis_password"
   API_KEY: "your_api_key"
   JWT_SECRET: "your_jwt_secret"
@@ -45,7 +45,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: scoring-service
-  namespace: sg-strategy
+  namespace: xb-strategy
   labels:
     app: scoring-service
 spec:
@@ -60,15 +60,15 @@ spec:
     spec:
       containers:
       - name: scoring-service
-        image: sg-strategy/scoring:3.0.0
+        image: xb-strategy/scoring:3.0.0
         ports:
         - containerPort: 8000
         - containerPort: 50051
         envFrom:
         - configMapRef:
-            name: sg-strategy-config
+            name: xb-strategy-config
         - secretRef:
-            name: sg-strategy-secrets
+            name: xb-strategy-secrets
         resources:
           requests:
             memory: "512Mi"
@@ -94,7 +94,7 @@ spec:
       volumes:
       - name: data-volume
         persistentVolumeClaim:
-          claimName: sg-strategy-pvc
+          claimName: xb-strategy-pvc
 
 ---
 # Signal Service Deployment
@@ -102,7 +102,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: signal-service
-  namespace: sg-strategy
+  namespace: xb-strategy
   labels:
     app: signal-service
 spec:
@@ -117,14 +117,14 @@ spec:
     spec:
       containers:
       - name: signal-service
-        image: sg-strategy/signal:3.0.0
+        image: xb-strategy/signal:3.0.0
         ports:
         - containerPort: 8001
         envFrom:
         - configMapRef:
-            name: sg-strategy-config
+            name: xb-strategy-config
         - secretRef:
-            name: sg-strategy-secrets
+            name: xb-strategy-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -139,7 +139,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: execution-service
-  namespace: sg-strategy
+  namespace: xb-strategy
   labels:
     app: execution-service
 spec:
@@ -154,14 +154,14 @@ spec:
     spec:
       containers:
       - name: execution-service
-        image: sg-strategy/execution:3.0.0
+        image: xb-strategy/execution:3.0.0
         ports:
         - containerPort: 8002
         envFrom:
         - configMapRef:
-            name: sg-strategy-config
+            name: xb-strategy-config
         - secretRef:
-            name: sg-strategy-secrets
+            name: xb-strategy-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -176,7 +176,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: risk-service
-  namespace: sg-strategy
+  namespace: xb-strategy
   labels:
     app: risk-service
 spec:
@@ -191,14 +191,14 @@ spec:
     spec:
       containers:
       - name: risk-service
-        image: sg-strategy/risk:3.0.0
+        image: xb-strategy/risk:3.0.0
         ports:
         - containerPort: 8003
         envFrom:
         - configMapRef:
-            name: sg-strategy-config
+            name: xb-strategy-config
         - secretRef:
-            name: sg-strategy-secrets
+            name: xb-strategy-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -213,7 +213,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-gateway
-  namespace: sg-strategy
+  namespace: xb-strategy
   labels:
     app: api-gateway
 spec:
@@ -228,14 +228,14 @@ spec:
     spec:
       containers:
       - name: api-gateway
-        image: sg-strategy/gateway:3.0.0
+        image: xb-strategy/gateway:3.0.0
         ports:
         - containerPort: 8000
         envFrom:
         - configMapRef:
-            name: sg-strategy-config
+            name: xb-strategy-config
         - secretRef:
-            name: sg-strategy-secrets
+            name: xb-strategy-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -250,7 +250,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: scoring-service
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   selector:
     app: scoring-service
@@ -268,7 +268,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: signal-service
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   selector:
     app: signal-service
@@ -282,7 +282,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: execution-service
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   selector:
     app: execution-service
@@ -296,7 +296,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: risk-service
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   selector:
     app: risk-service
@@ -310,7 +310,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: api-gateway
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   selector:
     app: api-gateway
@@ -325,7 +325,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: scoring-service-hpa
-  namespace: sg-strategy
+  namespace: xb-strategy
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -352,8 +352,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: sg-strategy-pvc
-  namespace: sg-strategy
+  name: xb-strategy-pvc
+  namespace: xb-strategy
 spec:
   accessModes:
   - ReadWriteOnce
@@ -367,18 +367,18 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sg-strategy-ingress
-  namespace: sg-strategy
+  name: xb-strategy-ingress
+  namespace: xb-strategy
   annotations:
     kubernetes.io/ingress.class: nginx
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   tls:
   - hosts:
-    - api.sg-strategy.com
-    secretName: sg-strategy-tls
+    - api.xb-strategy.com
+    secretName: xb-strategy-tls
   rules:
-  - host: api.sg-strategy.com
+  - host: api.xb-strategy.com
     http:
       paths:
       - path: /

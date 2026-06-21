@@ -345,3 +345,51 @@ Every agent working on this project MUST follow these rules.
   at entry — converts silent warning into a fast-fail AttributeError at the actual call site.
 - Audit: `grep -rn "start_background_refresh\b" backend/app/` to find every call site.
   Check the BUNDLED .app, not just `backend/`, because #50's drift can leave stale sync stubs.
+
+## Scoring & Data Serialization Patterns
+
+### 52. `safe_score` with `treat_zero_as_missing` and `has_data` priority
+- `safe_score(value, score_fn, neutral=50.0, has_data=None, treat_zero_as_missing=True)`
+  provides NaN/zero/missing data handling for financial indicator scoring.
+- **Priority rule**: `has_data` takes precedence over `treat_zero_as_missing`.
+  - `has_data=False` → always returns `neutral`, regardless of `value` or `treat_zero_as_missing`.
+  - `has_data=True` → `value=0` is treated as valid data (not missing).
+  - `has_data=None` (default) → falls back to `treat_zero_as_missing` logic.
+- **Three-state pattern for boolean availability fields**: Use `Optional[bool]` (`None`=unknown,
+  `True`=confirmed present, `False`=confirmed absent) instead of `bool` defaults.
+  - When `None`, fall back to value inference (e.g., `ytm != 0` implies data exists).
+  - When `True`, treat 0 as valid (e.g., YTM=0% is a real observation).
+  - When `False`, always return neutral (data source confirmed unavailable).
+- Example: `cb_ytm_available: Optional[bool] = None` in `EnhancedMarketData`.
+
+### 53. `clean_numpy_types` — recursive JSON serialization safety net
+- Recursively converts numpy types → Python native types for JSON serialization.
+- Handles Python `float` NaN/Inf → `None` (JSON spec forbids NaN/Inf).
+- Handles `numpy.bool_`, `numpy.integer`, `numpy.floating`, `numpy.ndarray`, `numpy.generic`.
+- Supports `set`/`frozenset` → `list` conversion.
+- Supports `__float__`/`__int__` protocol objects (e.g., `Decimal` wrappers) → `float`/`int`.
+- **Ordering matters**: `isinstance(obj, bool)` MUST come before `__int__` check, because
+  `bool` has `__int__` but should be serialized as `true`/`false`, not `1`/`0`.
+- Call sites: `EnhancedMarketData.to_dict()`, `_enhanced_signal_to_frontend()`.
+- **Performance note**: Called on every WebSocket push message; for high-frequency paths
+  with known schema, consider flat-field processing instead of recursive traversal.
+
+### 54. Bayesian optimizer `np.errstate` pattern for GP numerical instability
+- GP regression can produce `std=0` or `std<0` (numerical noise) → `z=inf` or `z=NaN`.
+- Pattern: early return `np.zeros_like(mu)` when ALL std values are 0 or NaN.
+- Wrap acquisition function computation in `with np.errstate(invalid='ignore', divide='ignore')`
+  to suppress RuntimeWarning from `0/0` or `inf/0`.
+- After computing `z`, always apply `np.where(np.isfinite(result), result, 0.0)` to convert
+  inf/NaN → 0 (argmax will ignore these positions).
+- When only SOME std values are 0: `z = (mu - best) / std` produces inf at those positions,
+  which is mathematically correct (deterministic points have no improvement). The `np.where`
+  fallback handles this case; no additional logic needed.
+- This pattern applies to all three acquisition types: EI, UCB, PI.
+
+### 55. `_enhanced_signal_to_frontend` NaN score → 'missing' status pattern
+- When `total_score` or category scores are NaN (data unavailable), the frontend signal
+  must use `status: 'missing'` instead of inferring from score thresholds.
+- Sub-factor NaN scores → `score: null` (JSON null), `signal: "missing"`.
+- Recommendation text: `if math.isnan(total_score): recommendation = "数据不足，无法评估择时信号"`.
+- This ensures the frontend can render gray/"数据缺失" labels instead of blank or 0.
+- Also applies to `_get_recommendation()` (non-enhanced signal path).

@@ -1,4 +1,4 @@
-// 松岗量化可转债策略 V3.0 Java SDK
+// 西部量化可转债策略 V3.0 Java SDK
 // 文件: SgStrategyClient.java
 
 package com.sgstrategy.sdk;
@@ -18,7 +18,7 @@ import java.security.MessageDigest;
 import java.util.*;
 
 /**
- * 松岗策略Java客户端
+ * 西部策略Java客户端
  */
 public class SgStrategyClient {
 

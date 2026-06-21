@@ -13,7 +13,7 @@
       {
         "datasource": "Prometheus",
         "enable": true,
-        "expr": "sg_strategy_trading_signal_total > 0",
+        "expr": "xb_strategy_trading_signal_total > 0",
         "iconColor": "rgba(255, 96, 96, 1)",
         "name": "交易信号",
         "step": "1m",
@@ -22,7 +22,7 @@
       }
     ]
   },
-  "description": "松岗量化可转债策略V3.0监控系统",
+  "description": "西部量化可转债策略V3.0监控系统",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -110,7 +110,7 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(xb_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
           "refId": "A"
         }
       ],
@@ -170,7 +170,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_whitelist_size",
+          "expr": "xb_strategy_whitelist_size",
           "refId": "A"
         }
       ],
@@ -230,7 +230,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_portfolio_drawdown",
+          "expr": "xb_strategy_portfolio_drawdown",
           "refId": "A"
         }
       ],
@@ -290,7 +290,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_var_value",
+          "expr": "xb_strategy_var_value",
           "refId": "A"
         }
       ],
@@ -345,7 +345,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_position_count",
+          "expr": "xb_strategy_position_count",
           "legendFormat": "{{code}}",
           "refId": "A"
         }
@@ -418,7 +418,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_circuit_breaker_status",
+          "expr": "xb_strategy_circuit_breaker_status",
           "refId": "A"
         }
       ],
@@ -513,7 +513,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (action) (increase(sg_strategy_trading_signal_total[1h]))",
+          "expr": "sum by (action) (increase(xb_strategy_trading_signal_total[1h]))",
           "legendFormat": "{{action}}",
           "refId": "A"
         }
@@ -596,7 +596,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (code) (increase(sg_strategy_trading_signal_total[1d]))",
+          "expr": "sum by (code) (increase(xb_strategy_trading_signal_total[1d]))",
           "legendFormat": "{{code}}",
           "refId": "A"
         }
@@ -700,12 +700,12 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_portfolio_drawdown",
+          "expr": "xb_strategy_portfolio_drawdown",
           "legendFormat": "回撤",
           "refId": "A"
         },
         {
-          "expr": "sg_strategy_var_value",
+          "expr": "xb_strategy_var_value",
           "legendFormat": "VaR",
           "refId": "B"
         }
@@ -788,7 +788,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_portfolio_nav",
+          "expr": "xb_strategy_portfolio_nav",
           "legendFormat": "净值",
           "refId": "A"
         }
@@ -845,7 +845,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_position_weight * 100",
+          "expr": "xb_strategy_position_weight * 100",
           "legendFormat": "{{code}}",
           "refId": "A"
         }
@@ -941,17 +941,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(xb_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "P50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(xb_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "P95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(sg_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(xb_strategy_scoring_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "P99",
           "refId": "C"
         }
@@ -1034,12 +1034,12 @@
       },
       "targets": [
         {
-          "expr": "rate(sg_strategy_scoring_requests_total[5m])",
+          "expr": "rate(xb_strategy_scoring_requests_total[5m])",
           "legendFormat": "请求速率",
           "refId": "A"
         },
         {
-          "expr": "rate(sg_strategy_scoring_errors_total[5m])",
+          "expr": "rate(xb_strategy_scoring_errors_total[5m])",
           "legendFormat": "错误速率",
           "refId": "B"
         }
@@ -1122,12 +1122,12 @@
       },
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"sg-strategy\"}",
+          "expr": "process_resident_memory_bytes{job=\"xb-strategy\"}",
           "legendFormat": "内存使用",
           "refId": "A"
         },
         {
-          "expr": "process_cpu_seconds_total{job=\"sg-strategy\"}",
+          "expr": "process_cpu_seconds_total{job=\"xb-strategy\"}",
           "legendFormat": "CPU时间",
           "refId": "B"
         }
@@ -1223,7 +1223,7 @@
       },
       "targets": [
         {
-          "expr": "sg_strategy_data_source_status",
+          "expr": "xb_strategy_data_source_status",
           "legendFormat": "{{source}}",
           "refId": "A"
         }
@@ -1306,7 +1306,7 @@
       },
       "targets": [
         {
-          "expr": "rate(sg_strategy_data_sync_errors_total[1h])",
+          "expr": "rate(xb_strategy_data_sync_errors_total[1h])",
           "legendFormat": "{{source}}",
           "refId": "A"
         }
@@ -1318,7 +1318,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["sg-strategy", "quant", "trading"],
+  "tags": ["xb-strategy", "quant", "trading"],
   "templating": {
     "list": [
       {
@@ -1350,7 +1350,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(sg_strategy_trading_signal_total, code)",
+        "definition": "label_values(xb_strategy_trading_signal_total, code)",
         "hide": 0,
         "includeAll": true,
         "label": "标的代码",
@@ -1358,7 +1358,7 @@
         "name": "code",
         "options": [],
         "query": {
-          "query": "label_values(sg_strategy_trading_signal_total, code)",
+          "query": "label_values(xb_strategy_trading_signal_total, code)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1388,8 +1388,8 @@
     ]
   },
   "timezone": "browser",
-  "title": "松岗量化策略监控",
-  "uid": "sg-strategy-dashboard",
+  "title": "西部量化策略监控",
+  "uid": "xb-strategy-dashboard",
   "version": 1,
   "weekStart": ""
 }

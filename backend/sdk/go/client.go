@@ -1,4 +1,4 @@
-// 松岗量化可转债策略 V3.0 Go SDK
+// 西部量化可转债策略 V3.0 Go SDK
 // 文件: client.go
 
 package sgstrategy
@@ -29,7 +29,7 @@ type ClientConfig struct {
 	MaxRetries int
 }
 
-// Client 松岗策略客户端
+// Client 西部策略客户端
 type Client struct {
 	config     ClientConfig
 	httpClient *http.Client
