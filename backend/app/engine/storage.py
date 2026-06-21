@@ -312,6 +312,9 @@ class DataStorage:
             "ALTER TABLE daily_snapshots ADD COLUMN event_score DOUBLE",
             "ALTER TABLE daily_snapshots ADD COLUMN event_detail VARCHAR",
             "ALTER TABLE daily_snapshots ADD COLUMN bond_value DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN is_called BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE daily_snapshots ADD COLUMN call_status VARCHAR DEFAULT ''",
+            "ALTER TABLE daily_snapshots ADD COLUMN forced_call_days INTEGER DEFAULT 0",
             "ALTER TABLE daily_snapshots ADD COLUMN hv DOUBLE",
             "ALTER TABLE daily_snapshots ADD COLUMN rating_score DOUBLE",
             "ALTER TABLE daily_snapshots ADD COLUMN pure_bond_premium_ratio DOUBLE",
@@ -848,12 +851,14 @@ class DataStorage:
     @staticmethod
     def _get_qh_row_filtered(q, cols: list[str]) -> tuple:
         row_map = {
-            "code": q.code, "name": q.name, "price": q.price, "change_pct": q.change_pct,
-            "stock_price": q.stock_price, "stock_change_pct": q.stock_change_pct,
-            "conversion_price": q.conversion_price, "conversion_value": q.conversion_value,
-            "premium_ratio": q.premium_ratio, "dual_low": q.dual_low,
-            "ytm": q.ytm, "volume": q.volume, "remaining_years": q.remaining_years,
-            "forced_call_days": q.forced_call_days,
+            "code": q.code, "name": q.name,
+            "price": _safe_double(q.price), "change_pct": _safe_double(q.change_pct),
+            "stock_price": _safe_double(q.stock_price), "stock_change_pct": _safe_double(q.stock_change_pct),
+            "conversion_price": _safe_double(q.conversion_price), "conversion_value": _safe_double(q.conversion_value),
+            "premium_ratio": _safe_double(q.premium_ratio), "dual_low": _safe_double(q.dual_low),
+            "ytm": _safe_double(q.ytm), "volume": _safe_double(q.volume),
+            "remaining_years": _safe_double(q.remaining_years),
+            "forced_call_days": _safe_double(getattr(q, "forced_call_days", 0), 0),
             "is_called": bool(getattr(q, "is_called", False)),
             "call_status": str(getattr(q, "call_status", "") or ""),
             "last_trade_date": getattr(q, "last_trade_date", None),
@@ -870,7 +875,7 @@ class DataStorage:
             "pe": _safe_double(getattr(q, "pe", None)),
             "pb": _safe_double(getattr(q, "pb", None)),
             "iv": _safe_double(getattr(q, "iv", None)),
-            "iv_source": str(getattr(q, "iv_source", None) or ""),
+            "iv_source": str(getattr(q, "iv_source", "") or ""),
             "buyback_amount": _safe_double(getattr(q, "buyback_amount", None)),
             "mgmt_buy_price": _safe_double(getattr(q, "mgmt_buy_price", None)),
             "industry": getattr(q, "industry", None),
@@ -929,8 +934,9 @@ class DataStorage:
                 def _g(f, default=None):
                     return getattr(quote, f, default)
                 row = (
-                    quote.code, quote.name, quote.price, quote.price, quote.price,
-                    quote.price, quote.volume, snapshot_date,
+                    quote.code, quote.name,
+                    _safe_double(quote.price), _safe_double(quote.price), _safe_double(quote.price),
+                    _safe_double(quote.price), _safe_double(quote.volume), snapshot_date,
                     _safe_double(_g('premium_ratio'), 0), _safe_double(_g('change_pct'), 0),
                     _safe_double(_g('stock_price'), 0), _safe_double(_g('conversion_value'), 0),
                     _safe_double(_g('dual_low'), 0), _safe_double(_g('ytm'), 0),
