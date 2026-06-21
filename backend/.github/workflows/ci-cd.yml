@@ -1,4 +1,4 @@
-# 松岗量化可转债策略 V3.0 - CI/CD配置
+# 西部量化可转债策略 V3.0 - CI/CD配置
 
 name: CI/CD Pipeline
 
@@ -47,6 +47,15 @@ jobs:
       - name: MyPy类型检查
         run: mypy app/ --ignore-missing-imports || true
 
+      - name: 检查 requirements.txt 与 pyproject.toml 同步
+        run: |
+          python -m scripts.sync_requirements
+          if ! git diff --exit-code requirements.txt; then
+            echo "::error::requirements.txt 与 pyproject.toml 不同步，请运行 'python -m scripts.sync_requirements' 后重新提交"
+            exit 1
+          fi
+          echo "requirements.txt 与 pyproject.toml 已同步 ✓"
+
   # ============ 单元测试 ============
   test:
     name: 单元测试
@@ -59,7 +68,7 @@ jobs:
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: sg_strategy_test
+          POSTGRES_DB: xb_strategy_test
         ports:
           - 5432:5432
         options: >-
@@ -97,12 +106,12 @@ jobs:
 
       - name: 运行单元测试
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/sg_strategy_test
+          DATABASE_URL: postgresql://test:test@localhost:5432/xb_strategy_test
           REDIS_URL: redis://localhost:6379
         run: |
-          pytest app/sg_strategy/tests/ \
+          pytest app/xb_strategy/tests/ \
             -v \
-            --cov=app/sg_strategy \
+            --cov=app/xb_strategy \
             --cov-report=xml \
             --cov-report=html \
             --cov-fail-under=70 \
@@ -137,7 +146,7 @@ jobs:
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: sg_strategy_test
+          POSTGRES_DB: xb_strategy_test
         ports:
           - 5432:5432
         options: >-
@@ -174,11 +183,11 @@ jobs:
 
       - name: 运行集成测试
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/sg_strategy_test
+          DATABASE_URL: postgresql://test:test@localhost:5432/xb_strategy_test
           REDIS_URL: redis://localhost:6379
           CLICKHOUSE_URL: http://localhost:8123
         run: |
-          pytest app/sg_strategy/tests/ -v -m integration || true
+          pytest app/xb_strategy/tests/ -v -m integration || true
 
   # ============ 性能测试 ============
   performance:
@@ -203,7 +212,7 @@ jobs:
 
       - name: 运行性能测试
         run: |
-          pytest app/sg_strategy/tests/ -v -m performance --benchmark-only || true
+          pytest app/xb_strategy/tests/ -v -m performance --benchmark-only || true
 
       - name: 上传性能报告
         uses: actions/upload-artifact@v4
@@ -301,7 +310,7 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     environment:
       name: staging
-      url: https://staging.sg-strategy.com
+      url: https://staging.xb-strategy.com
 
     steps:
       - name: 检出代码
@@ -319,12 +328,12 @@ jobs:
         run: |
           kubectl set image deployment/scoring-service \
             scoring-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            -n sg-strategy
-          kubectl rollout status deployment/scoring-service -n sg-strategy --timeout=300s
+            -n xb-strategy
+          kubectl rollout status deployment/scoring-service -n xb-strategy --timeout=300s
 
       - name: 健康检查
         run: |
-          kubectl wait --for=condition=ready pod -l app=scoring-service -n sg-strategy --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=scoring-service -n xb-strategy --timeout=120s
 
   # ============ 部署到生产环境 ============
   deploy-production:
@@ -334,7 +343,7 @@ jobs:
     if: github.event_name == 'release'
     environment:
       name: production
-      url: https://api.sg-strategy.com
+      url: https://api.xb-strategy.com
 
     steps:
       - name: 检出代码
@@ -352,14 +361,14 @@ jobs:
         run: |
           # 蓝绿部署
           kubectl apply -f deploy/kubernetes/deployment.yaml
-          kubectl rollout status deployment/scoring-service -n sg-strategy --timeout=600s
+          kubectl rollout status deployment/scoring-service -n xb-strategy --timeout=600s
 
       - name: 运行冒烟测试
         run: |
           # 等待服务就绪
           sleep 30
           # 执行健康检查
-          curl -f https://api.sg-strategy.com/health || exit 1
+          curl -f https://api.xb-strategy.com/health || exit 1
 
       - name: 通知部署成功
         run: |
@@ -378,7 +387,7 @@ jobs:
         with:
           status: ${{ job.status }}
           text: |
-            松岗量化策略部署完成
+            西部量化策略部署完成
             版本: ${{ github.event.release.tag_name }}
             状态: ${{ job.status }}
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}
