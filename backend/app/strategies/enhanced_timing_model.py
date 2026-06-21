@@ -1024,7 +1024,7 @@ class EnhancedTimingModel:
         
         # 5.5 信用利差（AA企业债-国债）
         spread = data.credit_spread
-        if spread > 0:
+        if not math.isnan(spread):
             spread_score = linear_score(spread, 50, 200, invert=True)
             spread_signal = "bullish" if spread < 80 else "bearish" if spread > 150 else "neutral"
             spread_desc = f"信用利差{spread:.0f}bp，{'信用环境宽松' if spread<80 else '信用紧缩' if spread>150 else '正常'}"
@@ -1431,7 +1431,7 @@ class EnhancedTimingModel:
             cat_score = max(0, cat_score - panic_boost * 50)
         
         return CategoryScore(
-            name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'] + panic_boost,
+            name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'],
             sub_factors=sub_factors,
             description=self._category_desc(cat_score, ["极度恐慌", "偏悲观", "中性", "偏乐观", "极度亢奋"]),
         )
@@ -1828,7 +1828,7 @@ class EnhancedTimingModel:
             current = data.stock_index_current if not math.isnan(data.stock_index_current) else 0
             ma20 = data.stock_index_ma20 if not math.isnan(data.stock_index_ma20) else 0
             ma60 = data.stock_index_ma60 if not math.isnan(data.stock_index_ma60) else 0
-            volume = data.volume_ratio if hasattr(data, 'volume_ratio') and not math.isnan(data.volume_ratio) else 1.0
+            volume = data.volume_ratio if data.volume_ratio > 0 else 1.0
             # MA20 > MA60 多头排列且价格在MA20之上，视为趋势早期
             if ma20 > ma60 and current > ma20 and volume > 1.0:
                 trend_boost = 0.15  # 增加 15% 仓位上限
