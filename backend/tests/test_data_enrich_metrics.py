@@ -8,8 +8,9 @@ import asyncio
 import sys
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
+import pandas as pd
 import pytest
 
 # Ensure backend is importable
@@ -56,12 +57,6 @@ class TestMetricsRegistration:
             "_refresh_call_status_cache",
             "_refresh_stock_name_cache",
             "_refresh_coupon_rate_cache",
-            "_refresh_main_biz_cache",
-            "_refresh_analyst_rank_cache",
-            "_refresh_macro_cpi_cache",
-            "_refresh_macro_ppi_cache",
-            "_refresh_macro_m2_cache",
-            "_refresh_macro_lpr_cache",
             "_refresh_bond_price_cache",
             "_build_concept_cache",
             "_refresh_north_cache",
@@ -163,3 +158,198 @@ class TestStartBackgroundRefreshSchedule:
         assert dispatched_names.count("_refresh_extended_batch") == 1, (
             f"_refresh_extended_batch dispatched {dispatched_names.count('_refresh_extended_batch')} times"
         )
+
+
+class TestExtendedCacheRefresh:
+    """Verify extended-cache refresh functions (north/margin/lhb/...) handle
+    AKShare responses and missing interfaces gracefully, and record metrics."""
+
+    def setup_method(self):
+        # Clear target maps so tests are not polluted by on-disk cache merges.
+        for attr in (
+            "_north_map", "_margin_map", "_lhb_map", "_block_trade_map",
+            "_holder_num_map", "_earnings_forecast_map", "_restricted_release_map",
+        ):
+            target = getattr(de, attr, None)
+            if isinstance(target, dict):
+                target.clear()
+
+    def teardown_method(self):
+        with de._cache_lock:
+            de._refresh_metrics.clear()
+        # Restore maps to empty to avoid leaking into other tests.
+        for attr in (
+            "_north_map", "_margin_map", "_lhb_map", "_block_trade_map",
+            "_holder_num_map", "_earnings_forecast_map", "_restricted_release_map",
+        ):
+            target = getattr(de, attr, None)
+            if isinstance(target, dict):
+                target.clear()
+
+    def _mock_run_with_timeout(self, fn, *args, default=None, **kwargs):
+        """Simulate _run_with_timeout returning a small DataFrame."""
+        # For functions passed as callables (lambdas), call them to get the DataFrame.
+        try:
+            result = fn(*args)
+        except Exception:
+            return default
+        if result is None:
+            return default
+        return result
+
+    def test_north_cache_refresh_ok(self):
+        summary_df = pd.DataFrame({"成交净买额": [1.5], "交易日期": ["2026-01-01"]})
+        hold_df = pd.DataFrame({"代码": ["000001"], "持股市值": [2.5]})
+        with patch.object(de, "_run_with_timeout", side_effect=lambda fn, *args, **kw: summary_df if "summary" in kw.get("op_name", "") else hold_df):
+            count = de._refresh_north_cache()
+        assert count == 1
+        metrics = de.get_refresh_metrics()
+        assert metrics["_refresh_north_cache"]["status"] == "ok"
+
+    def test_margin_cache_handles_missing_akshare_interface(self):
+        """If akshare doesn't expose the margin interface, refresh should return 0
+        and record empty metrics, not error."""
+        with patch.object(de.ak, "stock_margin_underlying_info_szse", create=True):
+            # The hasattr check above would see a mock attribute and try to call it.
+            # We simulate an AttributeError on the actual call to exercise the outer try/except.
+            with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
+                count = de._refresh_margin_cache()
+        assert count == 0
+        metrics = de.get_refresh_metrics()
+        assert metrics["_refresh_margin_cache"]["status"] == "empty"
+
+    def test_lhb_cache_refresh_empty_dataframe_records_empty(self):
+        empty_df = pd.DataFrame()
+        with patch.object(de, "_run_with_timeout", return_value=empty_df):
+            count = de._refresh_lhb_cache()
+        assert count == 0
+        metrics = de.get_refresh_metrics()
+        assert metrics["_refresh_lhb_cache"]["status"] == "empty"
+
+    def test_block_trade_cache_refresh_ok(self):
+        df = pd.DataFrame({"证券代码": ["000001"], "成交额": [12345.6]})
+        with patch.object(de, "_run_with_timeout", return_value=df):
+            count = de._refresh_block_trade_cache()
+        assert count >= 1
+        assert de._block_trade_map.get("000001", {}).get("block_trade_amount") == 12345.6
+
+    def test_holder_num_cache_handles_missing_interface(self):
+        with patch.object(de.ak, "stock_main_stock_holder", create=True):
+            with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
+                count = de._refresh_holder_num_cache()
+        assert count == 0
+        metrics = de.get_refresh_metrics()
+        assert metrics["_refresh_holder_num_cache"]["status"] == "empty"
+
+    def test_earnings_forecast_cache_refresh_ok(self):
+        df = pd.DataFrame({"股票代码": ["000001"], "业绩变动幅度": [50.0]})
+        with patch.object(de, "_run_with_timeout", return_value=df):
+            count = de._refresh_earnings_forecast_cache()
+        assert count >= 1
+        assert de._earnings_forecast_map.get("000001", {}).get("yoy_change_pct") == 50.0
+
+    def test_restricted_release_cache_refresh_ok(self):
+        df = pd.DataFrame({"股票代码": ["000001"], "解禁数量": [1000000.0]})
+        with patch.object(de, "_run_with_timeout", return_value=df):
+            count = de._refresh_restricted_release_cache()
+        assert count >= 1
+        assert de._restricted_release_map.get("000001", {}).get("restricted_release_amount") == 1000000.0
+
+
+class TestDataSourceApiCalls:
+    """Verify that AKShare interfaces are called with the correct parameters.
+
+    These tests catch parameter mismatches (e.g. wrong keyword, missing symbol)
+    that silently produce empty results and show as errors in the monitor.
+    """
+
+    def setup_method(self):
+        for attr in (
+            "_north_map", "_margin_map", "_block_trade_map",
+            "_earnings_forecast_map", "_restricted_release_map",
+        ):
+            target = getattr(de, attr, None)
+            if isinstance(target, dict):
+                target.clear()
+        # Pin bond-stock universe so per-stock queries are deterministic.
+        self._original_bond_codes = set(de._bond_stock_codes) if de._bond_stock_codes else set()
+        de._bond_stock_codes = {"000001"}
+        # Bypass threading/semaphore in _run_with_timeout to make tests deterministic
+        self._orig_run_with_timeout = de._run_with_timeout
+        def _direct_run(fn, *args, timeout=30.0, default=None, op_name=""):
+            try:
+                return fn(*args)
+            except Exception:
+                return default
+        de._run_with_timeout = _direct_run
+
+    def teardown_method(self):
+        de._run_with_timeout = self._orig_run_with_timeout
+        de._bond_stock_codes = self._original_bond_codes
+        with de._cache_lock:
+            de._refresh_metrics.clear()
+        for attr in (
+            "_north_map", "_margin_map", "_block_trade_map",
+            "_earnings_forecast_map", "_restricted_release_map",
+        ):
+            target = getattr(de, attr, None)
+            if isinstance(target, dict):
+                target.clear()
+
+    def test_north_cache_uses_individual_em(self):
+        """ak.stock_hsgt_individual_em is used for per-stock north-bound holdings."""
+        summary_df = pd.DataFrame({"成交净买额": [1.5], "交易日期": ["2026-01-01"]})
+        individual_df = pd.DataFrame({"持股市值": [2.5], "今日增持资金": [0.5]})
+        with patch.object(de.ak, "stock_hsgt_fund_flow_summary_em", return_value=summary_df) as mock_summary:
+            with patch.object(de.ak, "stock_hsgt_individual_em", return_value=individual_df) as mock_individual:
+                de._refresh_north_cache()
+        assert mock_summary.called
+        assert mock_individual.called, "Expected stock_hsgt_individual_em to be called for per-stock data"
+        assert any(c.args[0] == "000001" for c in mock_individual.call_args_list)
+
+    def test_margin_cache_uses_recent_trading_date(self):
+        """stock_margin_detail_szse/sse requires a real trading date; empty string returns 0 rows."""
+        df = pd.DataFrame({"证券代码": ["000001"], "融资余额": [12345.0]})
+        with patch.object(de.ak, "stock_margin_detail_szse", return_value=df) as mock_szse, \
+             patch.object(de.ak, "stock_margin_detail_sse", return_value=pd.DataFrame()) as mock_sse:
+            de._refresh_margin_cache()
+        assert mock_szse.called or mock_sse.called
+        called_mock = mock_szse if mock_szse.called else mock_sse
+        date_arg = called_mock.call_args.kwargs.get("date") or (called_mock.call_args.args[0] if called_mock.call_args.args else None)
+        assert isinstance(date_arg, str) and len(date_arg) == 8 and date_arg.isdigit(), (
+            f"Expected YYYYMMDD date, got {date_arg!r}"
+        )
+
+    def test_block_trade_cache_uses_a_share_symbol(self):
+        """stock_dzjy_mrmx requires symbol='A股' to return A-share block trades."""
+        df = pd.DataFrame({"证券代码": ["000001"], "成交额": [100.0]})
+        with patch.object(de.ak, "stock_dzjy_mrmx", return_value=df) as mock_dzjy:
+            de._refresh_block_trade_cache()
+        assert mock_dzjy.called
+        kwargs = mock_dzjy.call_args.kwargs
+        assert kwargs.get("symbol") == "A股", f"Expected symbol='A股': {kwargs}"
+        assert "start_date" in kwargs, f"Expected start_date in kwargs: {kwargs}"
+        assert "end_date" in kwargs, f"Expected end_date in kwargs: {kwargs}"
+
+    def test_earnings_forecast_cache_uses_current_quarter(self):
+        """stock_yjyg_em default date is 20200331; must pass current quarter end."""
+        df = pd.DataFrame({"股票代码": ["000001"], "业绩变动幅度": [10.0]})
+        with patch.object(de.ak, "stock_yjyg_em", return_value=df) as mock_yjyg:
+            de._refresh_earnings_forecast_cache()
+        assert mock_yjyg.called, "Expected stock_yjyg_em to be called"
+        args, kwargs = mock_yjyg.call_args
+        date_arg = kwargs.get("date") or (args[0] if args else None)
+        assert date_arg != "20200331", f"Default stale date {date_arg!r} should not be used"
+        assert isinstance(date_arg, str) and len(date_arg) == 8 and date_arg.endswith(("0331", "0630", "0930", "1231"))
+
+    def test_restricted_release_cache_uses_batch_detail_endpoint(self):
+        """Use stock_restricted_release_detail_em with date range, not per-stock queue."""
+        df = pd.DataFrame({"股票代码": ["000001"], "解禁数量": [1000.0]})
+        with patch.object(de.ak, "stock_restricted_release_detail_em", return_value=df) as mock_detail:
+            with patch.object(de.ak, "stock_restricted_release_queue_em") as mock_queue:
+                de._refresh_restricted_release_cache()
+        assert mock_detail.called, "Expected stock_restricted_release_detail_em to be called"
+        assert not mock_queue.called, "Per-stock queue endpoint should not be used"
+        kwargs = mock_detail.call_args.kwargs
+        assert "start_date" in kwargs and "end_date" in kwargs, f"Missing date range: {kwargs}"
+

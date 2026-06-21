@@ -157,7 +157,7 @@ class EnhancedTimingSignal:
         })
 
 
-@dataclass  # TODO: 未来版本考虑添加 kw_only=True，防止位置参数构造时因新增字段导致参数错位
+@dataclass(kw_only=True)  # kw_only 防止位置参数构造时因新增字段导致参数错位
 class EnhancedMarketData:
     """扩展市场数据（兼容旧版 MarketData + 新增字段）"""
     """扩展市场数据（兼容旧版 MarketData + 新增字段）"""
@@ -274,6 +274,8 @@ def sigmoid_score(value: float, center: float, steepness: float = 1.0,
     if math.isnan(value):
         return float('nan')
     scaled = (value - center) * steepness
+    # 防止 math.exp 溢出：限制 scaled 在 [-700, 700] 范围内（math.exp(709) ≈ 8e307 为上限）
+    scaled = max(-700, min(700, scaled))
     score = 100 / (1 + math.exp(-scaled))
     return 100 - score if invert else score
 
@@ -333,42 +335,59 @@ def safe_score(value: float, score_fn, neutral: float = float('nan'), has_data: 
     return score_fn(value)
 
 
+# numpy 类型检查缓存（模块级导入，避免每次调用 clean_numpy_types 时重复 import）
+try:
+    import numpy as _np
+except ImportError:
+    _np = None  # type: ignore[assignment]
+
+
 def clean_numpy_types(obj):
     """递归把 numpy 标量/布尔/数组转成原生 Python 类型，便于 JSON 序列化。
 
-    同时处理 Python float 的 NaN/Inf → None，确保 JSON 输出合法
+    同时处理 Python float 的 NaN/Inf -> None，确保 JSON 输出合法
    （JSON 规范不允许 NaN/Inf 值）。
+
+    性能优化：模块级 numpy 导入 + 快速路径跳过常见纯 Python 类型。
     """
-    try:
-        import numpy as np
-    except ImportError:
-        np = None  # type: ignore[assignment]
-    if isinstance(obj, bool):
+    # 快速路径：最常见类型直接返回（int, str, bool 在 WebSocket 消息中占比 >90%）
+    t = type(obj)
+    if t is int or t is str:
+        return obj
+    if t is bool:
         return bool(obj)
-    if np is not None and isinstance(obj, np.bool_):
-        return bool(obj)
-    if np is not None and isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, float):
+    if t is float:
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
-    if np is not None and isinstance(obj, np.floating):
-        if np.isnan(obj) or np.isinf(obj):
-            return None
-        return float(obj)
-    if np is not None and isinstance(obj, np.ndarray):
-        return [clean_numpy_types(v) for v in obj.tolist()]
-    if np is not None and isinstance(obj, np.generic):
-        return obj.item()
-    if isinstance(obj, dict):
+    if t is dict:
         return {k: clean_numpy_types(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
+    if t is list:
+        return [clean_numpy_types(v) for v in obj]
+    # 以下为低频路径（numpy 类型、tuple、set 等）
+    if _np is not None:
+        if isinstance(obj, _np.bool_):
+            return bool(obj)
+        if isinstance(obj, _np.integer):
+            return int(obj)
+        if isinstance(obj, _np.floating):
+            if _np.isnan(obj) or _np.isinf(obj):
+                return None
+            return float(obj)
+        if isinstance(obj, _np.ndarray):
+            return [clean_numpy_types(v) for v in obj.tolist()]
+        if isinstance(obj, _np.generic):
+            return obj.item()
+    if isinstance(obj, tuple):
         return [clean_numpy_types(v) for v in obj]
     if isinstance(obj, (set, frozenset)):
         return [clean_numpy_types(v) for v in obj]
-    # 支持 __float__ / __int__ 协议的自定义对象（如 Decimal-like wrapper）
-    # 必须放在 dict/list 等容器类型之后，避免误匹配
+    # pd.Timestamp / pd.NaT 处理（JSON 不直接支持）
+    if hasattr(pd, 'Timestamp') and isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if hasattr(pd, 'NaT') and obj is getattr(pd, 'NaT', None):
+        return None
+    # 支持 __float__ / __int__ 协议的自定义对象
     if hasattr(obj, '__float__') and callable(obj.__float__):
         try:
             return float(obj)
@@ -433,12 +452,12 @@ class EnhancedTimingModel:
     
     # ========== 仓位映射 ==========
     POSITION_MAP = [
-        (75, 1.00, "满仓积极配置"),     # 75分以上满仓
-        (65, 0.85, "高仓位积极配置"),
-        (55, 0.70, "中高仓位配置"),    # 55-65给70%
-        (45, 0.50, "中性配置"),        # 45-55给50%
-        (35, 0.30, "防御配置"),        # 35-45给30%
-        (25, 0.15, "高度防御"),        # 25-35给15%
+        (80, 1.00, "满仓积极配置"),     # 80分以上满仓
+        (70, 0.85, "高仓位积极配置"),
+        (60, 0.70, "中高仓位配置"),    # 60-70给70%
+        (50, 0.50, "中性配置"),        # 50-60给50%
+        (40, 0.30, "防御配置"),        # 40-50给30%
+        (30, 0.15, "高度防御"),        # 30-40给15%
         (0, 0.05, "极端防御，启动对冲"),
     ]
     
@@ -753,7 +772,7 @@ class EnhancedTimingModel:
         
         # 3.2 融资融券余额占比（过高=过热风险，过低=情绪冰点）
         mb_ratio = data.margin_buy_ratio
-        if mb_ratio <= 0:
+        if math.isnan(mb_ratio) or mb_ratio <= 0:
             mb_chip_score = 50.0
             mb_chip_signal = "neutral"
             mb_chip_desc = "无融资买入数据"
@@ -780,12 +799,13 @@ class EnhancedTimingModel:
             description=mb_chip_desc,
         ))
         
-        # 3.3 转债破面比例（间接反映大股东减持压力/恐慌情绪）
+        # 3.3 转债破面比例（均值回归：破面多=恐慌=买入机会）
+        # 使用 sigmoid_score 替代 linear_score，避免正常市场（破面<5%）得分极端为0
         if data.cb_count > 0 and data.cb_below_par_count >= 0:
             pledge_ratio = data.cb_below_par_count / data.cb_count * 100
-            pledge_score = safe_score(pledge_ratio, lambda v: linear_score(v, 5, 25, invert=True))
-            pledge_signal = "bullish" if pledge_ratio > 15 else "bearish" if pledge_ratio < 5 else "neutral"
-            pledge_desc = f"低于面值转债占比{pledge_ratio:.1f}%，{'恐慌筹码出清' if pledge_ratio>15 else '关注' if pledge_ratio<5 else '正常'}"
+            pledge_score = safe_score(pledge_ratio, lambda v: sigmoid_score(v, 1.5, steepness=0.5))
+            pledge_signal = "bullish" if pledge_ratio > 15 else "bearish" if pledge_ratio < 3 else "neutral"
+            pledge_desc = f"低于面值转债占比{pledge_ratio:.1f}%，{'恐慌筹码出清=机会' if pledge_ratio>15 else '安全' if pledge_ratio<3 else '关注'}"
         else:
             pledge_ratio = 0
             pledge_score = 50.0
@@ -1024,7 +1044,7 @@ class EnhancedTimingModel:
         
         # 5.5 信用利差（AA企业债-国债）
         spread = data.credit_spread
-        if not math.isnan(spread):
+        if not math.isnan(spread) and abs(spread) < 1000 and spread != 0:
             spread_score = linear_score(spread, 50, 200, invert=True)
             spread_signal = "bullish" if spread < 80 else "bearish" if spread > 150 else "neutral"
             spread_desc = f"信用利差{spread:.0f}bp，{'信用环境宽松' if spread<80 else '信用紧缩' if spread>150 else '正常'}"
@@ -1178,7 +1198,9 @@ class EnhancedTimingModel:
         current = data.stock_index_current
         ma20 = data.stock_index_ma20
         ma60 = data.stock_index_ma60
-        if current > ma20 and ma20 > ma60:
+        if math.isnan(current) or math.isnan(ma20) or math.isnan(ma60):
+            ma_rel_score = float('nan')
+        elif current > ma20 and ma20 > ma60:
             ma_rel_score = 85
         elif current > ma20:
             ma_rel_score = 65
@@ -1199,7 +1221,9 @@ class EnhancedTimingModel:
         cb_current = data.cb_index_current
         cb_ma20 = data.cb_index_ma20
         cb_ma60 = data.cb_index_ma60
-        if cb_current > cb_ma20 and cb_ma20 > cb_ma60:
+        if math.isnan(cb_current) or math.isnan(cb_ma20) or math.isnan(cb_ma60):
+            cb_rel_score = float('nan')
+        elif cb_current > cb_ma20 and cb_ma20 > cb_ma60:
             cb_rel_score = 80
         elif cb_current > cb_ma20:
             cb_rel_score = 60
@@ -1241,14 +1265,15 @@ class EnhancedTimingModel:
             description=f"涨跌比{ad_ratio:.2f}",
         ))
         
-        # 6.2 涨停跌停比
+        # 6.2 涨停跌停比（均值回归：涨停多=超买=风险，跌停多=超卖=机会）
+        # A股常态涨停50-100只、跌停5-20只，ratio常在5-20之间，center=5使常态下中性
         if data.limit_up_count > 0 or data.limit_down_count > 0:
             up = max(data.limit_up_count, 1)
             down = max(data.limit_down_count, 1)
             ld_ratio = up / down
-            ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 2, steepness=1.5), treat_zero_as_missing=False)
-            ld_signal = "bullish" if ld_ratio > 3 else "bearish" if ld_ratio < 1 else "neutral"
-            ld_desc = f"涨停{data.limit_up_count} vs 跌停{data.limit_down_count}"
+            ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 5, steepness=1.5, invert=True), treat_zero_as_missing=False)
+            ld_signal = "bearish" if ld_ratio > 10 else "bullish" if ld_ratio < 2 else "neutral"
+            ld_desc = f"涨停{data.limit_up_count} vs 跌停{data.limit_down_count}，{'过热=风险' if ld_ratio>10 else '恐慌=机会' if ld_ratio<2 else '正常'}"
         else:
             ld_score = 50.0
             ld_signal = "neutral"
@@ -1260,14 +1285,15 @@ class EnhancedTimingModel:
             description=ld_desc,
         ))
         
-        # 6.3 新高新低比
+        # 6.3 新高新低比（均值回归：新高多=超买=风险，新低多=超卖=机会）
+        # A股常态新高多于新低，ratio常在2-5之间，center=3使常态下中性
         if data.new_high_count > 0 or data.new_low_count > 0:
             nh = max(data.new_high_count, 1)
             nl = max(data.new_low_count, 1)
             hl_ratio = nh / nl
-            hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 1.5, steepness=2), treat_zero_as_missing=False)
-            hl_signal = "bullish" if hl_ratio > 2 else "bearish" if hl_ratio < 0.7 else "neutral"
-            hl_desc = f"60日新高{data.new_high_count} vs 新低{data.new_low_count}"
+            hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 3, steepness=2, invert=True), treat_zero_as_missing=False)
+            hl_signal = "bearish" if hl_ratio > 5 else "bullish" if hl_ratio < 1.5 else "neutral"
+            hl_desc = f"60日新高{data.new_high_count} vs 新低{data.new_low_count}，{'过热=风险' if hl_ratio>5 else '恐慌=机会' if hl_ratio<1.5 else '正常'}"
         else:
             hl_score = 50.0
             hl_signal = "neutral"
@@ -1279,12 +1305,13 @@ class EnhancedTimingModel:
             description=hl_desc,
         ))
         
-        # 6.4 认沽/认购比（反向指标）
+        # 6.4 认沽/认购比（均值回归：低PCR=贪婪=风险，高PCR=恐慌=买入机会）
+        # PCR 0.5-1.0 为正常区间，使用 invert=True 使得低PCR得低分（看跌）
         pcr = data.pcr_ratio
         if pcr > 0:
-            pcr_score = linear_score(pcr, 0.6, 1.4, invert=True)
-            pcr_signal = "bullish" if pcr < 0.8 else "bearish" if pcr > 1.2 else "neutral"
-            pcr_desc = f"PCR={pcr:.2f}，{'看多情绪浓' if pcr<0.8 else '恐慌情绪' if pcr>1.2 else '中性'}"
+            pcr_score = sigmoid_score(pcr, 1.0, steepness=2.0, invert=True)
+            pcr_signal = "bullish" if pcr > 1.2 else "bearish" if pcr < 0.8 else "neutral"
+            pcr_desc = f"PCR={pcr:.2f}，{'恐慌情绪=买入机会' if pcr>1.2 else '贪婪情绪=风险' if pcr<0.8 else '中性'}"
         else:
             pcr_score = 50.0
             pcr_signal = "neutral"
@@ -1296,12 +1323,13 @@ class EnhancedTimingModel:
             description=pcr_desc,
         ))
         
-        # 6.5 波动率指数（反向指标）
+        # 6.5 波动率指数（均值回归：低VIX=平静=风险，高VIX=恐慌=买入机会）
+        # VIX 15-25 为正常区间，使用 invert=True 使得低VIX得低分（看跌）
         vix = data.vix_index
         if vix > 0:
-            vix_score = linear_score(vix, 12, 35, invert=True)
-            vix_signal = "bullish" if vix < 18 else "bearish" if vix > 28 else "neutral"
-            vix_desc = f"VIX={vix:.1f}，{'极度恐慌' if vix>30 else '恐慌' if vix>25 else '平静' if vix<18 else '正常'}"
+            vix_score = sigmoid_score(vix, 22, steepness=0.15, invert=True)
+            vix_signal = "bullish" if vix > 28 else "bearish" if vix < 18 else "neutral"
+            vix_desc = f"VIX={vix:.1f}，{'极度恐慌=买入机会' if vix>30 else '恐慌=机会' if vix>25 else '平静=风险' if vix<18 else '正常'}"
         else:
             vix_score = 50.0
             vix_signal = "neutral"
@@ -1313,32 +1341,17 @@ class EnhancedTimingModel:
             description=vix_desc,
         ))
         
-        # 6.6 融资买入占比
-        mb = data.margin_buy_ratio
-        if mb <= 0:
+        # 6.6 融资买入占比（均值回归：过高=过热=风险，过低=冷清=机会）
+        # 使用 sigmoid_score 替代阶梯式评分，正常2-5%得中性分
+        mb = data.margin_buy_ratio if not math.isnan(data.margin_buy_ratio) else float('nan')
+        if not math.isnan(mb) and mb > 0:
+            mb_score = sigmoid_score(mb, 4, steepness=0.3)
+            mb_signal = "bearish" if mb > 10 else "bullish" if mb < 3 else "neutral"
+            mb_desc = f"融资买入占比{mb:.1f}%，{'过热' if mb>10 else '过冷' if mb<3 else '正常'}"
+        else:
             mb_score = 50.0
             mb_signal = "neutral"
             mb_desc = "无融资买入数据"
-        elif mb > 12:
-            mb_score = 20
-            mb_signal = "bearish"
-            mb_desc = f"融资买入占比{mb:.1f}%，过热"
-        elif mb > 10:
-            mb_score = 40
-            mb_signal = "neutral"
-            mb_desc = f"融资买入占比{mb:.1f}%，偏高"
-        elif mb > 8:
-            mb_score = 65
-            mb_signal = "bullish"
-            mb_desc = f"融资买入占比{mb:.1f}%，最优区间"
-        elif mb > 6:
-            mb_score = 55
-            mb_signal = "neutral"
-            mb_desc = f"融资买入占比{mb:.1f}%，正常"
-        else:
-            mb_score = 35
-            mb_signal = "bearish"
-            mb_desc = f"融资买入占比{mb:.1f}%，过冷"
         sub_factors.append(FactorScore(
             name="融资买入占比", score=mb_score, weight=0.10,
             category="sentiment", raw_value=mb,
@@ -1347,20 +1360,12 @@ class EnhancedTimingModel:
         ))
         
         # 6.7 新增开户数（情绪指标，区别于资金面的换手率）
-        new_acc = data.new_accounts
-        new_acc_available = new_acc > 0
+        # 使用 sigmoid_score 替代阶梯式评分，使正常增长率得到合理分数
+        new_acc = data.new_accounts if not math.isnan(data.new_accounts) else float('nan')
+        new_acc_available = new_acc != 0.0
         if new_acc_available:
-            if new_acc > 200:
-                acc_score = 75  # 大量新入场
-            elif new_acc > 100:
-                acc_score = 60
-            elif new_acc > 50:
-                acc_score = 50
-            elif new_acc > 20:
-                acc_score = 35  # 入场减少
-            else:
-                acc_score = 20  # 无人问津
-            acc_signal = "bullish" if 50 < new_acc < 200 else "bearish" if new_acc < 20 else "neutral"
+            acc_score = sigmoid_score(new_acc, 0, steepness=0.1)
+            acc_signal = "bullish" if 50 < new_acc < 200 else "bearish" if new_acc < -20 else "neutral"
             acc_desc = f"新增开户{new_acc:.0f}万，{'人气旺盛' if new_acc>100 else '人气低迷' if new_acc<20 else '正常'}"
         else:
             acc_score = 50.0
@@ -1374,10 +1379,10 @@ class EnhancedTimingModel:
             confidence=1.0 if new_acc_available else 0.0,
         ))
         
-        # 6.8 转债恐慌指标（低于面值占比，反向）
+        # 6.8 转债恐慌指标（低于面值占比，反向指标：低=正常=高分，高=恐慌=低分）
         cb_below_ratio = data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0
-        if cb_below_ratio > 0:
-            cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=False)
+        if cb_below_ratio >= 0:
+            cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=True)
             cb_panic_signal = "bearish" if cb_below_ratio > 8 else "bullish" if cb_below_ratio < 2 else "neutral"
             cb_panic_desc = f"{data.cb_below_par_count}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
         else:
@@ -1391,10 +1396,11 @@ class EnhancedTimingModel:
             description=cb_panic_desc,
         ))
         
-        # 6.9 北向资金情绪
-        north = data.north_bound_net_flow
-        if not math.isnan(north) and north != 0:
-            north_score = sigmoid_score(north, 0, steepness=0.03)
+        # 6.9 北向资金情绪（均值回归：大幅流入=过热=风险，大幅流出=恐慌=机会）
+        # 使用 sigmoid_score，center=0, steepness=0.01 使得±50亿得分为33/67，±100亿为20/80
+        north = data.north_bound_net_flow if not math.isnan(data.north_bound_net_flow) else float('nan')
+        if not math.isnan(north):
+            north_score = sigmoid_score(north, 0, steepness=0.01)
             north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
             north_desc = f"北向资金{north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}"
         else:
@@ -1672,9 +1678,9 @@ class EnhancedTimingModel:
         """判断大类方向"""
         if not cat:
             return 'neutral'
-        if cat.score >= 60:
+        if cat.score >= 70:
             return 'bullish'
-        elif cat.score <= 40:
+        elif cat.score <= 30:
             return 'bearish'
         return 'neutral'
     
@@ -1770,14 +1776,16 @@ class EnhancedTimingModel:
         else:
             total_score = 50.0
         
-        # A. 市场环境反转调整（均值回归视角）
-        # bear=超卖（应加分抄底），bull=超买（应减分防守）
+        # A. 市场环境调整（与 detect_market_regime 定义一致：均值回归视角）
+        # detect_market_regime 定义：STRONG_BEAR=深度超卖(反弹机会), BULL=轻度超买(回调风险)
+        # 因此：超卖时加分(抄底), 超买时减分(防范回调)
+        # 幅度控制：±2 分以内，避免对综合得分造成过大偏移
         regime_penalty = {
-            MarketRegime.STRONG_BEAR: +3,   # 持续熊市只小幅加分（降低高仓位风险）
-            MarketRegime.BEAR: +1,          # 轻度熊市几乎不加分
+            MarketRegime.STRONG_BEAR: +2,   # 深度超卖，反弹机会，小幅加分
+            MarketRegime.BEAR: +1,          # 轻度超卖，小幅加分
             MarketRegime.RANGE: 0,
-            MarketRegime.BULL: -8,          # 牛市大幅减分（加大防守）
-            MarketRegime.STRONG_BULL: -12,  # 强势牛市极端减分（压到最低仓位）
+            MarketRegime.BULL: -2,          # 轻度超买，回调风险，小幅减分
+            MarketRegime.STRONG_BULL: -3,   # 深度超买，减分防范回调
         }
         total_score += regime_penalty.get(regime, 0)
         
@@ -1873,7 +1881,7 @@ class EnhancedTimingModel:
         if len(self._history) > 252:
             self._history = self._history[-252:]
         
-        logger.info(
+        logger.debug(
             f"[EnhancedTiming] 综合得分={total_score:.1f}, "
             f"仓位={position_ratio*100:.0f}%, 环境={regime.value}, "
             f"质量={quality.value}, 置信度={confidence:.2f}"

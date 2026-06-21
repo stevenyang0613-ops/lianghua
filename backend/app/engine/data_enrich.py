@@ -231,7 +231,10 @@ def _record_refresh_metric(name: str, elapsed_s: float, count: int, status: str 
     """记录单次缓存刷新的执行指标，并持久化到 refresh_metrics.json。
     写入频率受 _METRICS_FLUSH_INTERVAL 限制，避免高频 I/O。
     stale 标记只在 flush 时计算，减少每次调用的遍历开销。
+    改进 (2025-06-15ar): 从源头过滤 _inproc 内部实现条目，避免监控面板显示重复/混淆数据。
     """
+    if "_inproc" in name:
+        return
     entry = {
         "name": name,
         "elapsed_s": round(elapsed_s, 2),
@@ -339,9 +342,9 @@ def _with_metrics(fn):
             elapsed = time.time() - t0
             # 优先使用函数主动返回的 count（int 类型）
             count = result if isinstance(result, int) and result >= 0 else None
+            map_name = _METRICS_NAME_TO_MAP.get(name)
             if count is None:
                 # 使用显式映射（避免脆弱字符串替换）
-                map_name = _METRICS_NAME_TO_MAP.get(name)
                 if map_name:
                     with _cache_lock:
                         m = globals().get(map_name)
@@ -388,7 +391,6 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_spot_cache": "_spot_map",
     "_refresh_fin_cache": "_fin_map",
     "_refresh_fund_flow_cache": "_fund_flow_map",
-    "_refresh_fund_flow_from_spot_em": "_fund_flow_map",
     "_refresh_debt_cache": "_debt_map",
     "_refresh_volatility_cache": "_vol_map",
     "_refresh_buyback_cache": "_buyback_map",
@@ -401,10 +403,6 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_call_status_cache": "_call_status_map",
     "_refresh_stock_name_cache": "_name_map",
     "_refresh_coupon_rate_cache": "_coupon_rate_map",
-    # DEAD CACHES (2026-06-21 audit): removed from startup to save time & API quota.
-    # _main_biz_map, _analyst_rank_map, _macro_cpi_map, _macro_ppi_map,
-    # _macro_m2_map, _macro_lpr_map were defined here but never consumed by
-    # enrich_quotes or any API endpoint. Functions remain in file for opt-in use.
     "_build_industry_cache": "_industry_map",
     "_build_concept_cache": "_concept_map",
     "_refresh_bond_price_cache": "_bond_price_map",
@@ -427,10 +425,10 @@ def get_cache_refresh_ts() -> dict[str, float]:
 def get_refresh_metrics() -> dict[str, dict]:
     """返回所有缓存刷新的执行指标（用于监控面板展示）。
     对未标记 stale 的条目做实时检查，确保 API 返回的 stale 状态与实际一致。
-    过滤掉 _inproc 内部实现条目，避免监控面板显示重复/混淆的数据行。
+    改进 (2025-06-15ar): _inproc 过滤已下沉到 _record_refresh_metric，此处无需再过滤。
     """
     with _cache_lock:
-        data = {k: v for k, v in _refresh_metrics.items() if "_inproc" not in k}
+        data = dict(_refresh_metrics)
     _mark_stale_entries(data, time.time())
     return data
 
@@ -1128,7 +1126,6 @@ def _refresh_fund_flow_cache():
 
 
 
-@_with_metrics
 def _refresh_fund_flow_from_spot_em():
     """填充资金流向数据 — 返回 dict，不直接修改全局 map，由父级决定如何合并"""
     try:
@@ -4236,13 +4233,14 @@ def get_restricted_release_map() -> dict:
 def _refresh_north_cache():
     """主进程内刷新北向资金数据（替代 data_enrich_runner 子进程）
 
-    持仓覆盖策略：
-    - 沪股通 + 深股通 + 北向（汇总）
-    - 每市场取 _NORTH_TOP_N = 500（覆盖绝大多数正股，包括可转债正股）
-    - 汇总用 _summary 字段单独存
+    数据来源：
+    - 汇总：ak.stock_hsgt_fund_flow_summary_em（北向资金净流入）
+    - 个股：ak.stock_hsgt_individual_em（按可转债正股代码逐股查询最新持股）
+      因为批量 `stock_hsgt_hold_stock_em` 在 akshare 1.18.x / 当前网络环境下
+      频繁返回 NoneType，改用稳定的单股接口。
     """
     try:
-        # ak.stock_hsgt_fund_flow_summary_em: 北向资金汇总（沪+深）
+        # 汇总：北向资金净流入
         summary = _run_with_timeout(
             ak.stock_hsgt_fund_flow_summary_em,
             timeout=_TIMEOUT_MEDIUM, default=None, op_name="hsgt_fund_flow_summary_em",
@@ -4250,7 +4248,6 @@ def _refresh_north_cache():
         result = {}
         if summary is not None and len(summary) > 0:
             for _, r in summary.iterrows():
-                # summary 返回的"北向"是汇总数，按整体填充到全局
                 net_h = _sf(r.get("成交净买额"))
                 if net_h is not None:
                     result["_summary"] = {
@@ -4261,32 +4258,43 @@ def _refresh_north_cache():
         else:
             logger.warning("[DataEnrich] North: summary empty")
 
-        # 个股北向持仓：每个市场取前 _NORTH_TOP_N
-        # ⚠️ 排序依据：ak.stock_hsgt_hold_stock_em 默认按"持股市值"降序排序，
-        # 即 head(500) 是 top 500 重仓股。500 只足以覆盖所有可转债正股（~250 只）。
-        # 注：排序是"持股市值"，不是"持股数量"或"持股变化"。
-        _NORTH_TOP_N = 500
-        for market_label, market_type in [
-            ("sh_hold", "沪股通"),
-            ("sz_hold", "深股通"),
-        ]:
+        # 个股北向持仓：对可转债正股逐股查询（单股接口稳定）
+        if not _bond_stock_codes:
+            _ensure_bond_stock_codes()
+        bond_codes = sorted(_bond_stock_codes)[:250] if _bond_stock_codes else []
+        if not bond_codes:
+            logger.debug("[DataEnrich] North: _bond_stock_codes empty, skipping per-stock query")
+
+        def _fetch_one(code: str):
             try:
-                holds = _run_with_timeout(
-                    lambda: ak.stock_hsgt_hold_stock_em(market_type=market_type, indicator="持股市值"),
-                    timeout=_TIMEOUT_SLOW, default=None, op_name=f"hsgt_{market_label}",
+                df = _run_with_timeout(
+                    ak.stock_hsgt_individual_em, code,
+                    timeout=_TIMEOUT_FAST, default=None,
+                    op_name=f"north_{code}",
                 )
-                if holds is not None and len(holds) > 0:
-                    count_in_market = 0
-                    for _, r in holds.head(_NORTH_TOP_N).iterrows():
-                        code = str(r.get("代码", "")).strip()
-                        if code and len(code) == 6 and code.isdigit():
-                            net_v = _sf(r.get("持股市值"))
-                            if net_v is not None:
-                                result[code] = {"north_net": net_v}
-                                count_in_market += 1
-                    logger.info(f"[DataEnrich] North {market_type}: {count_in_market} stocks")
-            except Exception as e:
-                logger.debug(f"[DataEnrich] North hsgt_{market_label} failed: {e}")
+                if df is None or len(df) == 0:
+                    return None
+                last = df.iloc[0]
+                market_val = _sf(last.get("持股市值"))
+                net_buy = _sf(last.get("今日增持资金"))
+                if market_val is None and net_buy is None:
+                    return None
+                entry = {}
+                if market_val is not None:
+                    entry["north_net"] = market_val
+                if net_buy is not None:
+                    entry["north_buy"] = net_buy
+                return code, entry
+            except Exception:
+                return None
+
+        if bond_codes:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+                futures = {pool.submit(_fetch_one, c): c for c in bond_codes}
+                for fut in concurrent.futures.as_completed(futures, timeout=180):
+                    r = fut.result()
+                    if r:
+                        result[r[0]] = r[1]
 
         if result:
             _set_global_map("_north_map", result)
@@ -4304,35 +4312,62 @@ def _refresh_north_cache():
 def _refresh_margin_cache():
     """主进程内刷新融资融券数据。
 
-    注意：akshare 1.18.x 中 stock_margin_underlying_info_sse 不存在（只有 SZSE）。
-    采用 stock_margin_underlying_info_szse 获取深圳标的证券信息。
-    深交所标的约 1000 只，覆盖大部分可转债正股（多为 0XX/3XX 深市代码）。
+    采用交易所每日融资融券明细：
+    - 深交所：ak.stock_margin_detail_szse(date)
+    - 上交所：ak.stock_margin_detail_sse(date)
+    自动回退最近 10 个交易日（节假日无数据）。
     """
     try:
-        if not hasattr(ak, "stock_margin_underlying_info_szse"):
-            logger.warning("[DataEnrich] Margin: akshare 接口 stock_margin_underlying_info_szse 不可用")
-            return 0
-        # 默认日期传空字符串使用最新可用日期
-        df = _run_with_timeout(
-            lambda: ak.stock_margin_underlying_info_szse(date=""),
-            timeout=_TIMEOUT_MEDIUM, default=None,
-            op_name="margin_underlying_szse",
-        )
-        if df is None or len(df) == 0:
-            logger.warning("[DataEnrich] Margin: SZSE empty")
-            return 0
         result = {}
-        for _, r in df.iterrows():
-            code = str(r.get("证券代码", "")).strip()
-            if not code or len(code) != 6:
+
+        def _margin_detail_for_date(exchange: str, date_str: str):
+            fn = ak.stock_margin_detail_szse if exchange == "szse" else ak.stock_margin_detail_sse
+            return _run_with_timeout(
+                lambda: fn(date=date_str),
+                timeout=_TIMEOUT_MEDIUM, default=None,
+                op_name=f"margin_detail_{exchange}_{date_str}",
+            )
+
+        for exchange, code_col_candidates, balance_col_candidates in [
+            ("szse", ["证券代码", "代码"], ["融资余额", "融资融券余额"]),
+            ("sse", ["标的证券代码", "证券代码", "代码"], ["融资余额", "融资融券余额"]),
+        ]:
+            df = None
+            date_str = None
+            for days in range(10):
+                date_str = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+                df = _margin_detail_for_date(exchange, date_str)
+                if df is not None and len(df) > 0:
+                    break
+            if df is None or len(df) == 0:
+                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} no data for last 10 days")
                 continue
-            # SZSE 标的证券信息不含余额数据，balance=0 表示"是融资标的"
-            # 实际余额需要 stock_margin_detail_szse(date) 按日期查询
-            result[code] = {"margin_balance": 0, "_data_source": "underlying_only"}
+
+            code_col = next((c for c in code_col_candidates if c in df.columns), None)
+            balance_col = next((c for c in balance_col_candidates if c in df.columns), None)
+            if not code_col:
+                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} missing code column")
+                continue
+
+            filled = 0
+            for _, r in df.iterrows():
+                code = str(r.get(code_col, "")).strip()
+                if not code or len(code) != 6 or not code.isdigit():
+                    continue
+                balance = _sf(r.get(balance_col)) if balance_col else None
+                # 若当前交易所已有数据，保留首次出现（通常 SSE/SZSE 不重叠）
+                if code not in result:
+                    result[code] = {
+                        "margin_balance": balance if balance is not None else 0,
+                        "_data_source": f"{exchange}_{date_str}",
+                    }
+                    filled += 1
+            logger.info(f"[DataEnrich] Margin {exchange.upper()}: {filled} stocks from {date_str}")
+
         if result:
             _set_global_map("_margin_map", result)
             _save_cache(_MARGIN_CACHE, result)
-            logger.info(f"[DataEnrich] Margin: {len(result)} underlying stocks refreshed (SZSE)")
+            logger.info(f"[DataEnrich] Margin: {len(result)} stocks refreshed")
             return len(result)
         return 0
     except Exception as e:
@@ -4392,20 +4427,28 @@ def _refresh_lhb_cache():
 
 @_with_metrics
 def _refresh_block_trade_cache():
-    """主进程内刷新大宗交易数据"""
+    """主进程内刷新大宗交易数据
+
+    使用 ak.stock_dzjy_mrmx(symbol='A股', start_date, end_date) 获取 A 股大宗交易明细，
+    回退最近 5 个交易日（节假日无数据时向前查找）。
+    """
     try:
-        # ak.stock_dzjy_mrmx: 大宗交易每日明细（最近一天）
-        from datetime import datetime, timedelta
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
-        df = _run_with_timeout(
-            lambda: ak.stock_dzjy_mrmx(start_date=start_date, end_date=end_date),
-            timeout=_TIMEOUT_MEDIUM, default=None, op_name="dzjy_mrmx",
-        )
+        # 保留已有缓存，API 临时不可用时不会立即丢数据
+        result = dict(_block_trade_map) if isinstance(_block_trade_map, dict) else {}
+        df = None
+        for days in range(5):
+            end_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+            start_date = (datetime.now() - timedelta(days=days + 2)).strftime("%Y%m%d")
+            df = _run_with_timeout(
+                lambda s=start_date, e=end_date: ak.stock_dzjy_mrmx(symbol="A股", start_date=s, end_date=e),
+                timeout=_TIMEOUT_MEDIUM, default=None,
+                op_name=f"dzjy_mrmx_{end_date}",
+            )
+            if df is not None and len(df) > 0:
+                break
         if df is None or len(df) == 0:
             logger.warning("[DataEnrich] BlockTrade: empty result")
-            return 0
-        result = {}
+            return len(result)
         for _, r in df.iterrows():
             code = str(r.get("证券代码", "")).strip()
             if not code or len(code) != 6:
@@ -4501,33 +4544,54 @@ def _refresh_earnings_forecast_cache():
     不是预测的 EPS 数值。我们存储为 yoy_change_pct 字段而非 eps_forecast，
     避免字段名误导下游消费方（如 Xuanji/Strategy 模块）。
     前端展示为"业绩预告同比变动"。
+
+    接口需要传入财报发布日期（季度末），默认 20200331 已过时；
+    这里自动计算当前季度末，若空数据则回退到上一季度。
     """
     try:
-        # ak.stock_yjyg_em: 业绩预告（最新季报）
-        df = _run_with_timeout(
-            ak.stock_yjyg_em,
-            timeout=_TIMEOUT_MEDIUM, default=None, op_name="yjyg_em",
-        )
+        import calendar
+        now = datetime.now()
+        quarter_months = [3, 6, 9, 12]
+        current_quarter = (now.month - 1) // 3
+        candidate_dates = []
+        for i in range(4):
+            q = (current_quarter - i) % 4
+            year = now.year if i == 0 or q <= current_quarter else now.year - 1
+            month = quarter_months[q]
+            day = calendar.monthrange(year, month)[1]
+            candidate_dates.append(f"{year}{month:02d}{day:02d}")
+
+        df = None
+        used_date = None
+        for date_str in candidate_dates:
+            df = _run_with_timeout(
+                ak.stock_yjyg_em, date_str,
+                timeout=_TIMEOUT_MEDIUM, default=None, op_name=f"yjyg_em_{date_str}",
+            )
+            if df is not None and len(df) > 0:
+                used_date = date_str
+                break
+
         if df is None or len(df) == 0:
             logger.warning("[DataEnrich] EarningsForecast: empty result")
             return 0
+
         result = {}
         for _, r in df.iterrows():
-            code = str(r.get("代码", "")).strip()
+            code = str(r.get("股票代码", "")).strip()
             if not code or len(code) != 6:
                 continue
-            # 业绩变动幅度作为预测（% 变化）
             change_pct = _sf(r.get("业绩变动幅度"))
             if change_pct is not None:
-                # 字段名: yoy_change_pct（更准确），向后兼容 eps_forecast 字段名
                 result[code] = {
-                    "eps_forecast": change_pct,  # 保留以兼容现有前端
-                    "yoy_change_pct": change_pct,  # 新字段，语义更准确
+                    "eps_forecast": change_pct,
+                    "yoy_change_pct": change_pct,
+                    "_date": used_date,
                 }
         if result:
             _set_global_map("_earnings_forecast_map", result)
             _save_cache(_EARNINGS_FORECAST_CACHE, result)
-            logger.info(f"[DataEnrich] EarningsForecast: {len(result)} stocks refreshed")
+            logger.info(f"[DataEnrich] EarningsForecast: {len(result)} stocks refreshed (date={used_date})")
             return len(result)
         return 0
     except Exception as e:
@@ -4537,12 +4601,20 @@ def _refresh_earnings_forecast_cache():
 
 @_with_metrics
 def _refresh_restricted_release_cache():
-    """主进程内刷新限售解禁数据"""
+    """主进程内刷新限售解禁数据
+
+    使用 ak.stock_restricted_release_detail_em(start_date, end_date) 批量获取
+    未来 30 天解禁明细，并按股票代码聚合解禁数量/市值。
+    """
     try:
-        # ak.stock_restricted_release_queue_em: 解禁队列（未来 30 天）
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+        # 获取未来 30 天（更宽窗口以增加命中概率）
+        query_end = (datetime.now() + timedelta(days=30)).strftime("%Y%m%d")
         df = _run_with_timeout(
-            ak.stock_restricted_release_queue_em,
-            timeout=_TIMEOUT_MEDIUM, default=None, op_name="restricted_release_queue_em",
+            lambda: ak.stock_restricted_release_detail_em(start_date=start_date, end_date=query_end),
+            timeout=_TIMEOUT_SLOW, default=None,
+            op_name="restricted_release_detail_em",
         )
         if df is None or len(df) == 0:
             logger.warning("[DataEnrich] RestrictedRelease: empty result")
@@ -4554,7 +4626,8 @@ def _refresh_restricted_release_cache():
                 continue
             amount = _sf(r.get("解禁数量")) or _sf(r.get("市值"))
             if amount and amount > 0:
-                result[code] = {"restricted_release_amount": amount}
+                entry = result.setdefault(code, {"restricted_release_amount": 0})
+                entry["restricted_release_amount"] += amount
         if result:
             _set_global_map("_restricted_release_map", result)
             _save_cache(_RESTRICTED_RELEASE_CACHE, result)
