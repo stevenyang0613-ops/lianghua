@@ -63,3 +63,51 @@ electron/release/
 
 # Playwright MCP
 .playwright-mcp/
+
+# Dev/utility scripts (temporary)
+backend/backfill_factors*.py
+backend/boost_pe.py
+backend/bt_compare*.py
+backend/bt_final*.py
+backend/bt_result*.txt
+backend/cache_kline.py
+backend/check_storage*.py
+backend/deep_diag.py
+backend/diag_backtest.py
+backend/e2e_*.py
+backend/final_fix.py
+backend/fix_*.py
+backend/forward_fill_factors.py
+backend/full_backup.py
+backend/full_fix*.py
+backend/gen_charts*.py
+backend/generate_charts.py
+backend/manage_data.py
+backend/patch_*.py
+backend/print_report.py
+backend/refresh_*.py
+backend/seed_duckdb.py
+backend/test_extra_sources.py
+backend/test_pt_*.py
+backend/timing_backtest_*.py
+backend/unified_refresh.sh
+backend/verify_data_coverage.py
+backend/data/icir_cache/
+backend/data/macro_cache/
+backend/data/market.db.wal
+
+# Temporary screenshots and test outputs
+*.png
+*.csv
+!frontend/public/**/*.png
+backtest_report*.md
+backtest_results/
+timing_backtest_*.csv
+check_db.py
+check_fin_cols.py
+fix_fin.py
+force_refresh.py
+test_*.py
+test_*.spec
+verify_*.py
+_archive/
