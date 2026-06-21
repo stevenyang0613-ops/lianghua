@@ -3,10 +3,10 @@
  * 支持进度动画、离线模式检测、版本更新检查
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { healthCheck } from '../services/api'
 import { refreshWsToken } from '../utils/wsInstances'
-import { getApiBase, setWsAuthToken, setBackendPort } from '../utils/config'
+import { getApiBase, setWsAuthToken, setBackendPort, setBrowserBackendUrl, probeDirectBackend } from '../utils/config'
 import { useAppStore } from '../stores/useAppStore'
 import {
   enableOfflineMode,
@@ -60,12 +60,16 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
   const [progress, setProgress] = useState(0)
   const [showOfflineHint, setShowOfflineHint] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean; version?: string } | null>(null)
+  // isMounted ref：防止组件卸载后异步回调 setState 触发 React warning
+  const isMountedRef = useRef(true)
 
   // Electron 环境下启动时清除离线模式残留
   useEffect(() => {
+    isMountedRef.current = true
     if (window.electronAPI?.httpRequest) {
       localStorage.removeItem('offline_mode')
     }
+    return () => { isMountedRef.current = false }
   }, [])
 
   // 检查离线模式
@@ -95,6 +99,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     if (backendConnected) return
 
     const cleanup = window.electronAPI?.onBackendReady?.((data: any) => {
+      if (!isMountedRef.current) return // 组件已卸载，忽略异步回调
       const port = typeof data === 'object' ? data.port : data
       const token = typeof data === 'object' ? data.ws_auth_token : undefined
       console.log('[StartupLoading] Received backend-ready event, port:', port, 'hasToken:', !!token)
@@ -112,7 +117,9 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
   // 版本更新检查
   useEffect(() => {
     if (backendConnected) {
-      checkForUpdates().then(setUpdateInfo)
+      checkForUpdates().then(info => {
+        if (isMountedRef.current) setUpdateInfo(info)
+      })
     }
   }, [backendConnected])
 
@@ -134,10 +141,33 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     let cancelled = false
     let retries = 0
     const maxRetries = 120
+    // AbortController 用于取消 probeDirectBackend 请求
+    const probeAbortController = new AbortController()
+    // 指数退避：Electron 环境后端启动需 6-10 分钟，逐步拉长重试间隔
+    // 浏览器：5s → 10s → 20s → 20s...  Electron IPC：1s → 2s → 4s → 4s...
+    // MAX_BACKOFF_EXPONENT: 退避指数上限，retries 超过此值后不再翻倍
+    const MAX_BACKOFF_EXPONENT = 3
+    // probe 刚超时标志：后端 5s 内未响应但可能正在启动，缩短下次重试间隔
+    // 注意：此标志仅影响浏览器环境（probeDirectBackend 在 Electron 中返回 false，
+    // 不会设置此标志）。Electron 环境走 IPC 通道，不受 probe 超时影响。
+    let probeJustTimedOut = false
+    function getRetryDelay(): number {
+      const isElectron = !!window.electronAPI?.httpRequest
+      const base = isElectron ? 1000 : 5000
+      const max = isElectron ? 4000 : 20000
+      // 如果 probe 刚超时，缩短间隔为 base 的 60%（后端可能即将就绪）
+      if (probeJustTimedOut) {
+        probeJustTimedOut = false
+        return Math.round(base * 0.6)
+      }
+      const delay = base * Math.pow(2, Math.min(retries, MAX_BACKOFF_EXPONENT))
+      return Math.min(delay, max)
+    }
 
     async function check() {
-      // 等待 electronAPI.httpRequest 可用（不依赖 isElectron 标志）
-      if (typeof window !== 'undefined' && !window.electronAPI?.httpRequest) {
+      // 仅在 Electron 环境中等待 electronAPI.httpRequest 可用
+      // 非 Electron 环境（浏览器开发模式）跳过，避免浪费 5 秒
+      if (typeof window !== 'undefined' && window.electronAPI && !window.electronAPI.httpRequest) {
         for (let i = 0; i < 50; i++) {
           if (window.electronAPI?.httpRequest) break
           await new Promise((r) => setTimeout(r, 100))
@@ -176,9 +206,9 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
               }
               return
             }
-            // 后端未就绪，快速重试
+            // 后端未就绪，使用退避间隔重试
             retries++
-            await new Promise((r) => setTimeout(r, 500))
+            await new Promise((r) => setTimeout(r, getRetryDelay()))
             continue
           }
 
@@ -204,7 +234,37 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
           return
         } catch {
           retries++
-          await new Promise((r) => setTimeout(r, 1000))
+          // 浏览器环境降级：Vite 代理失败时，尝试探测后端直连地址
+          if (!window.electronAPI?.httpRequest && retries === 3) {
+            console.log('[StartupLoading] Vite proxy failed, probing direct backend...')
+            try {
+              const probed = await probeDirectBackend(probeAbortController.signal)
+              if (probed) {
+                // 探测成功，重新走 healthCheck（此时 getApiBase 已更新）
+                const healthResult = await healthCheck()
+                if (cancelled) return
+                disableOfflineMode()
+                if (healthResult.ws_auth_token) {
+                  setWsAuthToken(healthResult.ws_auth_token)
+                  refreshWsToken()
+                }
+                clearInterval(stepInterval)
+                setStep(LOADING_STEPS.length - 1)
+                setProgress(100)
+                await new Promise((r) => setTimeout(r, 500))
+                if (!cancelled) {
+                  setBackendConnected(true)
+                }
+                return
+	              }
+	              // probe 返回 false（超时或后端不可达），缩短下次重试间隔
+	              probeJustTimedOut = true
+	            } catch {
+	              // 探测也失败，缩短下次重试间隔
+	              probeJustTimedOut = true
+            }
+          }
+          await new Promise((r) => setTimeout(r, getRetryDelay()))
         }
       }
 
@@ -217,6 +277,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     check()
     return () => {
       cancelled = true
+      probeAbortController.abort()
     }
     // 注意：step 不应在依赖数组中，否则会导致无限循环
     // eslint-disable-next-line react-hooks/exhaustive-deps

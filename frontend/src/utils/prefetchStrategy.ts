@@ -238,7 +238,7 @@ class PrefetchManager {
       '/plugins': () => import('../pages/PluginManager'),
       '/score-ranking': () => import('../pages/ScoreRanking'),
       '/sync': () => import('../pages/SyncSettings'),
-      '/songgang-score': () => import('../pages/SonggangScore'),
+      '/xibu-score': () => import('../pages/XibuScore'),
     }
 
     const loader = routeComponentMap[path]

@@ -21,10 +21,10 @@ import ReactECharts from 'echarts-for-react'
 import VirtualTable from '../components/VirtualTable'
 import type { VirtualColumn } from '../components/VirtualTable'
 import {
-  fetchSonggangRanking, fetchSonggangSingleScore, fetchSonggangHistory, saveSonggangSnapshot,
-  streamSonggangRanking, runBacktest,
-  type SonggangScoreItem, type SonggangVetoedItem, type BufferStatusItem,
-  type SonggangSingleScore, type SevenDimHistoryItem, type BacktestResult,
+  fetchXibuRanking, fetchXibuSingleScore, fetchXibuHistory, saveXibuSnapshot,
+  streamXibuRanking, runBacktest,
+  type XibuScoreItem, type XibuVetoedItem, type BufferStatusItem,
+  type XibuSingleScore, type SevenDimHistoryItem, type BacktestResult,
   type MarketChangeStats
 } from '../services/api'
 import { fmt } from '../utils/format'
@@ -32,7 +32,7 @@ import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
-const STORAGE_KEY = 'songgang_score_config'
+const STORAGE_KEY = 'xibu_score_config'
 
 type AumLevel = 'small' | 'medium' | 'large'
 type MarketEnv = 'bull' | 'bear' | 'neutral'
@@ -114,7 +114,7 @@ function getErrorMessage(e: unknown): string {
   return '未知错误'
 }
 
-export default function SonggangScore() {
+export default function XibuScore() {
   const [vetoedPage, setVetoedPage] = useState(1)
   const [vetoedPageSize, setVetoedPageSize] = useState(10)
   const [bufferPage, setBufferPage] = useState(1)
@@ -128,8 +128,8 @@ export default function SonggangScore() {
     returned: number
     market_env: string
     aum_level: string
-    items: SonggangScoreItem[]
-    vetoed: SonggangVetoedItem[]
+    items: XibuScoreItem[]
+    vetoed: XibuVetoedItem[]
     vetoed_count: number
     buffer_status: BufferStatusItem[]
     market_stats?: MarketChangeStats
@@ -187,7 +187,7 @@ export default function SonggangScore() {
   // 详情弹窗
   const [detailVisible, setDetailVisible] = useState(false)
   const [selectedCode, setSelectedCode] = useState<string>('')
-  const [selectedDetail, setSelectedDetail] = useState<SonggangSingleScore | null>(null)
+  const [selectedDetail, setSelectedDetail] = useState<XibuSingleScore | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [historyData, setHistoryData] = useState<SevenDimHistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -221,14 +221,14 @@ export default function SonggangScore() {
     const seq = ++fetchSeqRef.current
     setLoading(true)
     try {
-      const result = await fetchSonggangRanking(topN, aumLevel, marketEnv)
+      const result = await fetchXibuRanking(topN, aumLevel, marketEnv)
       if (seq !== fetchSeqRef.current) return // 过期响应，丢弃
       setData(result)
       saveConfig({ topN, aumLevel, marketEnv })
     } catch {
       if (seq !== fetchSeqRef.current) return // 过期响应，丢弃
       // 普通API失败时，尝试SSE流式
-      const es = streamSonggangRanking(
+      const es = streamXibuRanking(
         { topN, aumLevel, marketEnv },
         () => {}, // progress不再触发
         (doneData) => {
@@ -242,14 +242,14 @@ export default function SonggangScore() {
           if (seq !== fetchSeqRef.current) return // 过期响应
           // SSE失败，降级重试REST API
           message.warning('SSE超时，正在降级重试...')
-          fetchSonggangRanking(topN, aumLevel, marketEnv)
+          fetchXibuRanking(topN, aumLevel, marketEnv)
             .then((r) => {
               if (seq !== fetchSeqRef.current) return
               setData(r)
               saveConfig({ topN, aumLevel, marketEnv })
             })
             .catch((e) => {
-              console.error('[SonggangScore] REST fallback failed:', e)
+              console.error('[XibuScore] REST fallback failed:', e)
               const msg = getErrorMessage(e)
               setErrorMsg(msg)
               message.error(`加载失败: ${msg}`)
@@ -281,13 +281,13 @@ export default function SonggangScore() {
     setHistoryLoading(true)
     try {
       const [detail, hist] = await Promise.all([
-        fetchSonggangSingleScore(code, aumLevel),
-        fetchSonggangHistory(code, 30).catch(() => ({ items: [] })),
+        fetchXibuSingleScore(code, aumLevel),
+        fetchXibuHistory(code, 30).catch(() => ({ items: [] })),
       ])
       setSelectedDetail(detail)
       setHistoryData(hist.items || [])
     } catch (e) {
-      console.error('[SonggangScore] load detail failed:', e)
+      console.error('[XibuScore] load detail failed:', e)
       message.error(`加载详情失败: ${getErrorMessage(e)}`)
     } finally {
       setDetailLoading(false)
@@ -318,7 +318,7 @@ export default function SonggangScore() {
   }
 
   // [Fix #3] virtualColumns 现在可以正确 memoize（handleViewDetail 是 useCallback）
-  const virtualColumns: VirtualColumn<SonggangScoreItem>[] = useMemo(() => [
+  const virtualColumns: VirtualColumn<XibuScoreItem>[] = useMemo(() => [
     { key: 'rank', dataIndex: 'rank', title: '排名', width: 60, sortable: true, sortOrder: sortKey === 'rank' ? sortDir : null, render: (v: unknown) => {
       const rank = v as number
       return <span style={{ fontWeight: 'bold', color: rank <= 10 ? '#faad14' : undefined }}>
@@ -441,7 +441,7 @@ export default function SonggangScore() {
     // [Fix #10] 不清空旧结果，避免闪烁
     try {
       const res = await runBacktest({
-        strategy: 'songgang_seven',
+        strategy: 'xibu_seven',
         params: {
           hold_count: topN,
           buffer_size: 5,
@@ -459,10 +459,10 @@ export default function SonggangScore() {
         message.success('回测完成')
       } else {
         message.error('回测返回了非预期的结果类型')
-        console.error('[SonggangScore] unexpected backtest response type:', res.type)
+        console.error('[XibuScore] unexpected backtest response type:', res.type)
       }
     } catch (e) {
-      console.error('[SonggangScore] backtest failed:', e)
+      console.error('[XibuScore] backtest failed:', e)
       message.error(`回测失败: ${getErrorMessage(e)}`)
     } finally {
       setBacktestLoading(false)
@@ -502,10 +502,10 @@ export default function SonggangScore() {
               </Button>
               <Button icon={<SaveOutlined />} onClick={async () => {
                 try {
-                  const res = await saveSonggangSnapshot()
+                  const res = await saveXibuSnapshot()
                   message.success(`快照已保存，共 ${res.saved} 条`)
                 } catch (e) {
-                  console.error('[SonggangScore] save snapshot failed:', e)
+                  console.error('[XibuScore] save snapshot failed:', e)
                   message.error('保存快照失败')
                 }
               }}>保存快照</Button>
@@ -931,7 +931,7 @@ export default function SonggangScore() {
       >
         <Alert
           message="回测说明"
-          description={`将使用松岗七维打分策略，持有前${topN}名标的进行轮换回测。当前AUM等级: ${aumLevel}，市场环境: ${marketEnv}。`}
+          description={`将使用西部七维打分策略，持有前${topN}名标的进行轮换回测。当前AUM等级: ${aumLevel}，市场环境: ${marketEnv}。`}
           type="info"
           showIcon
           style={{ marginBottom: 16 }}

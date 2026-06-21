@@ -35,7 +35,7 @@ test.describe('认证流程', () => {
       await submitButton.click()
 
       // 等待页面跳转或登录成功提示
-      await page.waitForTimeout(2000)
+      await page.waitForURL('**/dashboard,**/market,**/', { timeout: 5000 }).catch(() => {})
     }
   })
 

@@ -12,8 +12,8 @@ test.describe('回测页面', () => {
   test('应该显示回测配置面板', async ({ page }) => {
     await page.waitForLoadState('networkidle')
 
-    // 检查回测配置表单
-    const configForm = page.locator('form, .ant-form, [data-testid="backtest-config"]')
+    // 检查回测配置表单（优先 data-testid，兼容 antd class）
+    const configForm = page.locator('[data-testid="backtest-page"] form, [data-testid="backtest-config"], .ant-form, form')
     await expect(configForm.first()).toBeVisible({ timeout: 10000 })
   })
 
@@ -43,7 +43,8 @@ test.describe('回测页面', () => {
     const startDatePicker = datePickers.first()
     if (await startDatePicker.isVisible()) {
       await startDatePicker.click()
-      await page.waitForTimeout(500)
+      // 等待日期面板展开
+      await page.locator('.ant-picker-dropdown, .ant-picker-panel').first().waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
 
       // 选择一个日期
       const dateCell = page.locator('.ant-picker-cell').first()
@@ -62,8 +63,8 @@ test.describe('回测页面', () => {
     if (await runButton.isVisible()) {
       await runButton.click()
 
-      // 等待回测完成（可能需要较长时间）
-      await page.waitForTimeout(5000)
+      // 等待回测完成：观察结果面板出现或 loading 消失（优先 data-testid）
+      await page.locator('[data-testid="backtest-result"], .backtest-result, .echarts-for-react').first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => {})
 
       // 检查结果是否显示
       const resultPanel = page.locator('.backtest-result, [data-testid="backtest-result"], .echarts-for-react')

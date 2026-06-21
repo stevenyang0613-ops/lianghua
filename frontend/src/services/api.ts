@@ -1101,10 +1101,10 @@ export async function cleanupBacktestHistory(keepDays: number = 90): Promise<{ d
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 松岗七维打分 API (V3.0)
+// 西部七维打分 API (V3.0)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export interface SonggangScoreItem {
+export interface XibuScoreItem {
   rank: number
   code: string
   name: string
@@ -1127,7 +1127,7 @@ export interface SonggangScoreItem {
   change_30d?: number | null
 }
 
-export interface SonggangVetoedItem {
+export interface XibuVetoedItem {
   code: string
   name: string
   reasons: string[]
@@ -1164,7 +1164,7 @@ export interface MarketChangeStats {
   median_change: number
 }
 
-export interface SonggangRankingResponse {
+export interface XibuRankingResponse {
   total: number
   returned: number
   market_env: string
@@ -1174,15 +1174,15 @@ export interface SonggangRankingResponse {
     buffer_size: number
     buffer_days: number
   }
-  items: SonggangScoreItem[]
-  vetoed: SonggangVetoedItem[]
+  items: XibuScoreItem[]
+  vetoed: XibuVetoedItem[]
   vetoed_count: number
   buffer_status: BufferStatusItem[]
   market_stats?: MarketChangeStats
   cached: boolean
 }
 
-export interface SonggangSingleScore {
+export interface XibuSingleScore {
   code: string
   name: string
   price: number
@@ -1207,7 +1207,7 @@ export interface SonggangSingleScore {
   }
 }
 
-export interface SonggangVetoCheck {
+export interface XibuVetoCheck {
   code: string
   name: string
   passed: boolean
@@ -1220,39 +1220,39 @@ export interface SonggangVetoCheck {
   }
 }
 
-export async function fetchSonggangRanking(
+export async function fetchXibuRanking(
   topN: number = 60,
   aumLevel: 'small' | 'medium' | 'large' = 'small',
   marketEnv: 'bull' | 'bear' | 'neutral' = 'neutral'
-): Promise<SonggangRankingResponse> {
+): Promise<XibuRankingResponse> {
   return fetchJSON(
-    `${BASE}/analysis/songgang-ranking?top_n=${topN}&aum_level=${aumLevel}&market_env=${marketEnv}`,
-    `songgang_ranking_v2_${topN}_${aumLevel}_${marketEnv}`,
+    `${BASE}/analysis/xibu-ranking?top_n=${topN}&aum_level=${aumLevel}&market_env=${marketEnv}`,
+    `xibu_ranking_v2_${topN}_${aumLevel}_${marketEnv}`,
     5 * 60 * 1000
   )
 }
 
-export async function fetchSonggangSingleScore(
+export async function fetchXibuSingleScore(
   code: string,
   aumLevel: 'small' | 'medium' | 'large' = 'small'
-): Promise<SonggangSingleScore> {
+): Promise<XibuSingleScore> {
   return fetchJSON(
-    `${BASE}/analysis/songgang-ranking/${code}?aum_level=${aumLevel}`,
-    `songgang_single_${code}`,
+    `${BASE}/analysis/xibu-ranking/${code}?aum_level=${aumLevel}`,
+    `xibu_single_${code}`,
     5 * 60 * 1000
   )
 }
 
-export async function fetchSonggangVetoCheck(code: string): Promise<SonggangVetoCheck> {
+export async function fetchXibuVetoCheck(code: string): Promise<XibuVetoCheck> {
   return fetchJSON(
-    `${BASE}/analysis/songgang-ranking/veto/${code}`,
-    `songgang_veto_${code}`,
+    `${BASE}/analysis/xibu-ranking/veto/${code}`,
+    `xibu_veto_${code}`,
     5 * 60 * 1000
   )
 }
 
-export async function saveSonggangSnapshot(): Promise<{ status: string; saved: number }> {
-  return postJSON<{ status: string; saved: number }>(`${BASE}/analysis/songgang-ranking/save-snapshot`, {})
+export async function saveXibuSnapshot(): Promise<{ status: string; saved: number }> {
+  return postJSON<{ status: string; saved: number }>(`${BASE}/analysis/xibu-ranking/save-snapshot`, {})
 }
 
 export interface SevenDimHistoryItem {
@@ -1278,10 +1278,10 @@ export interface SevenDimHistoryItem {
   dual_low: number
 }
 
-export async function fetchSonggangHistory(code: string, days: number = 30): Promise<{ code: string; days: number; items: SevenDimHistoryItem[] }> {
+export async function fetchXibuHistory(code: string, days: number = 30): Promise<{ code: string; days: number; items: SevenDimHistoryItem[] }> {
   return fetchJSON(
-    `${BASE}/analysis/songgang-ranking/history/${code}?days=${days}`,
-    `songgang_history_${code}_${days}`,
+    `${BASE}/analysis/xibu-ranking/history/${code}?days=${days}`,
+    `xibu_history_${code}_${days}`,
     60 * 1000
   )
 }
@@ -1289,14 +1289,14 @@ export async function fetchSonggangHistory(code: string, days: number = 30): Pro
 /**
  * SSE流式获取七维排名，实时推送计算进度和中间结果
  */
-export function streamSonggangRanking(
+export function streamXibuRanking(
   params: { topN: number; aumLevel: string; marketEnv: string },
-  onProgress: (data: { progress: number; computed: number; items: SonggangScoreItem[] }) => void,
+  onProgress: (data: { progress: number; computed: number; items: XibuScoreItem[] }) => void,
   onDone: (data: any) => void,
   onError: (err: string) => void,
   timeout = 30000,
 ): EventSource {
-  const url = `${BASE}/analysis/songgang-ranking/stream?top_n=${params.topN}&aum_level=${params.aumLevel}&market_env=${params.marketEnv}`
+  const url = `${BASE}/analysis/xibu-ranking/stream?top_n=${params.topN}&aum_level=${params.aumLevel}&market_env=${params.marketEnv}`
   const es = new EventSource(url)
   let settled = false
   let timer = setTimeout(() => {
@@ -1629,11 +1629,11 @@ export interface TimingSignal {
 }
 
 export async function fetchTimingSignal(): Promise<TimingSignal> {
-  return fetchJSON(`${BASE}/sg-strategy/timing-signal`, 'timing_signal', 60 * 1000)
+  return fetchJSON(`${BASE}/xb-strategy/timing-signal`, 'timing_signal', 60 * 1000)
 }
 
 export async function fetchEnhancedTimingSignal(): Promise<TimingSignal> {
-  return fetchJSON(`${BASE}/sg-strategy/timing-signal/enhanced`, 'enhanced_timing_signal', 60 * 1000)
+  return fetchJSON(`${BASE}/xb-strategy/timing-signal/enhanced`, 'enhanced_timing_signal', 60 * 1000)
 }
 
 export interface TimingHistoryItem {
@@ -1644,7 +1644,7 @@ export interface TimingHistoryItem {
 }
 
 export async function fetchTimingHistory(days: number = 30): Promise<{ items: TimingHistoryItem[] }> {
-  return fetchJSON(`${BASE}/sg-strategy/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
+  return fetchJSON(`${BASE}/xb-strategy/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
 }
 
 export interface WsStats {
@@ -1982,7 +1982,7 @@ export interface XuanjiStrategyCompare {
   selected: number
   overlap_with_xuanji: number
   overlap_with_mf: number
-  overlap_with_sg: number
+  overlap_with_xb: number
 }
 
 export interface XuanjiComparisonResponse {
@@ -2204,10 +2204,111 @@ export interface StockIndustriesResponse {
   industries: StockIndustryAgg[]
   total_stocks: number
   total_industries: number
+  recommendations?: IndustryRecommendations
+}
+
+// ── Industry Layout Recommendations (短期/中期/长期) ────────────────────
+
+export interface IndustryRecommendation {
+  industry: string
+  score: number
+  signal_strength: 'strong' | 'moderate'
+  reasons: string[]
+  metrics: {
+    momentum_5d: number
+    momentum_10d: number
+    momentum_20d: number
+    momentum_60d: number
+    net_capital_flow_pct: number
+    avg_roe: number
+    avg_pe: number
+    avg_gpm: number
+    stock_count: number
+  }
+}
+
+export interface IndustryRecommendations {
+  short_term: IndustryRecommendation[]
+  mid_term: IndustryRecommendation[]
+  long_term: IndustryRecommendation[]
+  generated_at?: string
 }
 
 export async function fetchStockIndustries(): Promise<StockIndustriesResponse> {
-  return fetchJSON<StockIndustriesResponse>(`${BASE}/market/stock-industries`, 'stock-industries', 30000)
+  // 资金流向数据实时性要求高, 加 _t 参数绕过浏览器 HTTP 缓存
+  return fetchJSON<StockIndustriesResponse>(`${BASE}/market/stock-industries?_t=${Date.now()}`, 'stock-industries', 30000)
+}
+
+// 按周期懒加载行业推荐 (可选, 主数据已内嵌 recommendations)
+export async function fetchIndustryRecommendations(
+  horizon: 'short' | 'mid' | 'long' | 'all' = 'all',
+  topK = 5,
+  weightsJson = ''
+): Promise<{ horizon: string } & Partial<IndustryRecommendations>> {
+  let url = `${BASE}/market/industry-recommendations?horizon=${horizon}&top_k=${topK}`
+  if (weightsJson) {
+    url += `&weights_json=${encodeURIComponent(weightsJson)}`
+  }
+  // Custom weights should not be cached (bypass cache key)
+  return weightsJson
+    ? fetchJSON(url, `industry-recs-custom-${Date.now()}`, 0)
+    : fetchJSON(url, `industry-recs-${horizon}`, 60000)
+}
+
+// AI 行业解读 (POST, 不缓存)
+export async function fetchAIInsight(params: {
+  type: string
+  context: Record<string, unknown>
+  question: string
+  language: string
+}): Promise<{ summary: string; insights: string[]; recommendations: string[] }> {
+  if (!BASE) throw new Error('API base URL not configured')
+  return requestAPI('POST', `${BASE}/ai/analyze`, params)
+}
+
+// 推荐历史 (GET, 缓存5分钟)
+export interface RecHistoryEntry {
+  date: string
+  short_term: IndustryRecommendation[]
+  mid_term: IndustryRecommendation[]
+  long_term: IndustryRecommendation[]
+  generated_at?: string
+}
+
+export interface RecHistoryResponse {
+  history: RecHistoryEntry[]
+  days: number
+}
+
+export async function fetchRecHistory(days = 30): Promise<RecHistoryResponse> {
+  return fetchJSON<RecHistoryResponse>(`${BASE}/market/industry-recommendations/history?days=${days}`, 'rec-history', 300000)
+}
+
+// Recommendation accuracy backtest
+export interface AccuracyDetail {
+  date: string
+  industry: string
+  score: number
+  baseline: number
+  current: number
+  actual: number
+  hit: boolean
+}
+export interface HorizonAccuracy {
+  total: number
+  hits: number
+  hit_rate: number
+  alpha: number
+  details: AccuracyDetail[]
+}
+export interface RecAccuracyResponse {
+  accuracy: Record<string, HorizonAccuracy>
+  random_baseline: Record<string, number>
+  daily_alpha: Record<string, Record<string, number>>
+  days_analyzed: number
+}
+export async function fetchRecAccuracy(days = 30): Promise<RecAccuracyResponse> {
+  return fetchJSON<RecAccuracyResponse>(`${BASE}/market/industry-recommendations/accuracy?days=${days}`, 'rec-accuracy', 300000)
 }
 
 // ── Extended data sources (北向/融资融券/龙虎榜/大宗/股东/业绩/解禁) ────────
@@ -2395,7 +2496,8 @@ export interface DataSourcesResponse {
 }
 
 export async function fetchDataSources(): Promise<DataSourcesResponse> {
-  return fetchJSON<DataSourcesResponse>(`${BASE}/market/data-sources`, 'data_sources', 30000)
+  // 数据源状态实时性要求高, 加 _t 参数绕过浏览器 HTTP 缓存
+  return fetchJSON<DataSourcesResponse>(`${BASE}/market/data-sources?_t=${Date.now()}`, 'data_sources', 30000)
 }
 
 // ── Stock Concept Rotation (THS + EastMoney fine-grained concept boards) ──────
@@ -2477,3 +2579,263 @@ export async function fetchStockConcepts(opts?: {
   )
 }
 
+// ── Fund Flow APIs (资金流向) ────────────────────────────────────────────────────
+
+export interface IndividualFundFlow {
+  code: string
+  name: string
+  price: number
+  change_pct: number
+  turnover_rate: number
+  inflow: number  // 流入资金（亿）
+  outflow: number  // 流出资金（亿）
+  net_inflow: number  // 净流入（亿）
+  amount: number  // 成交额（亿）
+}
+
+export interface IndustryFundFlow {
+  rank: number
+  industry: string
+  industry_index: number
+  change_pct: number
+  inflow: number
+  outflow: number
+  net_inflow: number
+  company_count: number
+  leading_stock: string
+  leading_change: number
+  current_price: number
+}
+
+export interface MainFundFlow {
+  code: string
+  name: string
+  price: number
+  change_pct: number
+  turnover_rate: number
+  main_net_inflow: number  // 主力净流入
+  super_large_net: number  // 超大单净流入
+  large_net: number  // 大单净流入
+  medium_net: number  // 中单净流入
+  small_net: number  // 小单净流入
+  is_estimated: boolean  // true=按比例估算, false=真实数据
+}
+
+export interface TurnoverRank {
+  code: string
+  name: string
+  price: number
+  change_pct: number
+  turnover_rate: number
+  volume: number
+  amount: number
+}
+
+export interface HsgtFundFlow {
+  date: string
+  type: string
+  plate: string
+  direction: string
+  status: number
+  status_text: string  // 交易状态中文描述
+  net_buy: number | null
+  net_inflow: number | null
+  balance: number | null
+  up_count: number | null
+  hold_count: number | null
+  down_count: number | null
+  index_name: string
+  index_change: number | null
+}
+
+export interface IndividualFundFlowResponse {
+  stocks: IndividualFundFlow[]
+  total: number
+}
+
+export interface IndustryFundFlowResponse {
+  industries: IndustryFundFlow[]
+  total: number
+}
+
+export interface MainFundFlowResponse {
+  stocks: MainFundFlow[]
+  total: number
+}
+
+export interface TurnoverRankResponse {
+  stocks: TurnoverRank[]
+  total: number
+}
+
+export interface HsgtFundFlowResponse {
+  flows: HsgtFundFlow[]
+  total: number
+}
+
+/**
+ * 个股资金流向排名
+ * @param indicator 时间指标: 今日, 3日, 5日, 10日
+ * @param limit 返回条数限制
+ */
+export async function fetchIndividualFundFlow(
+  indicator: string = '今日',
+  limit: number = 100
+): Promise<IndividualFundFlowResponse> {
+  const params = new URLSearchParams()
+  params.set('indicator', indicator)
+  params.set('limit', String(limit))
+  return fetchJSON<IndividualFundFlowResponse>(
+    `${BASE}/fund_flow/individual?${params.toString()}`,
+    `individual_fund_flow_${indicator}`,
+    60000,  // 1分钟缓存
+  )
+}
+
+/**
+ * 行业资金流向
+ * @param indicator 时间指标: 今日, 3日, 5日, 10日
+ */
+export async function fetchIndustryFundFlow(
+  indicator: string = '今日'
+): Promise<IndustryFundFlowResponse> {
+  const params = new URLSearchParams()
+  params.set('indicator', indicator)
+  const data = await fetchJSON<IndustryFundFlow[]>(
+    `${BASE}/fund_flow/industry?${params.toString()}`,
+    `industry_fund_flow_${indicator}`,
+    60000,
+  )
+  return { industries: data, total: data.length }
+}
+
+/**
+ * 主力资金流向（超大单/大单/中单/小单拆分）
+ * @param limit 返回条数限制
+ */
+export async function fetchMainFundFlow(
+  limit: number = 100
+): Promise<MainFundFlowResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  return fetchJSON<MainFundFlowResponse>(
+    `${BASE}/fund_flow/main?${params.toString()}`,
+    'main_fund_flow',
+    60000,
+  )
+}
+
+/**
+ * 换手率排名
+ * @param limit 返回条数限制
+ */
+export async function fetchTurnoverRank(
+  limit: number = 100
+): Promise<TurnoverRankResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  return fetchJSON<TurnoverRankResponse>(
+    `${BASE}/fund_flow/turnover_rank?${params.toString()}`,
+    'turnover_rank',
+    60000,
+  )
+}
+
+/**
+ * 沪深港通资金流向
+ */
+export async function fetchHsgtFundFlow(): Promise<HsgtFundFlowResponse> {
+  const data = await fetchJSON<HsgtFundFlow[]>(
+    `${BASE}/fund_flow/hsgt`,
+    'hsgt_fund_flow',
+    60000,
+  )
+  return { flows: data, total: data.length }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 妙想MX金融数据
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface MXQueryRequest {
+  query: string
+  data_type: 'financial' | 'news'
+}
+
+export interface MXQueryResponse {
+  success: boolean
+  data: any[]
+  total_rows: number
+  tables?: any[]
+  message: string
+  source: string
+}
+
+export async function queryMXData(req: MXQueryRequest): Promise<MXQueryResponse> {
+  const token = localStorage.getItem('token') || ''
+  const res = await fetch(`${BASE}/mx/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+  return res.json()
+}
+
+export async function getMXStatus(): Promise<{
+  configured: boolean
+  api_key_prefix: string
+  skills_installed: Record<string, boolean>
+}> {
+  return fetchJSON(`${BASE}/mx/status`, 'mx_status')
+}
+
+// ── 模拟盘 API ──
+
+export async function fetchPaperAccounts(): Promise<{ accounts: any[]; refresh_fail_count?: number; refresh_total_fails?: number; refresh_total_fail_threshold?: number }> {
+  return fetchJSON(`${BASE}/paper-trade/accounts`, 'paper_accounts')
+}
+
+export async function createPaperAccount(req: { strategy_id: string; initial_cash?: number; params?: any }): Promise<any> {
+  return postJSON(`${BASE}/paper-trade/accounts`, req)
+}
+
+export async function startPaperAccount(accountId: string): Promise<any> {
+  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/start`, {})
+}
+
+export async function stopPaperAccount(accountId: string): Promise<any> {
+  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/stop`, {})
+}
+
+export async function resetPaperAccount(accountId: string): Promise<any> {
+  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/reset`, {})
+}
+
+export async function fetchPaperPositions(accountId: string): Promise<{ positions: any[] }> {
+  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/positions`)
+}
+
+export async function fetchPaperOrders(accountId: string): Promise<{ orders: any[] }> {
+  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/orders`)
+}
+
+export async function fetchPaperEquityCurve(accountId: string, days: number = 30): Promise<{ points: any[] }> {
+  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/equity-curve?days=${days}`)
+}
+
+export async function fetchPaperSignals(accountId: string, limit: number = 50): Promise<{ signals: any[] }> {
+  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/signals?limit=${limit}`)
+}
+
+export async function updatePaperParams(accountId: string, params: Record<string, any>): Promise<any> {
+  return putJSON(`${BASE}/paper-trade/accounts/${accountId}/params`, { params })
+}
+
+export async function deletePaperAccount(accountId: string): Promise<any> {
+  return deleteJSON(`${BASE}/paper-trade/accounts/${accountId}`)
+}

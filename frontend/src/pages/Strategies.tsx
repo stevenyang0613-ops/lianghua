@@ -24,7 +24,7 @@ export default function Strategies() {
   useEffect(() => {
     loadStrategies()
     loadStats()
-  }, [])
+  }, [loadStrategies, loadStats])
 
   const strategyColumns = [
     { title: 'ID', dataIndex: 'id', width: 100 },

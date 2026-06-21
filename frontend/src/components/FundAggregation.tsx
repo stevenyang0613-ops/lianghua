@@ -78,11 +78,6 @@ export default function FundAggregation({ onTransfer }: Props) {
   const [executeModalVisible, setExecuteModalVisible] = useState(false)
   const [form] = Form.useForm()
 
-  // 加载数据
-  useEffect(() => {
-    loadData()
-  }, [])
-
   const loadData = useCallback(async () => {
     setLoading(true)
 
@@ -111,6 +106,10 @@ export default function FundAggregation({ onTransfer }: Props) {
 
     setLoading(false)
   }, [])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
   // 计算资金效率
   const calculateEfficiency = (balance: AccountBalance | null): number => {
@@ -554,7 +553,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                 <Table
                   columns={accountColumns}
                   dataSource={accounts}
-                  rowKey="account.id"
+                  rowKey={(record) => record.account.id}
                   pagination={false}
                   size="small"
                   loading={loading}

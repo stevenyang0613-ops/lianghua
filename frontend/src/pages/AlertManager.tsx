@@ -30,6 +30,7 @@ export default function AlertManager() {
   }
 
   useEffect(() => {
+    let cancelled = false
     loadData()
   }, [])
 

@@ -63,7 +63,7 @@ export default {
     plugins: 'Plugins',
     scoreRanking: 'Score Ranking',
     sync: 'Sync Settings',
-    songgangScore: '7D Analysis',
+    xibuScore: '7D Analysis',
   },
 
   // Market

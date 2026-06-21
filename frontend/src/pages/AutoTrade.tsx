@@ -16,7 +16,7 @@ const { Title, Text, Paragraph } = Typography
 
 
 export default function AutoTrade() {
-  const [config, setConfig] = useState<AutoTradeConfig>(getAutoTradeConfig())
+  const [config, setConfig] = useState<AutoTradeConfig>(() => getAutoTradeConfig())
   const [orders, setOrders] = useState<AutoTradeOrder[]>([])
   const [logs, setLogs] = useState<AutoTradeLog[]>([])
   const [stats, setStats] = useState(getAutoTradeStats())

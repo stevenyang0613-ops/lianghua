@@ -413,3 +413,17 @@ body {
 .signal-executed-row td {
   background-color: inherit;
 }
+
+/* DataSourceMonitor 空状态容器：使用现代 CSS 函数，旧浏览器使用 inline style fallback (300px) */
+/* 命名约定：项目内全局 class 沿用未加前缀的风格（如 .flash-up, .virtual-table），
+   但每个 class 必须具备独特命名空间（如 data-source-monitor-*）避免冲突。 */
+.data-source-monitor-empty {
+  min-height: max(200px, min(400px, calc(100vh - 400px)));
+}
+/* 旧浏览器（不支持 max/min/calc 的如 Safari < 11.1）无 modern CSS 函数，
+   退化到 inline style fallback (300px)。@supports 用于抑制误判。 */
+@supports not (min-height: max(200px, min(400px, calc(100vh - 400px)))) {
+  .data-source-monitor-empty {
+    min-height: 300px;
+  }
+}

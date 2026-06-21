@@ -25,7 +25,11 @@ test.describe('设置页面', () => {
 
     if (await themeSwitch.isVisible()) {
       await themeSwitch.click()
-      await page.waitForTimeout(500)
+      // 等待主题切换生效
+      await page.waitForFunction(() => {
+        const html = document.documentElement
+        return html.getAttribute('data-theme') !== null || html.classList.contains('dark') || html.classList.contains('light')
+      }, { timeout: 3000 }).catch(() => test.info().annotations.push({ type: 'timeout-warning', description: '主题切换等待超时，可能 DOM 结构已变更' }))
     }
   })
 

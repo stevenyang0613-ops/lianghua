@@ -200,7 +200,7 @@ export default function XuanjiIndex() {
 
   // Load initial data — parallel batch loading
   useEffect(() => {
-    fetchStrategies().then(setStrategies).catch(() => {})
+    fetchStrategies().then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setStrategies(d) }).catch(() => {})
     // Load all static data in parallel via store
     storeLoadStaticData()
   }, [])
@@ -255,27 +255,27 @@ export default function XuanjiIndex() {
   const handleTabChange = useCallback((key: string) => {
     setActiveTab(key)
     if (key === 'stress' && !stressData) {
-      fetchXuanjiStressTest(50, effectiveState).then(setStressData).catch(() => {})
+      fetchXuanjiStressTest(50, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setStressData(d) }).catch(() => {})
     }
     if (key === 'weights' && !icirHistory) {
-      fetchXuanjiIcirHistory().then(setIcirHistory).catch(() => {})
+      fetchXuanjiIcirHistory().then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setIcirHistory(d) }).catch(() => {})
     }
     if (key === 'attribution') {
       if (!factorContrib) {
-        fetchXuanjiFactorContribution(20, effectiveState).then(setFactorContrib).catch(() => {})
+        fetchXuanjiFactorContribution(20, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setFactorContrib(d) }).catch(() => {})
       }
       if (!factorCorr) {
-        fetchXuanjiFactorCorrelation(50, effectiveState).then(setFactorCorr).catch(() => {})
+        fetchXuanjiFactorCorrelation(50, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setFactorCorr(d) }).catch(() => {})
       }
     }
     if (key === 'compare' && !strategyCompare) {
-      fetchXuanjiComparison(50, effectiveState).then(setStrategyCompare).catch(() => {})
+      fetchXuanjiComparison(50, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setStrategyCompare(d) }).catch(() => {})
     }
     if (key === 'delta' && deltaCandidates.length === 0) {
       fetchXuanjiDeltaCandidates(deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN).then(r => setDeltaCandidates(r.items || [])).catch(() => {})
     }
     if (key === 'health' && !dataSourceHealth) {
-      fetchXuanjiDataSourceHealth().then(setDataSourceHealth).catch(() => {})
+      fetchXuanjiDataSourceHealth().then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setDataSourceHealth(d) }).catch(() => {})
     }
   }, [effectiveState, stressData, factorContrib, factorCorr, strategyCompare, deltaCandidates, deltaMinIvHv, deltaPremiumLow, deltaPremiumHigh, deltaTopN, dataSourceHealth])
 
@@ -289,6 +289,7 @@ export default function XuanjiIndex() {
   }, [loadRanking, loadDeltaCandidates])
 
   const saveConfigTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadSeqRef = useRef(0)
   useEffect(() => {
     if (saveConfigTimer.current) clearTimeout(saveConfigTimer.current)
     saveConfigTimer.current = setTimeout(() => {
@@ -600,7 +601,7 @@ export default function XuanjiIndex() {
     },
     {
       title: 'GPM', dataIndex: 'gpm', key: 'gpm', width: 65,
-      render: (v: number | null) => v != null ? <Text style={{ color: v > 30 ? '#52c41a' : v < 10 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
+      render: (v: number | null) => v === -1 ? <Text type="secondary" style={{ fontSize: 11 }}>银行</Text> : v != null ? <Text style={{ color: v > 30 ? '#52c41a' : v < 10 ? '#ff4d4f' : undefined }}>{v?.toFixed(1)}%</Text> : <Text type="secondary">-</Text>,
     },
     {
       title: 'CAGR', dataIndex: 'cagr', key: 'cagr', width: 70,
@@ -830,7 +831,7 @@ key: 'weights',
                   <ReactEChartsCore option={icirChartOption} style={{ height: 400 }} notMerge={true} />
                 ) : (
                   <Card size="small">
-                    <Button onClick={() => fetchXuanjiIcirHistory().then(setIcirHistory).catch(() => {})}>加载ICIR数据</Button>
+                    <Button onClick={() => fetchXuanjiIcirHistory().then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setIcirHistory(d) }).catch(() => {})}>加载ICIR数据</Button>
                   </Card>
                 )}
                 <Divider>因子分组</Divider>
@@ -1122,14 +1123,14 @@ key: 'weights',
               <>
                 <Alert
                   message="璇玑 vs 其他策略对比"
-                  description="将璇玑十二因子与其他策略(multi_factor/songgang_seven)进行多维度对比"
+                  description="将璇玑十二因子与其他策略(multi_factor/xibu_seven)进行多维度对比"
                   type="info" showIcon style={{ marginBottom: 16 }}
                 />
                 <Row gutter={16} style={{ marginBottom: 16 }}>
                   <Col span={6}><Statistic title="筛选池" value={strategyCompare?.total_bonds || 0} suffix="只" /></Col>
                   <Col span={6}><Statistic title="Top N" value={strategyCompare?.top_n || 50} /></Col>
                   <Col span={6}><Statistic title="策略数" value={strategyCompare?.strategies?.length || 0} /></Col>
-                  <Col span={6}><Button onClick={() => fetchXuanjiComparison(50, effectiveState).then(setStrategyCompare)}>刷新对比</Button></Col>
+                  <Col span={6}><Button onClick={() => fetchXuanjiComparison(50, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setStrategyCompare(d) })}>刷新对比</Button></Col>
                 </Row>
                 <Table
                   dataSource={strategyCompare?.strategies?.map((s, i) => ({ key: String(i), ...s })) || []}
@@ -1143,24 +1144,24 @@ key: 'weights',
                     { title: '平均评分', dataIndex: 'avg_score', width: 100, render: (v: number) => v?.toFixed(3) },
                     { title: '与璇玑重叠%', dataIndex: 'overlap_with_xuanji', width: 110, render: (v: number) => <Tag color={v === 100 ? 'purple' : 'blue'}>{v}%</Tag> },
                     { title: '与多因子重叠%', dataIndex: 'overlap_with_mf', width: 110 },
-                    { title: '与松岗重叠%', dataIndex: 'overlap_with_sg', width: 110 },
+                    { title: '与西部重叠%', dataIndex: 'overlap_with_xb', width: 110 },
                   ]}
                 />
                 <Divider>策略能力对比</Divider>
                 <Table
                   dataSource={[
-                    { key: '1', metric: '因子数量', xuanji: '12', multi: '5', songgang: '11' },
-                    { key: '2', metric: '市场状态', xuanji: '5态自适应', multi: '静态', songgang: '静态' },
-                    { key: '3', metric: '选中重叠%', xuanji: `100%`, multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.overlap_with_sg; return v != null ? `${v.toFixed(0)}%` : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.overlap_with_mf; return v != null ? `${v.toFixed(0)}%` : '-' })() },
-                    { key: '4', metric: '平均价格', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_price; return v != null ? v.toFixed(1) : '-' })() },
-                    { key: '5', metric: '平均评分', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), songgang: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'songgang_seven')?.avg_score; return v != null ? v.toFixed(3) : '-' })() },
+                    { key: '1', metric: '因子数量', xuanji: '12', multi: '5', xibu: '11' },
+                    { key: '2', metric: '市场状态', xuanji: '5态自适应', multi: '静态', xibu: '静态' },
+                    { key: '3', metric: '选中重叠%', xuanji: `100%`, multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.overlap_with_xb; return v != null ? `${v.toFixed(0)}%` : '-' })(), xibu: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xibu_seven')?.overlap_with_mf; return v != null ? `${v.toFixed(0)}%` : '-' })() },
+                    { key: '4', metric: '平均价格', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_price; return v != null ? v.toFixed(1) : '-' })(), xibu: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xibu_seven')?.avg_price; return v != null ? v.toFixed(1) : '-' })() },
+                    { key: '5', metric: '平均评分', xuanji: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xuanji_twelve')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), multi: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'multi_factor')?.avg_score; return v != null ? v.toFixed(3) : '-' })(), xibu: (() => { const v = strategyCompare?.strategies?.find(s => s.id === 'xibu_seven')?.avg_score; return v != null ? v.toFixed(3) : '-' })() },
                   ]}
                   size="small" pagination={false}
                   columns={[
                     { title: '维度', dataIndex: 'metric', width: 120, render: (v: string) => <Text strong>{v}</Text> },
                     { title: '璇玑十二因子', dataIndex: 'xuanji', width: 150, render: (v: string) => <Tag color="purple">{v}</Tag> },
                     { title: '多因子策略', dataIndex: 'multi', width: 150, render: (v: string) => <Tag color="blue">{v}</Tag> },
-                    { title: '松岗七维', dataIndex: 'songgang', width: 150, render: (v: string) => <Tag color="cyan">{v}</Tag> },
+                    { title: '西部七维', dataIndex: 'xibu', width: 150, render: (v: string) => <Tag color="cyan">{v}</Tag> },
                   ]}
                 />
               </>
@@ -1175,7 +1176,7 @@ key: 'weights',
                   message="6种极端场景压力测试"
                   description="评估璇玑策略在牛市/熊市/暴跌/震荡/利率上行/信用风险等场景下的表现"
                   type="warning" showIcon style={{ marginBottom: 16 }}
-                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiStressTest(50, effectiveState).then(setStressData).catch(() => {})}>刷新</Button>}
+                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiStressTest(50, effectiveState).then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setStressData(d) }).catch(() => {})}>刷新</Button>}
                 />
                 {!stressData ? (
                   <Empty description="点击「刷新」加载压力测试数据" />
@@ -1213,7 +1214,7 @@ key: 'weights',
                   message="数据源覆盖度监控"
                   description="检查各个维度的缓存数据覆盖率和健康状态"
                   type="info" showIcon style={{ marginBottom: 16 }}
-                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiDataSourceHealth().then(setDataSourceHealth).catch(() => {})}>刷新</Button>}
+                  action={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchXuanjiDataSourceHealth().then(d => { const seq = ++loadSeqRef.current; if (seq === loadSeqRef.current) setDataSourceHealth(d) }).catch(() => {})}>刷新</Button>}
                 />
                 {!dataSourceHealth ? (
                   <Empty description="加载数据源状态..." />
@@ -1483,7 +1484,7 @@ key: 'weights',
                 <Descriptions.Item label="正股价">{selectedDetail.basic_info.stock_price || '-'}</Descriptions.Item>
                 <Descriptions.Item label="转股价值">{selectedDetail.basic_info.conversion_value || '-'}</Descriptions.Item>
                 <Descriptions.Item label="ROE">{selectedDetail.basic_info.roe != null ? `${selectedDetail.basic_info.roe}%` : '-'}</Descriptions.Item>
-                <Descriptions.Item label="毛利率">{selectedDetail.basic_info.gpm != null ? `${selectedDetail.basic_info.gpm}%` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="毛利率">{selectedDetail.basic_info.gpm === -1 ? '银行(无毛利率)' : selectedDetail.basic_info.gpm != null ? `${selectedDetail.basic_info.gpm}%` : '-'}</Descriptions.Item>
                 <Descriptions.Item label="CAGR">{selectedDetail.basic_info.cagr != null ? `${selectedDetail.basic_info.cagr}%` : '-'}</Descriptions.Item>
                 <Descriptions.Item label="负债率">{selectedDetail.basic_info.debt_ratio != null ? `${selectedDetail.basic_info.debt_ratio}%` : '-'}</Descriptions.Item>
                 <Descriptions.Item label="PE">{selectedDetail.basic_info.pe ?? '-'}</Descriptions.Item>

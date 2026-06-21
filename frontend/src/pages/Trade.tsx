@@ -33,7 +33,9 @@ export default function Trade() {
   const [signalBanner, setSignalBanner] = useState<TradeSignal[]>([])
 
   useEffect(() => {
-    fetchSignals().then(data => setSignalBanner(data.signals)).catch(() => {})
+    let cancelled = false
+    fetchSignals().then(data => { if (!cancelled) setSignalBanner(data.signals) }).catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   const loadData = useCallback(async () => {

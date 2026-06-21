@@ -1,0 +1,370 @@
+import { useState, useEffect, useCallback } from 'react'
+import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps } from 'antd'
+import { PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, RiseOutlined, FallOutlined, FundOutlined, SettingOutlined, DeleteOutlined, RocketOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
+import ReactEChartsCore from 'echarts-for-react/lib/core'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import { fetchPaperAccounts, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount } from '../services/api'
+import { useEverRun } from '../hooks/useEverRun'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+
+interface ParamDef { name: string; label: string; type: string; default: any; min_val?: number; max_val?: number; options?: string[]; description?: string }
+interface PaperAccountData { id: string; strategy_id: string; strategy_name: string; is_running: boolean; initial_cash: number; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number; params: Record<string, any>; param_defs: ParamDef[]; created_at: string }
+interface PositionData { code: string; name: string; volume: number; cost_price: number; current_price: number; market_value: number; profit_pct: number; profit_amount: number }
+interface OrderData { id: string; code: string; name: string; side: string; price: number; volume: number; filled_volume: number; status: string; created_at: string; reject_reason: string }
+interface EquityPoint { ts: string; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number }
+interface SignalData { id: string; code: string; name: string; action: string; price: number; reason: string; confidence: number; ts: string; executed: boolean }
+
+const STRATEGY_LABELS: Record<string, string> = { xuanji_twelve: '璇玑十二因子', xibu_seven: '西部七维', fusion: '融合策略' }
+const STRATEGY_IDS = ['xuanji_twelve', 'xibu_seven', 'fusion']
+
+function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; accounts: PaperAccountData[]; onRefresh: () => void }) {
+  const account = accounts.find(a => a.strategy_id === strategyId)
+  const [positions, setPositions] = useState<PositionData[]>([])
+  const [orders, setOrders] = useState<OrderData[]>([])
+  const [equity, setEquity] = useState<EquityPoint[]>([])
+  const [signals, setSignals] = useState<SignalData[]>([])
+  const [loading, setLoading] = useState(false)
+  const [subTab, setSubTab] = useState('positions')
+  const [paramsForm] = Form.useForm()
+  const accountId = account?.id
+
+  const loadData = useCallback(async () => {
+    if (!accountId) return
+    setLoading(true)
+    try {
+      const [posRes, ordRes, eqRes, sigRes] = await Promise.all([
+        fetchPaperPositions(accountId), fetchPaperOrders(accountId),
+        fetchPaperEquityCurve(accountId), fetchPaperSignals(accountId),
+      ])
+      setPositions(posRes.positions || [])
+      setOrders(ordRes.orders || [])
+      setEquity(eqRes.points || [])
+      setSignals(sigRes.signals || [])
+    } catch (e: any) { console.warn('Load paper trade data failed:', e) }
+    finally { setLoading(false) }
+  }, [accountId])
+
+  useEffect(() => { loadData(); const t = setInterval(loadData, 30000); return () => clearInterval(t) }, [loadData])
+  useEffect(() => { if (account?.params) paramsForm.setFieldsValue(account.params) }, [account?.params, paramsForm])
+
+  const handleStart = async () => {
+    if (!accountId) return
+    try { await startPaperAccount(accountId); message.success('模拟交易已启动'); onRefresh() }
+    catch (e: any) { message.error('启动失败: ' + (e.message || '')) }
+  }
+  const handleStop = async () => {
+    if (!accountId) return
+    try { await stopPaperAccount(accountId); message.success('模拟交易已停止'); onRefresh() }
+    catch (e: any) { message.error('停止失败: ' + (e.message || '')) }
+  }
+  const handleReset = async () => {
+    if (!accountId) return
+    try { await resetPaperAccount(accountId); message.success('账户已重置'); onRefresh(); loadData() }
+    catch (e: any) { message.error('重置失败: ' + (e.message || '')) }
+  }
+  const handleDelete = async () => {
+    if (!accountId) return
+    try { await deletePaperAccount(accountId); message.success('账户已删除'); onRefresh() }
+    catch (e: any) { message.error('删除失败: ' + (e.message || '')) }
+  }
+  const handleSaveParams = async () => {
+    if (!accountId) return
+    try {
+      const values = await paramsForm.validateFields()
+      await updatePaperParams(accountId, values)
+      message.success('参数已保存')
+    } catch (e: any) { message.error('保存参数失败: ' + (e.message || '')) }
+  }
+
+  if (!account) return <Card><Empty description="账户未创建" /></Card>
+
+  // 新手引导：账户从未运行过且无数据时显示
+  // useEverRun hook：后端驱动优先（account.created_at / is_running），localStorage 辅助缓存
+  // 建议10: strategyId 为空时使用固定 key，避免 undefined 导致多策略共享标记
+  const hasEverRun = useEverRun(
+    strategyId ? `lianghua_paper_trade_ever_run_${strategyId}` : 'lianghua_paper_trade_ever_run_unknown',
+    [!!account?.created_at, account.is_running]
+  )
+
+  const showOnboarding = !hasEverRun && !account.is_running && positions.length === 0 && signals.length === 0 && orders.length === 0 && equity.length === 0
+
+  const profitColor = account.total_profit >= 0 ? '#cf1322' : '#3f8600'
+  const equityOption = {
+    tooltip: { trigger: 'axis' as const },
+    legend: { data: ['总资产'] },
+    grid: { left: 60, right: 20, top: 30, bottom: 30 },
+    xAxis: { type: 'category' as const, data: equity.map(p => {
+      // 格式化为 MM-DD HH:mm
+      const s = p.ts || ''
+      if (s.length >= 16) return s.slice(5, 16).replace('T', ' ')
+      return s.slice(0, 16)
+    }) },
+    yAxis: { type: 'value' as const, scale: true },
+    series: [{ name: '总资产', type: 'line', data: equity.map(p => p.total_asset), smooth: true,
+      lineStyle: { width: 2 }, itemStyle: { color: '#1890ff' },
+      areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: 'rgba(24,144,255,0.3)' }, { offset: 1, color: 'rgba(24,144,255,0.02)' }
+      ]) },
+    }],
+  }
+
+  const posColumns = [
+    { title: '代码', dataIndex: 'code', key: 'code', width: 90 },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100 },
+    { title: '数量', dataIndex: 'volume', key: 'volume', width: 70, align: 'right' as const },
+    { title: '成本', dataIndex: 'cost_price', key: 'cost_price', width: 70, align: 'right' as const, render: (v: number) => v?.toFixed(2) },
+    { title: '现价', dataIndex: 'current_price', key: 'current_price', width: 70, align: 'right' as const, render: (v: number) => v?.toFixed(2) },
+    { title: '市值', dataIndex: 'market_value', key: 'market_value', width: 90, align: 'right' as const, render: (v: number) => v?.toFixed(0) },
+    { title: '盈亏%', dataIndex: 'profit_pct', key: 'profit_pct', width: 80, align: 'right' as const,
+      render: (v: number) => <span style={{ color: v >= 0 ? '#cf1322' : '#3f8600' }}>{v >= 0 ? '+' : ''}{v?.toFixed(2)}%</span> },
+  ]
+  const sigColumns = [
+    { title: '时间', dataIndex: 'ts', key: 'ts', width: 140, render: (v: string) => v?.slice(0, 16) },
+    { title: '代码', dataIndex: 'code', key: 'code', width: 90 },
+    { title: '名称', dataIndex: 'name', key: 'name', width: 100 },
+    { title: '方向', dataIndex: 'action', key: 'action', width: 60,
+      render: (v: string) => <Tag color={v === 'buy' ? 'red' : 'green'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 70, align: 'right' as const, render: (v: number) => v?.toFixed(2) },
+    { title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true },
+  ]
+  const ordColumns = [
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 140, render: (v: string) => v?.slice(0, 16) },
+    { title: '代码', dataIndex: 'code', key: 'code', width: 90 },
+    { title: '方向', dataIndex: 'side', key: 'side', width: 60,
+      render: (v: string) => <Tag color={v === 'buy' ? 'red' : 'green'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
+    { title: '价格', dataIndex: 'price', key: 'price', width: 70, align: 'right' as const },
+    { title: '数量', dataIndex: 'volume', key: 'volume', width: 60, align: 'right' as const },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 70,
+      render: (v: string) => <Tag color={v === 'filled' ? 'green' : v === 'rejected' ? 'red' : 'blue'}>{v}</Tag> },
+  ]
+
+  const paramDefs = account.param_defs || []
+
+  const renderParamInput = (p: ParamDef) => {
+    if (p.type === 'select' && p.options) {
+      return <Select size="small" style={{ width: 120 }} options={p.options.map(o => ({ value: o, label: o, key: o }))} />
+    }
+    if (p.type === 'str') {
+      return <Input size="small" style={{ width: 120 }} />
+    }
+    // int / float → InputNumber with min/max
+    return (
+      <InputNumber
+        size="small" style={{ width: 100 }}
+        min={p.min_val} max={p.max_val}
+        step={p.type === 'int' ? 1 : 0.1}
+      />
+    )
+  }
+
+  return (
+    <Spin spinning={loading}>
+      {showOnboarding && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<RocketOutlined />}
+          style={{ marginBottom: 12 }}
+          message="欢迎使用模拟交易"
+          description={
+            <div>
+              <Typography.Paragraph style={{ marginBottom: 12, color: 'rgba(0,0,0,0.65)' }}>
+                模拟交易会在虚拟账户中自动执行策略信号，无需真实资金即可验证策略效果。
+              </Typography.Paragraph>
+              <Steps
+                size="small"
+                current={-1}
+                items={[
+                  { title: '启动账户', description: '点击上方「启动」按钮开始运行策略', icon: <PlayCircleOutlined /> },
+                  { title: '等待信号', description: '策略自动检测买卖信号（约5-10分钟）', icon: <ThunderboltOutlined /> },
+                  { title: '查看收益', description: '在权益曲线和持仓中查看运行效果', icon: <LineChartOutlined /> },
+                ]}
+              />
+            </div>
+          }
+        />
+      )}
+      <Row gutter={16}>
+        <Col xs={24} md={8}>
+          <Card title="账户概览" size="small" extra={
+            <Space>
+              {!account.is_running ? (
+                <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={handleStart}>启动</Button>
+              ) : (
+                <Button size="small" icon={<PauseCircleOutlined />} onClick={handleStop} danger>停止</Button>
+              )}
+              <Button size="small" icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
+              <Popconfirm title="确定删除该模拟交易账户？" onConfirm={handleDelete} okText="确定" cancelText="取消">
+                <Button size="small" icon={<DeleteOutlined />} danger>删除</Button>
+              </Popconfirm>
+            </Space>
+          }>
+            <Statistic title="总资产" value={account.total_asset} precision={2} prefix="¥" valueStyle={{ color: profitColor }} />
+            <Row gutter={16} style={{ marginTop: 12 }}>
+              <Col span={12}><Statistic title="可用资金" value={account.cash} precision={2} /></Col>
+              <Col span={12}><Statistic title="持仓市值" value={account.market_value} precision={2} /></Col>
+            </Row>
+            <Row gutter={16} style={{ marginTop: 8 }}>
+              <Col span={12}>
+                <Statistic title="总收益" value={account.total_profit} precision={2}
+                  prefix={account.total_profit >= 0 ? <RiseOutlined /> : <FallOutlined />}
+                  valueStyle={{ color: profitColor }} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="收益率" value={account.total_profit_pct} precision={2} suffix="%" valueStyle={{ color: profitColor }} />
+              </Col>
+            </Row>
+            <div style={{ marginTop: 8 }}>
+              <Tag color={account.is_running ? 'green' : 'default'}>{account.is_running ? '运行中' : '已停止'}</Tag>
+              <span style={{ color: '#999', fontSize: 12 }}>初始资金: ¥{account.initial_cash?.toLocaleString()}</span>
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} md={16}>
+          <Card title="权益曲线" size="small" extra={<FundOutlined />}>
+            {equity.length > 0 ? (
+              <ReactEChartsCore echarts={echarts} option={equityOption} style={{ height: 240 }} />
+            ) : (
+              <Empty description={account.is_running ? "权益数据生成中，通常需要5分钟后显示" : "暂无权益数据，请先启动模拟盘"} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Card title="策略参数" size="small" style={{ marginTop: 12 }} extra={<SettingOutlined />}>
+        <Form form={paramsForm} onFinish={handleSaveParams}>
+          <Row gutter={[16, 8]}>
+            {paramDefs.map(p => (
+              <Col xs={24} sm={12} md={8} key={p.name}>
+                <Form.Item name={p.name} label={p.label} tooltip={p.description}
+                  style={{ marginBottom: 8 }}>
+                  {renderParamInput(p)}
+                </Form.Item>
+              </Col>
+            ))}
+            {paramDefs.length > 0 && (
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item style={{ marginBottom: 8 }}>
+                  <Button type="primary" size="small" htmlType="submit">保存参数</Button>
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+          {paramDefs.length === 0 && <span style={{ color: '#999' }}>使用默认参数</span>}
+        </Form>
+      </Card>
+
+      <Card size="small" style={{ marginTop: 12 }}>
+        <Tabs activeKey={subTab} onChange={setSubTab} items={[
+          { key: 'positions', label: `持仓 (${positions.length})`, children: (
+            <Table dataSource={positions} columns={posColumns} rowKey="code" size="small" pagination={false} />
+          )},
+          { key: 'signals', label: `信号 (${signals.length})`, children: (
+            <Table dataSource={signals} columns={sigColumns} rowKey="id" size="small" pagination={{ pageSize: 20 }} />
+          )},
+          { key: 'orders', label: `委托 (${orders.length})`, children: (
+            <Table dataSource={orders} columns={ordColumns} rowKey="id" size="small" pagination={{ pageSize: 20 }} />
+          )},
+        ]} />
+      </Card>
+    </Spin>
+  )
+}
+
+export default function PaperTrade() {
+  const [accounts, setAccounts] = useState<PaperAccountData[]>([])
+  const [refreshFailCount, setRefreshFailCount] = useState(0)
+  const [refreshTotalFails, setRefreshTotalFails] = useState(0)
+  const [refreshTotalFailThreshold, setRefreshTotalFailThreshold] = useState(30)
+  const [warningShownAt, setWarningShownAt] = useState<number | null>(null)
+  const [dismissRefreshWarning, setDismissRefreshWarning] = useState(() => {
+    try { return sessionStorage.getItem('lianghua_dismiss_refresh_warning') === 'true' } catch { return true }
+  })
+  // setState 函数是稳定引用，无需列入 useCallback 依赖
+  const handleDismissWarning = useCallback(() => {
+    setDismissRefreshWarning(true)
+    setWarningShownAt(null)
+    try { sessionStorage.setItem('lianghua_dismiss_refresh_warning', 'true') } catch { /* ignore */ }
+  }, [])
+
+  // warningShownAt 由 useEffect 的 setTimeout 在 10 秒后清除，无需在此检查 Date.now()
+  const showRefreshWarning = (refreshFailCount >= 5 || warningShownAt !== null) && !dismissRefreshWarning
+  const [loadingAccounts, setLoadingAccounts] = useState(true)
+  const [activeTab, setActiveTab] = useState('xuanji_twelve')
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const res = await fetchPaperAccounts()
+      setAccounts(res.accounts || [])
+      const newFailCount = res.refresh_fail_count || 0
+      const newTotalFails = res.refresh_total_fails || 0
+      setRefreshFailCount(newFailCount)
+      setRefreshTotalFails(newTotalFails)
+      setRefreshTotalFailThreshold(res.refresh_total_fail_threshold || 30)
+      if (import.meta.env.DEV && res.refresh_total_fail_threshold) {
+        console.debug('[PaperTrade] Threshold synced:', res.refresh_total_fail_threshold, 'total fails:', newTotalFails)
+      }
+      // 记录警告首次出现的时间
+      if (newFailCount >= 5 && warningShownAt === null) {
+        setWarningShownAt(Date.now())
+      }
+      // 警告恢复由 useEffect 的 setTimeout 统一管理（最小显示 10 秒）
+    } catch (e: any) { console.warn('Load paper accounts failed:', e) }
+    finally { setLoadingAccounts(false) }
+  }, [])
+
+  useEffect(() => { loadAccounts() }, [loadAccounts])
+
+  // 10秒后自动关闭 warningShownAt（确保 Alert 不会无限停留）
+  // 同时：如果 refreshFailCount 恢复到 <5 且已过 10 秒，也清除 warningShownAt
+  useEffect(() => {
+    if (warningShownAt === null) return
+    // 如果问题已恢复且已过最小显示时间，立即清除
+    if (refreshFailCount < 5) {
+      const remaining = 10000 - (Date.now() - warningShownAt)
+      if (remaining <= 0) {
+        setWarningShownAt(null)
+        return
+      }
+      const timer = setTimeout(() => setWarningShownAt(null), remaining)
+      return () => clearTimeout(timer)
+    }
+    // 问题仍存在，保持显示（不做超时清除，等恢复后再计时）
+  }, [warningShownAt, refreshFailCount])
+
+  return (
+    <div style={{ padding: 16 }}>
+      {showRefreshWarning && (
+        <Alert
+          type={refreshTotalFails >= refreshTotalFailThreshold ? "error" : "warning"}
+          showIcon
+          closable
+          onClose={handleDismissWarning}
+          message={refreshTotalFails >= refreshTotalFailThreshold ? "持仓价格刷新严重异常" : "持仓价格刷新连续失败"}
+          description={`行情数据刷新已连续失败 ${refreshFailCount} 次${refreshTotalFails >= Math.floor(refreshTotalFailThreshold / 3) ? `，累计失败 ${refreshTotalFails} 次` : ''}，持仓价格可能不是最新。请检查网络连接或重启应用。`}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={STRATEGY_IDS.map(sid => ({
+          key: sid,
+          label: (
+            <span>
+              {STRATEGY_LABELS[sid] || sid}
+              {loadingAccounts && sid === activeTab && (
+                <Spin size="small" style={{ marginLeft: 8 }} />
+              )}
+            </span>
+          ),
+          children: <StrategyTab strategyId={sid} accounts={accounts} onRefresh={loadAccounts} />,
+        }))}
+      />
+    </div>
+  )
+}

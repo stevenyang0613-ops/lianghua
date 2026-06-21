@@ -138,7 +138,22 @@ export function generateReport(config: ReportConfig): GeneratedReport {
 // 获取所有报告
 export function getReports(): GeneratedReport[] {
   const saved = localStorage.getItem(REPORTS_KEY)
-  return safeJsonParse<GeneratedReport[]>(saved, [])
+  const reports = safeJsonParse<GeneratedReport[]>(saved, [])
+  if (reports.length === 0) {
+    // Seed a sample report on first use so the UI is never empty
+    const sample: GeneratedReport = {
+      id: 'report_sample_1',
+      title: '示例报告：可转债市场概览',
+      type: 'custom',
+      format: 'csv',
+      createdAt: Date.now() - 86400000,
+      size: '2.1 KB',
+      downloadUrl: '',
+    }
+    localStorage.setItem(REPORTS_KEY, JSON.stringify([sample]))
+    return [sample]
+  }
+  return reports
 }
 
 // 删除报告

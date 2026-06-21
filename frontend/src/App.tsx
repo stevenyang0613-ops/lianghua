@@ -50,7 +50,7 @@ const ThemeStore = lazy(() => import('./pages/ThemeStore'))
 const PluginManager = lazy(() => import('./pages/PluginManager'))
 const ScoreRanking = lazy(() => import('./pages/ScoreRanking'))
 const SyncSettings = lazy(() => import('./pages/SyncSettings'))
-const SonggangScore = lazy(() => import('./pages/SonggangScore'))
+const XibuScore = lazy(() => import('./pages/XibuScore'))
 const TimingSignal = lazy(() => import('./pages/TimingSignal'))
 const XuanjiIndex = lazy(() => import('./pages/XuanjiIndex'))
 const AnalyticsDashboard = lazy(() => import('./pages/AnalyticsDashboard'))
@@ -58,8 +58,11 @@ const ThemeConfig = lazy(() => import('./pages/ThemeConfig'))
 const DataImportExport = lazy(() => import('./pages/DataImportExport'))
 const OpsDashboard = lazy(() => import('./components/OpsDashboard'))
 const ExchangeableBonds = lazy(() => import('./pages/ExchangeableBonds'))
+const MXData = lazy(() => import('./pages/MXData'))
 const SectorRotation = lazy(() => import('./pages/SectorRotation'))
 const SectorRotationStock = lazy(() => import('./pages/SectorRotationStock'))
+const PaperTrade = lazy(() => import('./pages/PaperTrade'))
+const DataSourceMonitor = lazy(() => import('./pages/DataSourceMonitor'))
 
 // 注册 Service Worker (仅在浏览器/PWA 环境下, Electron 不支持 Service Worker)
 function registerServiceWorker() {
@@ -72,7 +75,7 @@ function registerServiceWorker() {
         .catch((error) => {
           console.log('[PWA] Service Worker registration failed:', error)
         })
-    })
+    }, { once: true })
   }
 }
 
@@ -172,6 +175,7 @@ export default function App() {
         <Route path="/" element={<ErrorBoundary><Market /></ErrorBoundary>} />
         <Route path="/market" element={<ErrorBoundary><Market /></ErrorBoundary>} />
         <Route path="/exchangeable" element={<ErrorBoundary><ExchangeableBonds /></ErrorBoundary>} />
+        <Route path="/mx-data" element={<ErrorBoundary><MXData /></ErrorBoundary>} />
         <Route path="/sector-rotation" element={<ErrorBoundary><SectorRotation /></ErrorBoundary>} />
         <Route path="/sector-rotation-stock" element={<ErrorBoundary><SectorRotationStock /></ErrorBoundary>} />
         <Route path="/watchlist" element={<ErrorBoundary><Watchlist /></ErrorBoundary>} />
@@ -189,6 +193,7 @@ export default function App() {
         <Route path="/reports" element={<ErrorBoundary><ReportCenter /></ErrorBoundary>} />
         <Route path="/risk" element={<ErrorBoundary><RiskControl /></ErrorBoundary>} />
         <Route path="/auto-trade" element={<ErrorBoundary><AutoTrade /></ErrorBoundary>} />
+        <Route path="/paper-trade" element={<ErrorBoundary><PaperTrade /></ErrorBoundary>} />
         <Route path="/data-player" element={<ErrorBoundary><DataPlayer /></ErrorBoundary>} />
         <Route path="/strategy-market" element={<ErrorBoundary><StrategyMarket /></ErrorBoundary>} />
         <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
@@ -196,7 +201,7 @@ export default function App() {
         <Route path="/themes" element={<ErrorBoundary><ThemeStore /></ErrorBoundary>} />
         <Route path="/plugins" element={<ErrorBoundary><PluginManager /></ErrorBoundary>} />
         <Route path="/score-ranking" element={<ErrorBoundary><ScoreRanking /></ErrorBoundary>} />
-        <Route path="/songgang-score" element={<ErrorBoundary><SonggangScore /></ErrorBoundary>} />
+        <Route path="/xibu-score" element={<ErrorBoundary><XibuScore /></ErrorBoundary>} />
         <Route path="/timing-signal" element={<ErrorBoundary><TimingSignal /></ErrorBoundary>} />
         <Route path="/xuanji-index" element={<ErrorBoundary><XuanjiIndex /></ErrorBoundary>} />
         <Route path="/sync" element={<ErrorBoundary><SyncSettings /></ErrorBoundary>} />
@@ -204,6 +209,7 @@ export default function App() {
         <Route path="/theme-config" element={<ErrorBoundary><ThemeConfig /></ErrorBoundary>} />
         <Route path="/data-import-export" element={<ErrorBoundary><DataImportExport /></ErrorBoundary>} />
         <Route path="/ops" element={<ErrorBoundary><OpsDashboard /></ErrorBoundary>} />
+        <Route path="/data-source-monitor" element={<ErrorBoundary><DataSourceMonitor /></ErrorBoundary>} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

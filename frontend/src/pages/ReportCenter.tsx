@@ -33,27 +33,27 @@ export default function ReportCenter() {
       setGenerating(true)
 
       try {
+        // 报告生成需要真实数据支持，请等待数据源就绪后重试
+        // TODO: 实现真实数据生成逻辑后删除此早期返回
         message.warning('报告生成需要真实数据支持，请等待数据源就绪后重试')
+        setGenerating(false)
         return
 
-        const config: ReportConfig = {
-          title: values.title,
-          type: values.type,
-          format: values.format,
-          data: [],
-          includeCharts: values.includeCharts || false,
-          dateRange: values.dateRange?.map((d: dayjs.Dayjs) => d.format('YYYY-MM-DD')) as [string, string],
-        }
-
-        const report = generateReport(config)
-
-        setCreateModalVisible(false)
-        form.resetFields()
-        loadReports()
-        message.success('报告生成成功')
-
-        // 自动下载
-        downloadReport(report)
+        // 以下为占位代码，等待数据源就绪后启用：
+        // const config: ReportConfig = {
+        //   title: values.title,
+        //   type: values.type,
+        //   format: values.format,
+        //   data: [],
+        //   includeCharts: values.includeCharts || false,
+        //   dateRange: values.dateRange?.map((d: dayjs.Dayjs) => d.format('YYYY-MM-DD')) as [string, string],
+        // }
+        // const report = generateReport(config)
+        // setCreateModalVisible(false)
+        // form.resetFields()
+        // loadReports()
+        // message.success('报告生成成功')
+        // downloadReport(report)
       } catch (err) {
         message.error('报告生成失败: ' + String(err))
       } finally {

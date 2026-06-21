@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, Progress, Statistic, Table, Tag, Switch, Space, Button, Alert, Collapse } from 'antd';
+import { Card, Row, Col, Progress, Statistic, Table, Tag, Switch, Space, Button, Alert, Collapse, Spin, Empty } from 'antd';
 import {
   RiseOutlined,
   FallOutlined,
@@ -69,6 +69,10 @@ const getScoreColor = (score: number) => {
       if (data && data.factors && data.factors.length > 0) {
         setSignal(data);
         setLoadError(null);
+      } else if (data && data.marketEnv === 'unknown' && data.totalScore === 0) {
+        // 缓存尚未准备好，后端正在后台刷新，前端显示加载中而非错误
+        setSignal(null);
+        setLoadError(null);
       } else {
         setLoadError('API返回数据为空，请检查数据源');
       }
@@ -134,6 +138,7 @@ const getScoreColor = (score: number) => {
 
   const factors = signal?.factors || [];
   const isEnhanced = signal?.modelVersion === 'v4.0-enhanced' || (signal?.factors?.length ?? 0) > 4;
+  const hasFactors = factors.length > 0;
 
   // 仪表盘图表配置
   const gaugeOption = {
@@ -166,14 +171,14 @@ const getScoreColor = (score: number) => {
     }],
   };
 
-  // 雷达图配置
-  const radarOption = {
+  // 雷达图配置（无有效因子时隐藏，避免 ECharts 空数据崩溃）
+  const radarOption = hasFactors ? {
     tooltip: {},
     legend: { data: ['当前得分'], bottom: 0 },
     radar: {
       indicator: factors.map(f => ({
         name: f.name,
-        max: f.maxScore,
+        max: f.maxScore || 100,
       })),
       center: ['50%', '55%'],
       radius: '65%',
@@ -190,9 +195,20 @@ const getScoreColor = (score: number) => {
         itemStyle: { color: '#1890ff' },
       }],
     }],
-  };
+  } : null;
 
   const positionPercent = (signal?.positionLimit || 0) * 100;
+
+  // 加载中占位
+  if (!signal && !loadError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Spin tip="择时信号加载中，首次启动约需 1-2 分钟..." style={{ width: '100%', marginTop: 100 }}>
+          <div style={{ height: 300 }} />
+        </Spin>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: 24 }}>
@@ -262,11 +278,11 @@ const getScoreColor = (score: number) => {
           <Card>
             <Statistic
               title="市场环境"
-      value={
-        signal?.marketEnv === 'bull' || signal?.marketEnv === 'strong_bull' ? '牛市' :
-        signal?.marketEnv === 'bear' || signal?.marketEnv === 'strong_bear' ? '熊市' :
-        signal?.marketEnv === 'neutral' ? '震荡市' : '未知'
-      }
+              value={
+                signal?.marketEnv === 'bull' || signal?.marketEnv === 'strong_bull' ? '牛市' :
+                signal?.marketEnv === 'bear' || signal?.marketEnv === 'strong_bear' ? '熊市' :
+                signal?.marketEnv === 'neutral' ? '震荡市' : '未知'
+              }
               valueStyle={{
                 color: signal?.marketEnv === 'bull' ? '#52c41a' :
                        signal?.marketEnv === 'bear' ? '#ff4d4f' : '#1890ff',
@@ -324,12 +340,20 @@ const getScoreColor = (score: number) => {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={12}>
           <Card title="择时评分仪表">
-            <ReactEChartsCore echarts={echarts} option={gaugeOption} style={{ height: 300 }} />
+            {signal ? (
+              <ReactEChartsCore echarts={echarts} option={gaugeOption} style={{ height: 300 }} />
+            ) : (
+              <Empty description="等待数据" style={{ height: 300, paddingTop: 80 }} />
+            )}
           </Card>
         </Col>
         <Col span={12}>
           <Card title="因子得分雷达">
-            <ReactEChartsCore echarts={echarts} option={radarOption} style={{ height: 300 }} />
+            {radarOption ? (
+              <ReactEChartsCore echarts={echarts} option={radarOption} style={{ height: 300 }} />
+            ) : (
+              <Empty description="等待因子数据" style={{ height: 300, paddingTop: 80 }} />
+            )}
           </Card>
         </Col>
       </Row>

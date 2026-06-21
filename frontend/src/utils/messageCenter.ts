@@ -42,6 +42,44 @@ export function getMessages(options?: {
 }): Message[] {
   const saved = localStorage.getItem(MESSAGES_KEY)
   let messages: Message[] = safeJsonParse<Message[]>(saved, [])
+  if (messages.length === 0) {
+    // Seed default messages on first use so the UI is never empty
+    messages = [
+      {
+        id: 'msg_welcome',
+        type: 'system',
+        title: '欢迎使用 LiangHua 量化转债平台',
+        content: 'LiangHua 提供实时可转债行情、多因子评分、策略回测与信号推送等功能。建议您先配置自选股和预警规则，再开启实盘或模拟交易。',
+        level: 'info',
+        read: false,
+        starred: true,
+        createdAt: Date.now(),
+        actionUrl: '/market',
+        actionText: '查看行情',
+      },
+      {
+        id: 'msg_guide_analysis',
+        type: 'update',
+        title: '新功能：分析工具已上线',
+        content: '新增强制赎回日历、双低排名、脉冲扫描、下修概率等分析工具，帮助您快速发现交易机会。',
+        level: 'success',
+        read: false,
+        starred: false,
+        createdAt: Date.now() - 3600000,
+      },
+      {
+        id: 'msg_risk_tip',
+        type: 'alert',
+        title: '风险提示：请设置风控规则',
+        content: '建议您在"风控管理"中配置仓位上限和止损规则，以控制交易风险。',
+        level: 'warning',
+        read: false,
+        starred: false,
+        createdAt: Date.now() - 7200000,
+      },
+    ]
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+  }
 
   if (options) {
     if (options.type) {

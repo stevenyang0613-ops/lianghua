@@ -293,7 +293,7 @@ export default function Market() {
   }
 
   return (
-    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div data-testid="market-page" style={{ padding: 16, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <Row justify="space-between" align="middle" style={{ marginBottom: 12, flexShrink: 0 }}>
         <Col>
           <Space>
@@ -314,7 +314,7 @@ export default function Market() {
           <Space>
             <span style={{ color: '#888' }}>共 {filteredBonds.length} 只可转债</span>
             <Switch checkedChildren="虚拟滚动" unCheckedChildren="分页" checked={useVirtual} onChange={(v) => { setUseVirtual(v); setCurrentPage(1) }} />
-            <Button icon={<ReloadOutlined spin={refreshing} />} onClick={handleRefresh} loading={refreshing}>刷新</Button>
+            <Button icon={<ReloadOutlined spin={refreshing} />} onClick={handleRefresh} loading={refreshing} data-testid="refresh-button">刷新</Button>
             <Button icon={<SwapOutlined />} onClick={() => navigate('/exchangeable')}>可交换债</Button>
             <Dropdown menu={{ items: exportMenuItems }} trigger={['click']}>
               <Button icon={<DownloadOutlined />}>导出</Button>

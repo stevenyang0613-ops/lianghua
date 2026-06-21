@@ -12,7 +12,7 @@ export default function ExchangeableBonds() {
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [loadData])
 
   if (loading && data.length === 0) {
     return (

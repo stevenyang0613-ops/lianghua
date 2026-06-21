@@ -157,7 +157,7 @@ export default function Backtest() {
   }
 
   return (
-    <div style={{ padding: 16 }}>
+    <div data-testid="backtest-page" style={{ padding: 16 }}>
       <Title level={4} style={{ marginBottom: 16 }}>
         <BarChartOutlined /> 回测中心
       </Title>

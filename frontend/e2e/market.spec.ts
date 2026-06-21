@@ -13,9 +13,9 @@ test.describe('市场页面', () => {
     // 等待页面加载
     await page.waitForLoadState('networkidle')
 
-    // 检查是否有数据表格或列表
-    const dataTable = page.locator('table, .ant-table, [data-testid="market-table"]')
-    await expect(dataTable).toBeVisible({ timeout: 15000 })
+    // 检查是否有数据表格或列表（优先 data-testid，兼容 antd class）
+    const dataTable = page.locator('[data-testid="market-page"] table, [data-testid="market-table"], .ant-table, table')
+    await expect(dataTable.first()).toBeVisible({ timeout: 15000 })
   })
 
   test('搜索功能', async ({ page }) => {
@@ -29,8 +29,11 @@ test.describe('市场页面', () => {
       await searchInput.fill('128001')
       await searchInput.press('Enter')
 
-      // 等待搜索结果
-      await page.waitForTimeout(1000)
+      // 等待搜索结果：表格内容更新
+      await page.waitForFunction(() => {
+        const rows = document.querySelectorAll('.ant-table-row, table tbody tr')
+        return rows.length > 0
+      }, { timeout: 5000 }).catch(() => test.info().annotations.push({ type: 'timeout-warning', description: '搜索结果等待超时，可能 antd class 名已变更' }))
     }
   })
 
@@ -42,7 +45,8 @@ test.describe('市场页面', () => {
 
     if (await sortableHeader.isVisible()) {
       await sortableHeader.click()
-      await page.waitForTimeout(500)
+      // 等待排序指示器出现
+      await page.locator('.ant-table-column-sort').first().waitFor({ timeout: 3000 }).catch(() => {})
       await sortableHeader.click()
     }
   })
@@ -57,7 +61,8 @@ test.describe('市场页面', () => {
       const nextButton = page.locator('.ant-pagination-next, button[aria-label="next page"]').first()
       if (await nextButton.isEnabled()) {
         await nextButton.click()
-        await page.waitForTimeout(1000)
+        // 等待分页数据加载
+        await page.locator('.ant-table-row, table tbody tr').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
       }
     }
   })
@@ -65,12 +70,13 @@ test.describe('市场页面', () => {
   test('刷新数据', async ({ page }) => {
     await page.waitForLoadState('networkidle')
 
-    // 查找刷新按钮
-    const refreshButton = page.locator('button:has-text("刷新"), [data-testid="refresh-button"]').first()
+    // 查找刷新按钮（优先 data-testid）
+    const refreshButton = page.locator('[data-testid="refresh-button"], button:has-text("刷新")').first()
 
     if (await refreshButton.isVisible()) {
       await refreshButton.click()
-      await page.waitForTimeout(2000)
+      // 等待刷新完成：loading 消失或数据重新出现
+      await page.locator('.ant-spin-spinning').first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {})
     }
   })
 
@@ -82,7 +88,8 @@ test.describe('市场页面', () => {
 
     if (await dataRow.isVisible()) {
       await dataRow.click()
-      await page.waitForTimeout(1000)
+      // 等待详情面板出现
+      await page.locator('.ant-drawer, .ant-modal, [data-testid="detail-panel"]').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
 
       // 检查是否弹出详情面板
       const detailPanel = page.locator('.ant-drawer, .ant-modal, [data-testid="detail-panel"]')
