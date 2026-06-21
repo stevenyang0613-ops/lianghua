@@ -105,8 +105,15 @@ class HistoricalDataLoader:
         return []
 
     async def _fast_check_em_banned(self) -> bool:
-        """快速检测东方财富IP是否被封禁: 采样3只热门转债"""
-        test_codes = ["110079", "123172", "113050"]
+        """快速检测东方财富IP是否被封禁: 采样3只活跃转债（优先从_bond_stock_codes取）"""
+        try:
+            from app.engine.data_enrich import _bond_stock_codes
+            if _bond_stock_codes and len(_bond_stock_codes) >= 3:
+                test_codes = list(_bond_stock_codes)[:3]
+            else:
+                test_codes = ["110079", "123172", "113050"]
+        except ImportError:
+            test_codes = ["110079", "123172", "113050"]
         failed = 0
         end = date.today()
         start = end - timedelta(days=5)

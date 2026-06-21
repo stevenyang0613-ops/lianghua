@@ -115,17 +115,16 @@ class MarketEngine:
 
             # 如果 volatility 缓存为空，从 DuckDB 历史价格计算
             try:
-                from app.engine.data_enrich import _vol_map, _compute_iv_from_stock_prices, _save_cache, _VOL_CACHE, _set_global_map
+                from app.engine.data_enrich import _vol_map, _save_cache, _VOL_CACHE, _set_global_map
                 if not _vol_map and self._storage:
-                    stock_codes = list({b.stock_code for b in bonds if getattr(b, 'stock_code', None)})
-                    if stock_codes:
-                        iv_result = await asyncio.to_thread(
-                            _compute_iv_from_stock_prices, self._storage, stock_codes
-                        )
-                        if iv_result:
-                            _save_cache(_VOL_CACHE, iv_result.copy())
-                            _set_global_map("_vol_map", iv_result)
-                            logger.info(f"[MarketEngine] Computed IV from stock prices: {len(iv_result)} stocks")
+                    from app.engine.historical import HistoricalDataLoader
+                    loader = HistoricalDataLoader(self._storage)
+                    count = await asyncio.to_thread(loader._compute_iv_from_prices)
+                    if count > 0:
+                        # Reload the vol map after computation
+                        from app.engine.data_enrich import _load_vol_cache
+                        _load_vol_cache()
+                        logger.info(f"[MarketEngine] Computed IV from stock prices: {count} stocks")
             except Exception as e:
                 logger.debug(f"[MarketEngine] IV from stock prices failed: {e}")
 
@@ -237,7 +236,7 @@ class MarketEngine:
     def _compute_seven_dim_snapshot(bonds: list[ConvertibleQuote], storage) -> int:
         """同步计算七维评分快照（在线程池中执行，向量化），返回评分数量"""
         import pandas as pd
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
         rows = [{
             "code": b.code, "name": b.name, "price": b.price,
@@ -251,7 +250,7 @@ class MarketEngine:
         } for b in bonds]
 
         df = pd.DataFrame(rows)
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
         strategy.on_init(df)
 
         # 优先使用向量化计算
