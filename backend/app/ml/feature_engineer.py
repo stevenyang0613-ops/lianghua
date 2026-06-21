@@ -150,11 +150,12 @@ class FeatureEngineer:
             (1 / (4 * np.log(2))) * (np.log(df['high'] / df['low']) ** 2).rolling(window=20).mean()
         ) * np.sqrt(252)
         
-        # Garman-Klass波动率
-        df['garman_klass_vol'] = np.sqrt(
+        # Garman-Klass波动率（防御负方差：np.sqrt 内部 clamp ≥ 0）
+        garman_klass_var = (
             0.5 * (np.log(df['high'] / df['low']) ** 2).rolling(window=20).mean() -
             (2 * np.log(2) - 1) * (np.log(df['close'] / df['open']) ** 2).rolling(window=20).mean()
-        ) * np.sqrt(252)
+        )
+        df['garman_klass_vol'] = np.sqrt(np.maximum(garman_klass_var, 0)) * np.sqrt(252)
         
         # 偏度和峰度
         df['return_skew'] = log_return.rolling(window=20).skew()

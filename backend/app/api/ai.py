@@ -191,7 +191,7 @@ def build_prompt(request: AnalysisRequest) -> str:
     return base_prompt + request.question or "请分析当前情况。"
 
 async def call_ai_model(prompt: str) -> str:
-    """调用 AI 模型"""
+    """调用 AI 模型 — 优先 OpenAI，备选 DeepSeek"""
     from app.config import settings
 
     # 优先使用 OpenAI
@@ -201,7 +201,23 @@ async def call_ai_model(prompt: str) -> str:
                 f"{settings.OPENAI_API_BASE}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}"},
                 json={
-                    "model": "gpt-4",
+                    "model": settings.OPENAI_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 2000,
+                },
+                timeout=60.0,
+            )
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+
+    # 备选 DeepSeek
+    if settings.DEEPSEEK_API_KEY:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.DEEPSEEK_API_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}"},
+                json={
+                    "model": settings.DEEPSEEK_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 2000,
                 },

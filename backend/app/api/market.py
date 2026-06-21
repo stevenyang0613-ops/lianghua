@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Query, Request, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from collections import defaultdict
+import threading
+import random
+from pathlib import Path
 import statistics
 
 router = APIRouter()
@@ -111,6 +114,297 @@ _STOCK_INDUSTRIES_ALL_FIELDS = {
 }
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  Industry layout recommendations (短期≤1周 / 中期2周 / 长期1月)
+#  纯函数, 无外部依赖; 复用 /stock-industries 已聚合好的行业 dict
+# ════════════════════════════════════════════════════════════════════════════
+
+# horizon -> (核心动量权重, 各项权重, 录用阈值)
+_HORIZON_WEIGHTS = {
+    "short_term": {  # ≤1周: 动量为王 + 资金 + 活跃度
+        "momentum": 0.60, "flow": 0.25, "quality": 0.00, "valuation": 0.00,
+        "trend_confirm": 0.00, "long_trend": 0.00, "turnover": 0.15,
+        "threshold": 55,
+    },
+    "mid_term": {  # 2周: 10日动量为主 + 20日趋势确认 + 资金 + 质地
+        "momentum": 0.50, "flow": 0.20, "quality": 0.10, "valuation": 0.00,
+        "trend_confirm": 0.20, "long_trend": 0.00, "turnover": 0.00,
+        "threshold": 50,
+    },
+    "long_term": {  # 1月: 20日动量 + 60日长趋势 + ROE + 毛利率 + 估值
+        "momentum": 0.40, "flow": 0.00, "quality": 0.20, "valuation": 0.05,
+        "trend_confirm": 0.00, "long_trend": 0.25, "gpm": 0.10,
+        "threshold": 45,
+    },
+}
+
+# 每档周期对应的核心动量字段
+_HORIZON_MOMENTUM_FIELD = {
+    "short_term": "avg_momentum_5d",
+    "mid_term": "avg_momentum_10d",
+    "long_term": "avg_momentum_20d",
+}
+
+
+def _safe_num(v, default: float = 0.0) -> float:
+    """数字兜底: None/NaN/非数 -> default"""
+    try:
+        if v is None:
+            return default
+        f = float(v)
+        if f != f:  # NaN check
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
+
+
+def _compute_horizon_score(ind: dict, horizon: str, custom_weights: dict | None = None) -> float:
+    """计算单行业在指定周期的综合评分 (0-100).
+    ind: /stock-industries 返回的单个行业 dict
+    horizon: short_term | mid_term | long_term
+    custom_weights: 可选的覆盖权重 (只覆盖传入的 key)
+    """
+    w = {**_HORIZON_WEIGHTS[horizon]}
+    if custom_weights:
+        w.update(custom_weights)
+    mom_field = _HORIZON_MOMENTUM_FIELD[horizon]
+    # 动量: -10%~+10% 映射到 0~100
+    mom_score = min(100.0, max(0.0, (_safe_num(ind.get(mom_field)) + 10.0) * 5.0))
+    # 资金: -5%~+5% 映射到 0~100
+    flow_score = min(100.0, max(0.0, (_safe_num(ind.get("net_capital_flow_pct")) + 0.05) * 1000.0))
+    # 趋势确认: 20日动量方向一致性 (-10%~+10% -> 0~100)
+    trend_score = min(100.0, max(0.0, (_safe_num(ind.get("avg_momentum_20d")) + 10.0) * 5.0))
+    # 长趋势: 60日动量 (-15%~+15% -> 0~100)
+    long_score = min(100.0, max(0.0, (_safe_num(ind.get("avg_momentum_60d")) + 15.0) * (100.0 / 30.0)))
+    # 质地: ROE+毛利率 (0~25 -> 0~100)
+    quality_score = min(100.0, max(0.0, (_safe_num(ind.get("avg_roe")) + _safe_num(ind.get("avg_gpm")) / 5.0) * 4.0))
+    # 估值: 100 - PE (PE 0~100 -> 100~0)
+    valuation_score = min(100.0, max(0.0, 100.0 - _safe_num(ind.get("avg_pe"), 50.0)))
+    # 毛利率单独 (0~50% -> 0~100)
+    gpm_score = min(100.0, max(0.0, _safe_num(ind.get("avg_gpm")) * 2.0))
+    # 活跃度: 换手率 (0~10% -> 0~100)
+    turnover_score = min(100.0, max(0.0, _safe_num(ind.get("avg_turnover_rate")) * 10.0))
+
+    score = (
+        mom_score * w.get("momentum", 0)
+        + flow_score * w.get("flow", 0)
+        + quality_score * w.get("quality", 0)
+        + valuation_score * w.get("valuation", 0)
+        + trend_score * w.get("trend_confirm", 0)
+        + long_score * w.get("long_trend", 0)
+        + gpm_score * w.get("gpm", 0)
+        + turnover_score * w.get("turnover", 0)
+    )
+    return round(score, 1)
+
+
+def _build_reasons(ind: dict, horizon: str) -> list[str]:
+    """生成中文推荐原因 (2-4 条 bullet).
+    基于阈值规则, 命中信号即拼装一句话.
+    """
+    reasons: list[str] = []
+    mom_field = _HORIZON_MOMENTUM_FIELD[horizon]
+    mom_label = {"short_term": "5日", "mid_term": "10日", "long_term": "20日"}[horizon]
+
+    m_now = _safe_num(ind.get(mom_field))
+    m5 = _safe_num(ind.get("avg_momentum_5d"))
+    m20 = _safe_num(ind.get("avg_momentum_20d"))
+    m60 = _safe_num(ind.get("avg_momentum_60d"))
+    flow_pct = _safe_num(ind.get("net_capital_flow_pct"))
+    flow_abs = _safe_num(ind.get("net_capital_flow"))
+    roe = _safe_num(ind.get("avg_roe"))
+    gpm = _safe_num(ind.get("avg_gpm"))
+    pe = _safe_num(ind.get("avg_pe"))
+    disp = _safe_num(ind.get("momentum_dispersion"))
+    turnover = _safe_num(ind.get("avg_turnover_rate"))
+
+    # 1. 动量信号
+    if m_now > 3.0:
+        reasons.append(f"{mom_label}动量 +{m_now:.1f}%，强势上行")
+    elif m_now > 0:
+        reasons.append(f"{mom_label}动量 +{m_now:.1f}%，温和上行")
+
+    # 2. 趋势加速 (短期动量 > 中期动量 > 0)
+    if horizon in ("short_term", "mid_term") and m5 > m20 > 0:
+        reasons.append(f"短期动量({m5:.1f}%)快于20日({m20:.1f}%)，趋势加速")
+    if horizon == "long_term" and m20 > 0 and m60 > 0:
+        reasons.append(f"20日({m20:.1f}%)与60日({m60:.1f}%)双周期共振向上")
+
+    # 3. 资金信号
+    if flow_pct > 0.01:
+        reasons.append(f"主力资金净流入占比 +{flow_pct * 100:.2f}%")
+    elif flow_abs > 0:
+        yi = flow_abs / 1e8
+        reasons.append(f"主力资金净流入 {yi:.2f} 亿")
+
+    # 4. 质地信号
+    if roe > 12:
+        reasons.append(f"ROE {roe:.1f}%，质地优良")
+    elif roe > 8:
+        reasons.append(f"ROE {roe:.1f}%，盈利稳定")
+    if horizon == "long_term" and gpm > 30:
+        reasons.append(f"毛利率 {gpm:.1f}%，护城河较深")
+
+    # 5. 估值信号
+    if 0 < pe < 25:
+        reasons.append(f"PE {pe:.1f}，估值合理")
+
+    # 6. 风险/一致性信号
+    if 0 < disp < 5:
+        reasons.append(f"组内动量一致性高 (离散度 {disp:.1f})，轮动健康")
+    if horizon == "short_term" and turnover > 3:
+        reasons.append(f"换手率 {turnover:.1f}%，交投活跃")
+
+    # 兜底: 若无强信号, 至少返回一句话
+    if not reasons:
+        reasons.append(f"综合评分靠前，{mom_label}维度相对占优")
+    return reasons[:4]  # 最多 4 条
+
+
+# ── 推荐结果内存缓存 (60s TTL) ──
+_RECOMMEND_CACHE: dict | None = None
+_RECOMMEND_CACHE_TS: float = 0.0
+_RECOMMEND_CACHE_TTL: float = 60.0  # seconds
+
+# ── 推荐准确率缓存 (60s TTL) ──
+_ACCURACY_CACHE: dict | None = None
+_ACCURACY_CACHE_TS: float = 0.0
+_ACCURACY_CACHE_TTL: float = 60.0  # seconds
+_rec_cache_lock = threading.Lock()
+
+
+def _build_recommendations(industries: list[dict], top_k: int = 5, _use_cache: bool = True, horizon_weights: dict | None = None) -> dict:
+    """对 /stock-industries 的 industries 列表计算三档推荐.
+    返回结构: {short_term:[...], mid_term:[...], long_term:[...], generated_at}
+    60s 内存缓存: 避免每次 /stock-industries 请求都重算.
+    """
+    global _RECOMMEND_CACHE, _RECOMMEND_CACHE_TS
+    import time
+    now = time.time()
+    with _rec_cache_lock:
+        if _use_cache and horizon_weights is None and _RECOMMEND_CACHE is not None and (now - _RECOMMEND_CACHE_TS) < _RECOMMEND_CACHE_TTL:
+            return _RECOMMEND_CACHE
+
+    now_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    result: dict[str, list] = {}
+
+    for horizon in ("short_term", "mid_term", "long_term"):
+        hw = {**_HORIZON_WEIGHTS[horizon]}
+        if horizon_weights and horizon in horizon_weights:
+            hw.update(horizon_weights[horizon])
+        min_threshold = hw.get("threshold", 45)  # 最低绝对阈值 (熊市兜底)
+
+        # Step 1: 对所有合格行业计算评分
+        all_scored = []
+        for ind in industries:
+            if _safe_num(ind.get("stock_count")) < 3:
+                continue
+            score = _compute_horizon_score(ind, horizon, custom_weights=hw)
+            all_scored.append((ind, score))
+        if not all_scored:
+            result[horizon] = []
+            continue
+
+        # Step 2: 分位数自适应阈值 — 取评分排名前30%的行业
+        all_scored.sort(key=lambda x: x[1], reverse=True)
+        n = len(all_scored)
+        quantile_cutoff = max(1, int(n * 0.3))
+        quantile_min_score = all_scored[min(quantile_cutoff - 1, n - 1)][1]
+
+        # Step 3: 有效阈值 = max(分位数阈值, 最低绝对阈值)
+        # 牛市: 分位数阈值高 → 自然筛选; 熊市: 分位数阈值低 → 最低阈值兜底
+        effective_threshold = max(quantile_min_score, min_threshold)
+
+        scored = []
+        for ind, score in all_scored:
+            if score >= effective_threshold:
+                scored.append({
+                    "industry": ind.get("industry", ""),
+                    "score": score,
+                    "signal_strength": "strong" if score >= effective_threshold + 15 else "moderate",
+                    "reasons": _build_reasons(ind, horizon),
+                    "metrics": {
+                        "momentum_5d": round(_safe_num(ind.get("avg_momentum_5d")), 2),
+                        "momentum_10d": round(_safe_num(ind.get("avg_momentum_10d")), 2),
+                        "momentum_20d": round(_safe_num(ind.get("avg_momentum_20d")), 2),
+                        "momentum_60d": round(_safe_num(ind.get("avg_momentum_60d")), 2),
+                        "net_capital_flow_pct": round(_safe_num(ind.get("net_capital_flow_pct")), 4),
+                        "avg_roe": round(_safe_num(ind.get("avg_roe")), 2),
+                        "avg_pe": round(_safe_num(ind.get("avg_pe")), 2),
+                        "avg_gpm": round(_safe_num(ind.get("avg_gpm")), 2),
+                        "stock_count": int(_safe_num(ind.get("stock_count"))),
+                    },
+                })
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        result[horizon] = scored[:top_k]
+
+    result["generated_at"] = now_iso
+    if horizon_weights is None:
+        with _rec_cache_lock:
+            _RECOMMEND_CACHE = result
+            _RECOMMEND_CACHE_TS = time.time()
+        _save_rec_history(result, industries)
+    return result
+
+
+# ── 推荐历史记录 (JSON 文件, 每日一条快照) ──
+_REC_HISTORY_DIR = Path.home() / ".lianghua" / "data_cache" / "rec_history"
+_REC_HISTORY_MAX_DAYS = 90  # rolling window: delete files older than this
+_REC_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _save_rec_history(recs: dict, industries: list[dict] | None = None) -> None:
+    """保存当日推荐快照到 JSON 文件. 文件名: YYYY-MM-DD.json
+    industries: 原始行业列表, 用于保存基线动量供回测使用.
+    """
+    import json as _json
+    try:
+        today = date.today().isoformat()
+        fp = _REC_HISTORY_DIR / f"{today}.json"
+        # 如果当天已保存, 跳过 (避免覆盖已有回测结果)
+        if fp.exists():
+            return
+        data = dict(recs)
+        # 保存基线动量 (供后续回测用)
+        if industries:
+            baseline = {}
+            for ind in industries:
+                name = ind.get("industry", "")
+                if name:
+                    baseline[name] = {
+                        "momentum_5d": _safe_num(ind.get("avg_momentum_5d")),
+                        "momentum_10d": _safe_num(ind.get("avg_momentum_10d")),
+                        "momentum_20d": _safe_num(ind.get("avg_momentum_20d")),
+                        "momentum_60d": _safe_num(ind.get("avg_momentum_60d")),
+                    }
+            data["_baseline"] = baseline
+        with open(fp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        # Rolling window: delete history files older than _REC_HISTORY_MAX_DAYS
+        cutoff = (date.today() - timedelta(days=_REC_HISTORY_MAX_DAYS)).isoformat()
+        for old_fp in _REC_HISTORY_DIR.glob("*.json"):
+            if old_fp.stem < cutoff:
+                old_fp.unlink(missing_ok=True)
+    except Exception:
+        pass  # 历史保存失败不影响主流程
+
+
+def _load_rec_history(days: int = 30) -> list[dict]:
+    """加载最近 N 天的推荐历史. 返回 [{date, short_term, mid_term, long_term}, ...]"""
+    import json as _json
+    result = []
+    try:
+        files = sorted(_REC_HISTORY_DIR.glob("*.json"), reverse=True)
+        for fp in files[:days]:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            data["date"] = fp.stem
+            result.append(data)
+    except Exception:
+        pass
+    return result
+
 
 def _iso(value) -> Optional[str]:
     """将 date/datetime 序列化为 ISO 字符串;None 透传"""
@@ -204,6 +498,7 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "code": r.get("code", ""),
             "name": r.get("name", ""),
             "stock_code": r.get("stock_code", ""),
+            "stock_name": r.get("stock_name", ""),
             "price": float(r.get("price", 0)),
             "change_pct": float(r.get("change_pct", 0)),
             "stock_price": float(r.get("stock_price", 0)),
@@ -217,13 +512,11 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "remaining_years": float(r.get("remaining_years", 0)),
             "forced_call_days": int(r.get("forced_call_days", 0)),
             "is_called": bool(r.get("is_called") or False),
-            "stock_name": r.get("stock_name", ""),
-                        "call_status": str(r.get("call_status", "") or ""),
+            "call_status": str(r.get("call_status", "") or ""),
             "last_trade_date": _iso(r.get("last_trade_date")),
             "maturity_date": _iso(r.get("maturity_date")),
             "redemption_price": float(r.get("redemption_price", 0) or 0.0),
             "rating": str(r.get("rating", "") or "") or None,
-            "concepts": r.get("concepts", None),
             "industry": r.get("industry"),
             "concepts": r.get("concepts") or [],
             "roe": r.get("roe"),
@@ -234,9 +527,30 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "pe": r.get("pe"),
             "pb": r.get("pb"),
             "iv": r.get("iv"),
+            "turnover_rate": r.get("turnover_rate"),
+            "net_capital_flow": r.get("net_capital_flow"),
+            "net_capital_flow_pct": r.get("net_capital_flow_pct"),
+            "net_super_flow": r.get("net_super_flow"),
+            "net_big_flow": r.get("net_big_flow"),
+            "momentum_5d": r.get("momentum_5d"),
+            "momentum_10d": r.get("momentum_10d"),
+            "momentum_20d": r.get("momentum_20d"),
+            "momentum_60d": r.get("momentum_60d"),
+            "event_score": r.get("event_score"),
+            "event_detail": r.get("event_detail"),
+            "bond_value": r.get("bond_value"),
+            "iv_source": r.get("iv_source"),
             "buyback_amount": r.get("buyback_amount"),
             "mgmt_buy_price": r.get("mgmt_buy_price"),
             "outstanding_scale": r.get("outstanding_scale"),
+            "pledge_ratio": r.get("pledge_ratio"),
+            "north_net": r.get("north_net"),
+            "margin_balance": r.get("margin_balance"),
+            "lhb_count": r.get("lhb_count"),
+            "block_trade_amount": r.get("block_trade_amount"),
+            "holder_num_change": r.get("holder_num_change"),
+            "eps_forecast": r.get("eps_forecast"),
+            "restricted_release_amount": r.get("restricted_release_amount"),
         }
 
     if engine:
@@ -312,6 +626,24 @@ async def get_quote_by_code(request: Request, code: str):
             "mgmt_buy_price": getattr(q, "mgmt_buy_price", None),
             "outstanding_scale": getattr(q, "outstanding_scale", None),
             "concepts": getattr(q, "concepts", None),
+            "pledge_ratio": getattr(q, "pledge_ratio", None),
+            "net_super_flow": getattr(q, "net_super_flow", None),
+            "net_big_flow": getattr(q, "net_big_flow", None),
+            "momentum_5d": getattr(q, "momentum_5d", None),
+            "momentum_10d": getattr(q, "momentum_10d", None),
+            "momentum_20d": getattr(q, "momentum_20d", None),
+            "momentum_60d": getattr(q, "momentum_60d", None),
+            "event_score": getattr(q, "event_score", None),
+            "event_detail": getattr(q, "event_detail", None),
+            "bond_value": getattr(q, "bond_value", None),
+            "iv_source": getattr(q, "iv_source", None),
+            "north_net": getattr(q, "north_net", None),
+            "margin_balance": getattr(q, "margin_balance", None),
+            "lhb_count": getattr(q, "lhb_count", None),
+            "block_trade_amount": getattr(q, "block_trade_amount", None),
+            "holder_num_change": getattr(q, "holder_num_change", None),
+            "eps_forecast": getattr(q, "eps_forecast", None),
+            "restricted_release_amount": getattr(q, "restricted_release_amount", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -319,6 +651,8 @@ async def get_quote_by_code(request: Request, code: str):
         return {
             "code": r.get("code", ""),
             "name": r.get("name", ""),
+            "stock_code": r.get("stock_code", ""),
+            "stock_name": r.get("stock_name", ""),
             "price": float(r.get("price", 0)),
             "change_pct": float(r.get("change_pct", 0)),
             "stock_price": float(r.get("stock_price", 0)),
@@ -337,8 +671,8 @@ async def get_quote_by_code(request: Request, code: str):
             "maturity_date": _iso(r.get("maturity_date")),
             "redemption_price": float(r.get("redemption_price", 0) or 0.0),
             "rating": str(r.get("rating", "") or "") or None,
-            "stock_code": r.get("stock_code", ""),
             "industry": r.get("industry"),
+            "concepts": r.get("concepts") or [],
             "roe": r.get("roe"),
             "gpm": r.get("gpm"),
             "cagr": r.get("cagr"),
@@ -347,9 +681,30 @@ async def get_quote_by_code(request: Request, code: str):
             "pe": r.get("pe"),
             "pb": r.get("pb"),
             "iv": r.get("iv"),
+            "turnover_rate": r.get("turnover_rate"),
+            "net_capital_flow": r.get("net_capital_flow"),
+            "net_capital_flow_pct": r.get("net_capital_flow_pct"),
+            "net_super_flow": r.get("net_super_flow"),
+            "net_big_flow": r.get("net_big_flow"),
+            "momentum_5d": r.get("momentum_5d"),
+            "momentum_10d": r.get("momentum_10d"),
+            "momentum_20d": r.get("momentum_20d"),
+            "momentum_60d": r.get("momentum_60d"),
+            "event_score": r.get("event_score"),
+            "event_detail": r.get("event_detail"),
+            "bond_value": r.get("bond_value"),
+            "iv_source": r.get("iv_source"),
             "buyback_amount": r.get("buyback_amount"),
             "mgmt_buy_price": r.get("mgmt_buy_price"),
             "outstanding_scale": r.get("outstanding_scale"),
+            "pledge_ratio": r.get("pledge_ratio"),
+            "north_net": r.get("north_net"),
+            "margin_balance": r.get("margin_balance"),
+            "lhb_count": r.get("lhb_count"),
+            "block_trade_amount": r.get("block_trade_amount"),
+            "holder_num_change": r.get("holder_num_change"),
+            "eps_forecast": r.get("eps_forecast"),
+            "restricted_release_amount": r.get("restricted_release_amount"),
             "timestamp": str(r.get("timestamp", "")),
         }
 
@@ -573,6 +928,10 @@ async def get_concepts(request: Request, fields: str = Query(None, description="
         if not concepts:
             continue
         for cname in concepts:
+            # ── 兜底过滤：剔除指数/通道/规模/持仓等非真正概念 ──
+            from app.engine.data_enrich import _is_non_concept
+            if _is_non_concept(cname):
+                continue
             groups[cname].append(q)
 
     result = []
@@ -707,7 +1066,7 @@ async def get_stock_concepts(
             "iv": _val(q, "iv", 0) or data_enrich._vol_map.get(stock_code, 0) or 0,
             "pledge_ratio": _val(q, "pledge_ratio", 0) or data_enrich._pledge_map.get(stock_code, 0) or 0,
             "cagr": _val(q, "cagr", 0),
-            "concepts": (concepts or [])[:8],
+            "concepts": (concepts or []),
         }
 
     # Second: ALL A-share stocks from name map, enriched from caches
@@ -721,11 +1080,15 @@ async def get_stock_concepts(
 
     # Build concept -> list of stock dicts, dedup by stock_code per concept
     groups: dict[str, dict[str, object]] = {}
+    # ── 兜底过滤：剔除指数/通道/规模/持仓等非真正概念 ──
+    from app.engine.data_enrich import _is_non_concept as _is_non_concept_fn
     for scode, stock_dict in all_stocks.items():
         concepts = stock_dict.get("concepts", [])
         if not concepts:
             continue
         for cname in concepts:
+            if _is_non_concept_fn(cname):
+                continue
             entry = groups.setdefault(cname, {"stocks": {}, "items": []})  # type: ignore[var-annotated]
             stocks_map = entry["stocks"]  # type: ignore[index]
             if scode not in stocks_map:
@@ -761,9 +1124,11 @@ async def get_stock_concepts(
         if n < min_count:
             continue
 
-        # Top 300 stocks by momentum_20d
-        sorted_stocks = sorted(stocks_map.values(), key=lambda s: abs(s.get("momentum_20d", 0) or 0), reverse=True)
-        top_stocks = [dict(s) for s in sorted_stocks[:300]]
+        # Top 20 stocks by net_capital_flow_pct (资金流入占比), fallback to momentum_20d
+        sorted_stocks = sorted(stocks_map.values(), key=lambda s: abs(s.get("net_capital_flow_pct", 0) or 0), reverse=True)
+        if all((s.get("net_capital_flow_pct") or 0) == 0 for s in sorted_stocks):
+            sorted_stocks = sorted(stocks_map.values(), key=lambda s: abs(s.get("momentum_20d", 0) or 0), reverse=True)
+        top_stocks = [dict(s) for s in sorted_stocks[:20]]
 
         info = source_map.get(cname, {})
         sources_list = []
@@ -852,17 +1217,17 @@ def _build_stock_from_cache(stock_code: str) -> dict:
         "momentum_20d": mom.get("20d", 0) or 0,
         "momentum_60d": mom.get("60d", 0) or 0,
         "turnover_rate": spot.get("turnover_rate", 0) or 0,
-        "net_capital_flow": flow.get("net_main", 0) or 0,
-        "net_capital_flow_pct": flow.get("net_main_pct", 0) or 0,
-        "net_super_flow": flow.get("net_super", 0) or 0,
-        "net_big_flow": flow.get("net_big", 0) or 0,
+        "net_capital_flow": flow.get("net_main") or None,
+        "net_capital_flow_pct": flow.get("net_main_pct") or None,
+        "net_super_flow": flow.get("net_super") or None,
+        "net_big_flow": flow.get("net_big") or None,
         "volume": spot.get("volume", 0) or 0,
         "debt_ratio": debt.get("debt_ratio", 0) if isinstance(debt, dict) else 0,
         "iv": volatility or 0,
         "pledge_ratio": pledge or 0,
         "cagr": fin.get("cagr", 0) or 0,
         "industry": industry,
-        "concepts": concepts[:8],
+        "concepts": concepts if isinstance(concepts, list) else [],
     }
 
 
@@ -911,10 +1276,10 @@ async def get_stock_industries(request: Request, fields: str = Query(None, descr
                 "momentum_20d": _val(q, "momentum_20d", 0),
                 "momentum_60d": _val(q, "momentum_60d", 0),
                 "turnover_rate": _val(q, "turnover_rate", 0),
-                "net_capital_flow": _val(q, "net_capital_flow", 0),
-                "net_capital_flow_pct": _val(q, "net_capital_flow_pct", 0),
-                "net_super_flow": _val(q, "net_super_flow", 0) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_super", 0) or 0,
-                "net_big_flow": _val(q, "net_big_flow", 0) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_big", 0) or 0,
+                "net_capital_flow": _val(q, "net_capital_flow", None),
+                "net_capital_flow_pct": _val(q, "net_capital_flow_pct", None),
+                "net_super_flow": _val(q, "net_super_flow", None) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_super"),
+                "net_big_flow": _val(q, "net_big_flow", None) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_big"),
                 "volume": _val(q, "volume", 0),
                 "debt_ratio": _val(q, "debt_ratio", 0),
                 "iv": _val(q, "iv", 0) or data_enrich._vol_map.get(stock_code, 0) or 0,
@@ -940,6 +1305,7 @@ async def get_stock_industries(request: Request, fields: str = Query(None, descr
 
     # 4. Build response
     industries = []
+    _raw_industry_rows = []  # 未裁剪的完整 row, 供 recommendations 计算用
     for ind_name, items in sorted(groups.items(), key=lambda x: len(x[1]), reverse=True):
         n = len(items)
         sorted_items = sorted(items, key=lambda s: abs(s.get("momentum_20d", 0) or 0), reverse=True)
@@ -974,15 +1340,179 @@ async def get_stock_industries(request: Request, fields: str = Query(None, descr
             "stocks": top_list,
         }
         industries.append(_filter_fields(row, field_set))
+        _raw_industry_rows.append(row)
+
+    # 布局推荐: 基于 (未裁剪的) 完整行业 row 计算. 注意 industries 已被 _filter_fields
+    # 裁剪过, 推荐计算需要全部字段, 所以传 raw rows 给 _build_recommendations.
+    try:
+        recommendations = _build_recommendations([_r for _r in _raw_industry_rows])
+    except Exception:
+        recommendations = {"short_term": [], "mid_term": [], "long_term": [], "generated_at": None}
 
     return {
         "industries": industries,
         "total_stocks": len(all_stocks),
         "total_industries": len(industries),
+        "recommendations": recommendations,
     }
 
 
-# ════════════════════════════════════════════════════════════════════════════
+@router.get("/industry-recommendations")
+async def get_industry_recommendations(
+    request: Request,
+    horizon: str = Query("all", description="short|mid|long|all"),
+    top_k: int = Query(5, ge=1, le=20, description="每档返回行业数"),
+    weights_json: str = Query("", description='自定义权重 JSON, e.g. {"short_term":{"momentum":0.7}}'),
+):
+    """行业布局推荐: 短期(≤1周)/中期(2周)/长期(1月).
+    复用 /stock-industries 的行业聚合, 但只返回推荐子集 + 中文原因.
+    weights_json: 可选, 传入后覆盖默认 _HORIZON_WEIGHTS.
+    """
+    import json as _json
+    hw = None
+    if weights_json:
+        try:
+            hw = _json.loads(weights_json)
+        except _json.JSONDecodeError:
+            pass  # 忽略无效 JSON, 使用默认权重
+
+    # 复用 /stock-industries 的行业聚合逻辑 (不传 fields, 拿全字段)
+    full = await get_stock_industries(request, fields=None)
+    recs = full.get("recommendations") or _build_recommendations(
+        full.get("industries", []), top_k=top_k, horizon_weights=hw
+    )
+
+    # 按 horizon 过滤
+    h_map = {"short": "short_term", "mid": "mid_term", "long": "long_term"}
+    if horizon in h_map:
+        key = h_map[horizon]
+        return {"horizon": key, "recommendations": recs.get(key, [])[:top_k], "generated_at": recs.get("generated_at")}
+    return {"horizon": "all", **recs}
+
+
+@router.get("/industry-recommendations/history")
+async def get_recommendation_history(
+    request: Request,
+    days: int = Query(30, ge=1, le=365, description="查询最近 N 天的历史"),
+):
+    """行业推荐历史快照. 每日保存一次, 用于回测验证推荐准确性."""
+    history = _load_rec_history(days)
+    return {"history": history, "days": len(history)}
+
+
+@router.get("/industry-recommendations/accuracy")
+async def get_recommendation_accuracy(
+    request: Request,
+    days: int = Query(30, ge=1, le=365, description="backtest N days"),
+):
+    """Recommendation accuracy backtest.
+    Compares baseline momentum (at recommendation time) with current momentum.
+    Hit = current momentum > baseline (industry moved in favorable direction).
+    """
+    global _ACCURACY_CACHE, _ACCURACY_CACHE_TS
+    import time
+    now = time.time()
+    with _rec_cache_lock:
+        if _ACCURACY_CACHE is not None and (now - _ACCURACY_CACHE_TS) < _ACCURACY_CACHE_TTL:
+            return _ACCURACY_CACHE
+
+    history = _load_rec_history(days)
+    if not history:
+        return {"accuracy": {}, "days_analyzed": 0}
+
+    try:
+        full = await get_stock_industries(request, fields=None)
+        industries = full.get("industries", [])
+    except Exception:
+        industries = []
+
+    ind_map = {}
+    for ind in industries:
+        name = ind.get("industry", "")
+        if name:
+            ind_map[name] = ind
+
+    baseline_field = {"short_term": "momentum_5d", "mid_term": "momentum_10d", "long_term": "momentum_20d"}
+    current_field = {"short_term": "avg_momentum_5d", "mid_term": "avg_momentum_10d", "long_term": "avg_momentum_20d"}
+
+    accuracy = {}
+    for horizon in ("short_term", "mid_term", "long_term"):
+        total = 0
+        hits = 0
+        details = []
+        bf = baseline_field[horizon]
+        cf = current_field[horizon]
+        for rec_day in history:
+            recs = rec_day.get(horizon, [])
+            rec_date = rec_day.get("date", "")
+            baseline_map = rec_day.get("_baseline", {})
+            # Skip days without baseline data (old format) - don't count as miss
+            if not baseline_map:
+                continue
+            for rec in recs:
+                ind_name = rec.get("industry", "")
+                rec_score = rec.get("score", 0)
+                bl = _safe_num(baseline_map.get(ind_name, {}).get(bf))
+                # Skip if no baseline for this industry - can't evaluate
+                if bl == 0 and not baseline_map.get(ind_name, {}).get(bf):
+                    continue
+                cur = _safe_num(ind_map.get(ind_name, {}).get(cf))
+                actual = round(cur - bl, 2)
+                is_hit = actual > 0
+                total += 1
+                if is_hit:
+                    hits += 1
+                details.append({"date": rec_date, "industry": ind_name, "score": rec_score, "baseline": bl, "current": cur, "actual": actual, "hit": is_hit})
+        accuracy[horizon] = {"total": total, "hits": hits, "hit_rate": round(hits / total * 100, 1) if total > 0 else 0, "details": details[:100]}
+
+    # Random baseline: Monte Carlo simulation
+    # Instead of simple up-ratio, simulate randomly picking top_k=5 industries 1000 times
+    random_baseline = {}
+    for horizon in ("short_term", "mid_term", "long_term"):
+        cf = current_field[horizon]
+        up_list = [1 if _safe_num(ind.get(cf, 0)) > 0 else 0 for ind in industries]
+        n_ind = len(up_list)
+        if n_ind < 5:
+            random_baseline[horizon] = round(sum(up_list) / max(n_ind, 1) * 100, 1)
+        else:
+            trials = 1000
+            total_hits = 0
+            for _ in range(trials):
+                picks = random.sample(up_list, 5)
+                total_hits += sum(picks)
+            random_baseline[horizon] = round(total_hits / (trials * 5) * 100, 1)
+
+    # Daily alpha trend: group details by date, compute per-day alpha
+    daily_alpha = {}
+    for horizon in ("short_term", "mid_term", "long_term"):
+        day_stats = {}
+        for d in accuracy[horizon].get("details", []):
+            dt = d.get("date", "")
+            if dt not in day_stats:
+                day_stats[dt] = {"hits": 0, "total": 0}
+            day_stats[dt]["total"] += 1
+            if d.get("hit"):
+                day_stats[dt]["hits"] += 1
+        rb = random_baseline.get(horizon, 0)
+        for dt, st in day_stats.items():
+            if st["total"] > 0:
+                daily_hr = round(st["hits"] / st["total"] * 100, 1)
+                daily_alpha.setdefault(dt, {})[horizon] = round(daily_hr - rb, 1)
+
+    # Add alpha (information increment): hit_rate - random_baseline
+    for k in accuracy:
+        rb = random_baseline.get(k, 0)
+        hr = accuracy[k].get("hit_rate", 0)
+        accuracy[k]["alpha"] = round(hr - rb, 1)
+    random_baseline["alpha_msg"] = "信息增量(α)=命中率-随机基线，正值表示推荐优于随机"
+
+    result = {"accuracy": accuracy, "random_baseline": random_baseline, "daily_alpha": daily_alpha, "days_analyzed": len(history)}
+    with _rec_cache_lock:
+        _ACCURACY_CACHE = result
+        _ACCURACY_CACHE_TS = time.time()
+    return result
+
+
 #  Extended data source endpoints (北向资金/融资融券/龙虎榜/大宗/股东/业绩/解禁)
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1092,11 +1622,23 @@ async def get_earnings_forecast(request: Request):
     except Exception as e:
         return {"stocks": [], "total": 0, "error": str(e)}
 
-    stocks = [
-        {**v, "code": k}
-        for k, v in raw.items()
-        if isinstance(v, dict) and len(k) == 6
-    ]
+    stocks = []
+    for k, v in raw.items():
+        if not isinstance(v, dict) or len(k) != 6:
+            continue
+        # 字段适配: change_pct -> change_pct_min, change_pct_max
+        item = {**v, "code": k}
+        # 如果有 change_pct 但没有 min/max，用同一个值填充
+        if "change_pct" in v and "change_pct_min" not in v:
+            pct = v["change_pct"]
+            if pct is not None:
+                # 变动幅度可能是范围或单值，这里简化为 min=max
+                item["change_pct_min"] = pct
+                item["change_pct_max"] = pct
+        # 摘要字段: change_desc 或 reason -> summary
+        if "summary" not in item:
+            item["summary"] = v.get("change_desc") or v.get("reason") or ""
+        stocks.append(item)
     return {"stocks": stocks, "total": len(stocks)}
 
 

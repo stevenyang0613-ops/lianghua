@@ -1135,13 +1135,13 @@ async def compare_rankings(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 松岗七维打分API (V3.0)
+# 西部七维打分API (V3.0)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
 
-def _compute_songgang_scores(strategy, df):
+def _compute_xibu_scores(strategy, df):
     """同步计算七维评分（在线程池中执行，优先使用向量化）"""
     import threading
     t0 = time.time()
@@ -1225,15 +1225,15 @@ def _compute_market_change_stats(bonds) -> dict:
     }
 
 
-@router.get("/songgang-ranking")
-async def get_songgang_ranking(
+@router.get("/xibu-ranking")
+async def get_xibu_ranking(
     request: Request,
     top_n: int = Query(60, ge=10, le=200, description="返回前N名"),
     aum_level: str = Query("small", description="AUM规模等级: small/medium/large"),
     market_env: str = Query("neutral", description="市场环境: bull/bear/neutral"),
 ):
     """
-    松岗七维打分排名 - V3.0
+    西部七维打分排名 - V3.0
 
     七维评分体系:
     - 正股七维（55分）：短期动量、板块情绪、技术面、筹码面、波动率、消息面、基本面
@@ -1241,7 +1241,7 @@ async def get_songgang_ranking(
 
     包含一票否决制和缓冲带机制
     """
-    cache_key = _get_cache_key("songgang_ranking", top_n=top_n, aum=aum_level, market=market_env)
+    cache_key = _get_cache_key("xibu_ranking", top_n=top_n, aum=aum_level, market=market_env)
     cached = _get_cached(cache_key, ttl=_LONG_CACHE_TTL)
     if cached:
         cached["cached"] = True
@@ -1280,7 +1280,7 @@ async def get_songgang_ranking(
         df = pd.DataFrame(rows)
 
         # 创建策略实例
-        strategy = SonggangSevenDimensionStrategy(
+        strategy = XibuSevenDimensionStrategy(
             hold_count=top_n,
             aum_level=aum_level,
             market_env=market_env,
@@ -1292,7 +1292,7 @@ async def get_songgang_ranking(
         strategy.on_init(df)
 
         # 执行打分（在线程池中计算，不阻塞事件循环）
-        scores_list, vetoed_list = await asyncio.to_thread(_compute_songgang_scores, strategy, df)
+        scores_list, vetoed_list = await asyncio.to_thread(_compute_xibu_scores, strategy, df)
 
         if not scores_list:
             return {
@@ -1337,7 +1337,7 @@ async def get_songgang_ranking(
                     [1, 3, 5, 10, 30],
                 )
             except Exception as e:
-                logger.warning(f"[Songgang] period changes query failed: {e}")
+                logger.warning(f"[Xibu] period changes query failed: {e}")
 
         items = []
         for idx, s in enumerate(top_scores):
@@ -1391,18 +1391,18 @@ async def get_songgang_ranking(
             try:
                 strategy.save_buffer_to_storage(storage)
             except Exception as e:
-                logger.warning(f"[Songgang] save buffer tracker failed: {e}")
+                logger.warning(f"[Xibu] save buffer tracker failed: {e}")
 
         _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
         return result
 
     except Exception as e:
-        logger.exception("Songgang ranking error")
+        logger.exception("Xibu ranking error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/songgang-ranking/stream")
-async def stream_songgang_ranking(
+@router.get("/xibu-ranking/stream")
+async def stream_xibu_ranking(
     request: Request,
     top_n: int = Query(60, ge=10, le=200),
     aum_level: str = Query("small"),
@@ -1436,13 +1436,13 @@ async def stream_songgang_ranking(
                 })
 
             df = pd.DataFrame(rows)
-            strategy = SonggangSevenDimensionStrategy(
+            strategy = XibuSevenDimensionStrategy(
                 hold_count=top_n, aum_level=aum_level, market_env=market_env,
             )
             strategy.on_init(df)
 
             # 全量计算一次（向量化，Z-score基于全量数据，0.5ms内完成）
-            scores_list, vetoed_list = await asyncio.to_thread(_compute_songgang_scores, strategy, df)
+            scores_list, vetoed_list = await asyncio.to_thread(_compute_xibu_scores, strategy, df)
 
             if not scores_list:
                 yield f"data: {json.dumps({'type': 'done', 'total': 0, 'items': [], 'vetoed': vetoed_list[:20], 'vetoed_count': len(vetoed_list)})}\n\n"
@@ -1460,7 +1460,7 @@ async def stream_songgang_ranking(
                         [1, 3, 5, 10, 30],
                     )
                 except Exception as e:
-                    logger.warning(f"[Songgang.stream] period changes query failed: {e}")
+                    logger.warning(f"[Xibu.stream] period changes query failed: {e}")
 
             items = [{
                 "rank": idx + 1, "code": s['code'], "name": s['name'],
@@ -1488,7 +1488,7 @@ async def stream_songgang_ranking(
                 "market_stats": _compute_market_change_stats(bonds),
             }
 
-            cache_key = _get_cache_key("songgang_ranking", top_n=top_n, aum=aum_level, market=market_env)
+            cache_key = _get_cache_key("xibu_ranking", top_n=top_n, aum=aum_level, market=market_env)
             _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
 
             yield f"data: {json.dumps(result)}\n\n"
@@ -1499,8 +1499,8 @@ async def stream_songgang_ranking(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.post("/songgang-ranking/save-snapshot")
-async def save_songgang_snapshot(request: Request):
+@router.post("/xibu-ranking/save-snapshot")
+async def save_xibu_snapshot(request: Request):
     """保存当日七维评分快照"""
     try:
         storage = getattr(request.app.state, "storage", None)
@@ -1527,7 +1527,7 @@ async def save_songgang_snapshot(request: Request):
             })
 
         df = pd.DataFrame(rows)
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
         strategy.on_init(df)
 
         scores = []
@@ -1550,8 +1550,8 @@ async def save_songgang_snapshot(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/songgang-ranking/history/{code}")
-async def get_songgang_history(
+@router.get("/xibu-ranking/history/{code}")
+async def get_xibu_history(
     request: Request,
     code: str,
     days: int = Query(30, ge=1, le=365, description="查询天数"),
@@ -1569,14 +1569,14 @@ async def get_songgang_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/songgang-ranking/{code}")
-async def get_songgang_single_score(
+@router.get("/xibu-ranking/{code}")
+async def get_xibu_single_score(
     request: Request,
     code: str,
     aum_level: str = Query("small", description="AUM规模等级"),
 ):
     """
-    获取单只转债的松岗七维详细评分
+    获取单只转债的西部七维详细评分
     """
     try:
         engine = request.app.state.engine
@@ -1616,7 +1616,7 @@ async def get_songgang_single_score(
             })
 
         df = pd.DataFrame(rows)
-        strategy = SonggangSevenDimensionStrategy(aum_level=aum_level)
+        strategy = XibuSevenDimensionStrategy(aum_level=aum_level)
         strategy.on_init(df)
 
         target_row = df[df['code'] == code].iloc[0]
@@ -1660,8 +1660,8 @@ async def get_songgang_single_score(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/songgang-ranking/veto/{code}")
-async def check_songgang_veto(
+@router.get("/xibu-ranking/veto/{code}")
+async def check_xibu_veto(
     request: Request,
     code: str,
 ):
@@ -1700,7 +1700,7 @@ async def check_songgang_veto(
             })
 
         df = pd.DataFrame(rows)
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
         target_row = df[df['code'] == code].iloc[0]
 
         veto = strategy._check_veto(target_row)

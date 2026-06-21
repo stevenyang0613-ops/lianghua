@@ -1313,7 +1313,7 @@ async def strategy_comparison(
     min_price: float = Query(80.0, ge=70, le=120),
     max_price: float = Query(180.0, ge=120, le=200),
 ):
-    """多策略对比: 璇玑 vs 多因子 vs 松岗七维"""
+    """多策略对比: 璇玑 vs 多因子 vs 西部七维"""
     try:
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -1352,8 +1352,8 @@ async def strategy_comparison(
         mf_avg_score = float(mf_top['mf_score'].mean()) if len(mf_top) > 0 else 0
         mf_avg_price = float(mf_top['price'].mean()) if len(mf_top) > 0 else 0
 
-        # 策略3: 松岗七维 (简化近似)
-        sg_score = (
+        # 策略3: 西部七维 (简化近似)
+        xb_score = (
             _normalize_rank(xuanji_df['change_pct'], False) * 0.165 +
             _normalize_rank(xuanji_df['premium_ratio'], True) * 0.099 +
             _normalize_rank(xuanji_df['hv'], True) * 0.099 +
@@ -1362,19 +1362,19 @@ async def strategy_comparison(
             _normalize_rank(xuanji_df['volume'], False) * 0.09 +
             _normalize_rank((100 - xuanji_df['premium_ratio']).clip(lower=0), False) * 0.081
         )
-        xuanji_df['sg_score'] = sg_score
-        sg_top = xuanji_df.nlargest(top_n, 'sg_score')
-        sg_avg_score = float(sg_top['sg_score'].mean()) if len(sg_top) > 0 else 0
-        sg_avg_price = float(sg_top['price'].mean()) if len(sg_top) > 0 else 0
+        xuanji_df['xb_score'] = xb_score
+        xb_top = xuanji_df.nlargest(top_n, 'xb_score')
+        xb_avg_score = float(xb_top['xb_score'].mean()) if len(xb_top) > 0 else 0
+        xb_avg_price = float(xb_top['price'].mean()) if len(xb_top) > 0 else 0
 
         # 重叠度分析
         xuanji_codes = set(xuanji_top['code'].tolist())
         mf_codes = set(mf_top['code'].tolist())
-        sg_codes = set(sg_top['code'].tolist())
+        xb_codes = set(xb_top['code'].tolist())
 
         xuanji_count = max(len(xuanji_codes), 1)
         mf_count = max(len(mf_codes), 1)
-        sg_count = max(len(sg_codes), 1)
+        xb_count = max(len(xb_codes), 1)
 
         return {
             "top_n": top_n,
@@ -1393,7 +1393,7 @@ async def strategy_comparison(
                     "selected": len(xuanji_top),
                     "overlap_with_xuanji": 100,
                     "overlap_with_mf": round(len(xuanji_codes & mf_codes) / xuanji_count * 100, 1),
-                    "overlap_with_sg": round(len(xuanji_codes & sg_codes) / xuanji_count * 100, 1),
+                    "overlap_with_xb": round(len(xuanji_codes & xb_codes) / xuanji_count * 100, 1),
                 },
                 {
                     "id": "multi_factor",
@@ -1405,19 +1405,19 @@ async def strategy_comparison(
                     "selected": len(mf_top),
                     "overlap_with_xuanji": round(len(mf_codes & xuanji_codes) / mf_count * 100, 1),
                     "overlap_with_mf": 100,
-                    "overlap_with_sg": round(len(mf_codes & sg_codes) / mf_count * 100, 1),
+                    "overlap_with_xb": round(len(mf_codes & xb_codes) / mf_count * 100, 1),
                 },
                 {
-                    "id": "songgang_seven",
-                    "name": "松岗七维",
+                    "id": "xibu_seven",
+                    "name": "西部七维",
                     "factors": 11,
                     "market_adaptive": False,
-                    "avg_score": round(sg_avg_score, 4),
-                    "avg_price": round(sg_avg_price, 2),
-                    "selected": len(sg_top),
-                    "overlap_with_xuanji": round(len(sg_codes & xuanji_codes) / sg_count * 100, 1),
-                    "overlap_with_mf": round(len(sg_codes & mf_codes) / sg_count * 100, 1),
-                    "overlap_with_sg": 100,
+                    "avg_score": round(xb_avg_score, 4),
+                    "avg_price": round(xb_avg_price, 2),
+                    "selected": len(xb_top),
+                    "overlap_with_xuanji": round(len(xb_codes & xuanji_codes) / xb_count * 100, 1),
+                    "overlap_with_mf": round(len(xb_codes & mf_codes) / xb_count * 100, 1),
+                    "overlap_with_xb": 100,
                 },
             ]
         }

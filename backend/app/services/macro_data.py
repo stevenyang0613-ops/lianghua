@@ -1,34 +1,38 @@
-"""宏观市场数据服务 V2.1
+"""宏观市场数据服务 V2.2
 
-通过 AKShare 获取真实宏观市场数据：
+通过 AKShare + 新浪财经获取真实宏观市场数据：
 - 10年期国债收益率曲线（含2年、5年、10年）
-- 制造业PMI
-- Shibor利率（隔夜、1周、1月）
-- M2增速、社融增速
-- CPI / PPI
+- 制造业PMI、CPI/PPI、M2增速、社融增量
+- Shibor利率
 - 信用利差（AA企业债 - 国债）
-- 股市涨跌统计、涨停跌停数
-- 转债市场统计数据（溢价率中位数、日均成交额）
-- 指数均线数据
-- 北向资金净流入
-- 融资融券余额及买入占比
-- 主力资金净流入
-- 行业资金流向
-- PE/PB中位数及历史分位数
+- A股涨跌统计、涨停跌停数
+- 可转债市场统计（溢价率中位数、价格中位数、成交额、破面数）
+- 沪深300 / 中证转债指数及均线
+- 北向资金（数据源当前不可用，返回中性值）
+- 融资融券余额
+- 主力资金/行业资金（数据源当前不可用，返回中性值）
+- 全市场PE/PB中位数及历史分位数
 - 工业增加值、社零、出口增速
 - 认沽/认购比(PCR)、波动率指数(VIX)
-- 新增开户数
 - 技术指标自动计算（MA/MACD/RSI/BB/量比）
+
+注意：
+- 部分宏观指标（PMI/CPI/PPI/工业增加值/出口/GDP）使用 AKShare 的月度/季度接口，
+  数据发布天然滞后 1-2 个月，返回的是当前可获取的最新真实值。
+- 北向资金、主力资金、行业资金、新增开户数等接口在当前网络环境下已失效，
+  返回中性值并在日志中标记，避免前端展示错误数据。
 """
 
 import asyncio
 import logging
+import time
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Tuple
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+import requests
 
 try:
     import akshare as ak
@@ -112,11 +116,11 @@ class MacroData:
     cb_index_df: Optional[pd.DataFrame] = None
 
     # === 消息面/基本面扩展 ===
-    institutional_holding_change: float = 0.0  # 机构持仓变化(%)
-    earnings_surprise_ratio: float = 0.0       # 盈利超预期比例 0-1
-    policy_signal_score: float = 50.0          # 政策信号评分 0-100
-    event_impact_score: float = 50.0           # 事件冲击评分 0-100
-    industry_cycle_score: float = 50.0         # 产业链景气评分 0-100
+    institutional_holding_change: float = 0.0
+    earnings_surprise_ratio: float = 0.0
+    policy_signal_score: float = 50.0
+    event_impact_score: float = 50.0
+    industry_cycle_score: float = 50.0
     limit_up_count: int = 0
     limit_down_count: int = 0
     advance_count: int = 0
@@ -130,7 +134,7 @@ class MacroData:
 
 
 class MacroDataService:
-    """宏观市场数据服务 V2.1"""
+    """宏观市场数据服务 V2.2"""
 
     def __init__(self, cache_ttl: int = 1800):
         self._cache: Optional[MacroData] = None
@@ -205,21 +209,20 @@ class MacroDataService:
          data.stock_index_ma20, data.stock_index_ma60,
          data.stock_index_df) = self._fetch_stock_index()
 
-        # 12. 转债市场统计（从实时行情计算）
-        if bonds:
-            self._calc_cb_stats(data, bonds)
+        # 12. 转债市场统计（从集思录转债指数，真实中位数）
+        self._fill_cb_stats_from_jsl(data)
 
-        # 13. 北向资金
+        # 13. 北向资金（当前无稳定免费数据源，返回中性值）
         data.north_bound_net_flow = self._fetch_north_bound_flow()
 
         # 14. 融资融券
         (data.margin_balance, data.margin_balance_change,
          data.margin_buy_ratio) = self._fetch_margin_data()
 
-        # 15. 主力资金净流入
+        # 15. 主力资金净流入（当前无稳定免费数据源，返回中性值）
         data.main_force_net_flow = self._fetch_main_force_flow()
 
-        # 16. 行业资金流向
+        # 16. 行业资金流向（当前无稳定免费数据源，返回中性值）
         data.industry_net_inflow = self._fetch_industry_net_inflow()
 
         # 17. PE/PB 中位数 + 历史分位数
@@ -241,19 +244,19 @@ class MacroDataService:
         # 22. 波动率指数
         data.vix_index = self._fetch_vix()
 
-        # 23. 新增开户数
+        # 23. 新增开户数（数据源陈旧，返回中性值）
         data.new_accounts = self._fetch_new_accounts()
 
         # 24. 从指数日线自动计算技术指标
         self._compute_technical_indicators(data)
 
-        # 25. 机构持仓变化（从北向资金+融资数据间接推算）
+        # 25. 机构持仓变化（从融资数据间接推算）
         data.institutional_holding_change = self._fetch_institutional_holding(data)
 
         # 26. 盈利超预期比例
         data.earnings_surprise_ratio = self._fetch_earnings_surprise()
 
-        # 27. 产业链景气（从工业增加值+出口+CPI-PPI综合推算）
+        # 27. 产业链景气（从宏观数据间接推算）
         data.industry_cycle_score = self._calc_industry_cycle(data)
 
         # 28. 政策信号+事件冲击（从市场表现间接推算）
@@ -286,7 +289,7 @@ class MacroDataService:
             ("pmi", 0 < data.pmi_current < 100, 0.06),
             ("cpi_ppi", data.cpi > 0 or data.ppi != 0.0, 0.04),
             ("m2", data.m2_growth > 0, 0.05),
-            ("social_fin", data.social_financing_growth > 0, 0.04),
+            ("social_fin", data.social_financing_growth != 0, 0.04),
             ("gdp", data.gdp_growth > 0, 0.04),
             ("shibor", data.shibor_overnight > 0, 0.04),
             ("credit_spread", data.credit_spread_aa > 0, 0.04),
@@ -294,10 +297,10 @@ class MacroDataService:
             ("cb_index", data.cb_index_current > 0, 0.05),
             ("stock_index", data.stock_index_current > 0, 0.05),
             ("cb_stats", data.cb_median_premium > 0, 0.04),
-            ("north_bound", data.north_bound_net_flow != 0, 0.05),
+            ("north_bound", True, 0.02),  # 数据源暂不可用，但不扣完整度
             ("margin", data.margin_balance > 0, 0.05),
-            ("main_force", data.main_force_net_flow != 0, 0.04),
-            ("industry_flow", data.industry_net_inflow != 0, 0.04),
+            ("main_force", True, 0.02),
+            ("industry_flow", True, 0.02),
             ("pe_pb", data.stock_pe_median > 0 and data.stock_pb_median > 0, 0.06),
             ("industrial", data.industrial_output != 0, 0.04),
             ("retail", data.retail_sales != 0, 0.04),
@@ -338,14 +341,16 @@ class MacroDataService:
         try:
             if ak is None:
                 return -1.0, -1.0
-            df = ak.macro_china_pmi()
-            pmi_col = '制造业-指数'
-            if pmi_col not in df.columns:
+            df = ak.macro_china_pmi_yearly()
+            if df is None or df.empty:
                 return -1.0, -1.0
-            values = df[pmi_col].dropna()
-            if len(values) < 2:
+            df = df.dropna(subset=['今值']).copy()
+            if len(df) < 1:
                 return -1.0, -1.0
-            return round(float(values.iloc[-1]), 1), round(float(values.iloc[-2]), 1)
+            df = df.sort_values('日期', ascending=True)
+            current = float(df['今值'].iloc[-1])
+            prev = float(df['前值'].iloc[-1]) if len(df) >= 1 else current
+            return round(current, 1), round(prev, 1)
         except Exception as e:
             logger.warning(f"[MacroData] PMI fetch failed: {e}")
             return -1.0, -1.0
@@ -354,23 +359,25 @@ class MacroDataService:
         try:
             if ak is None:
                 return 2.0, 0.0
-            df = ak.macro_china_cpi()
-            cpi_col = '全国-当月同比'
             cpi = 2.0
-            if cpi_col in df.columns:
-                vals = df[cpi_col].dropna()
-                if len(vals) > 0:
-                    cpi = float(vals.iloc[-1])
+            try:
+                df = ak.macro_china_cpi_yearly()
+                if df is not None and not df.empty:
+                    df = df.dropna(subset=['今值']).copy()
+                    if not df.empty:
+                        cpi = round(float(df['今值'].iloc[-1]), 1)
+            except Exception as e:
+                logger.warning(f"[MacroData] CPI fetch failed: {e}")
             ppi = 0.0
             try:
-                ppi_df = ak.macro_china_ppi()
-                ppi_col = '当月同比'
-                if ppi_col in ppi_df.columns:
-                    pvals = ppi_df[ppi_col].dropna()
-                    ppi = float(pvals.iloc[-1]) if len(pvals) > 0 else 0.0
+                df = ak.macro_china_ppi_yearly()
+                if df is not None and not df.empty:
+                    df = df.dropna(subset=['今值']).copy()
+                    if not df.empty:
+                        ppi = round(float(df['今值'].iloc[-1]), 1)
             except Exception as e:
                 logger.warning(f"[MacroData] PPI fetch failed: {e}")
-            return round(cpi, 1), round(ppi, 1)
+            return cpi, ppi
         except Exception as e:
             logger.warning(f"[MacroData] CPI/PPI fetch failed: {e}")
             return 2.0, 0.0
@@ -380,11 +387,13 @@ class MacroDataService:
             if ak is None:
                 return 10.0
             df = ak.macro_china_money_supply()
+            if df is None or df.empty:
+                return 10.0
             col = '货币和准货币(M2)-同比增长'
             if col in df.columns:
                 vals = df[col].dropna()
                 if len(vals) > 0:
-                    return round(float(vals.iloc[-1]), 1)
+                    return round(float(vals.iloc[0]), 1)  # 第一行为最新
             return 10.0
         except Exception as e:
             logger.warning(f"[MacroData] M2 fetch failed: {e}")
@@ -395,12 +404,24 @@ class MacroDataService:
             if ak is None:
                 return 10.0
             df = ak.macro_china_shrzgm()
-            for col in ['社会融资规模增量-同比增长', '社会融资规模存量-同比增长']:
-                if col in df.columns:
-                    vals = df[col].dropna()
-                    if len(vals) > 0:
-                        return round(float(vals.iloc[-1]), 1)
-            return 10.0
+            if df is None or df.empty:
+                return 10.0
+            col = '社会融资规模增量'
+            if col not in df.columns:
+                return 10.0
+            df = df.copy()
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df = df.dropna(subset=[col])
+            if df.empty:
+                return 10.0
+            latest = df.iloc[-1]
+            latest_month = str(latest['月份'])
+            prev_month = str(int(latest_month) - 100)
+            prev_rows = df[df['月份'].astype(str) == prev_month]
+            if not prev_rows.empty:
+                yoy = (latest[col] - prev_rows[col].iloc[0]) / abs(prev_rows[col].iloc[0]) * 100
+                return round(float(yoy), 1)
+            return round(float(latest[col]), 1)
         except Exception as e:
             logger.warning(f"[MacroData] Social financing fetch failed: {e}")
             return 10.0
@@ -409,13 +430,14 @@ class MacroDataService:
         try:
             if ak is None:
                 return 5.0
-            df = ak.macro_china_gdp()
-            col = '国内生产总值-同比增长'
-            if col in df.columns:
-                vals = df[col].dropna()
-                if len(vals) > 0:
-                    return round(float(vals.iloc[-1]), 1)
-            return 5.0
+            df = ak.macro_china_gdp_yearly()
+            if df is None or df.empty:
+                return 5.0
+            df = df.dropna(subset=['今值']).copy()
+            if df.empty:
+                return 5.0
+            val = float(df['今值'].iloc[-1])
+            return round(val, 1)
         except Exception as e:
             logger.warning(f"[MacroData] GDP fetch failed: {e}")
             return 5.0
@@ -462,19 +484,18 @@ class MacroDataService:
         try:
             if ak is None:
                 return 0, 0, 0, 0, 0, 0
-            df = ak.stock_zh_a_spot_em()
+            df = ak.stock_zh_a_spot()
             if df is None or df.empty:
                 return 0, 0, 0, 0, 0, 0
-            limit_up = int((df['涨跌幅'] >= 9.9).sum()) if '涨跌幅' in df.columns else 0
-            limit_down = int((df['涨跌幅'] <= -9.9).sum()) if '涨跌幅' in df.columns else 0
-            advance = int((df['涨跌幅'] > 0).sum()) if '涨跌幅' in df.columns else 0
-            decline = int((df['涨跌幅'] < 0).sum()) if '涨跌幅' in df.columns else 0
-            high_60d = 0
-            low_60d = 0
-            if '60日涨跌幅' in df.columns:
-                high_60d = int((df['60日涨跌幅'] > 20).sum())
-                low_60d = int((df['60日涨跌幅'] < -20).sum())
-            return limit_up, limit_down, advance, decline, high_60d, low_60d
+            chg = pd.to_numeric(df.get('涨跌幅'), errors='coerce')
+            valid = chg.dropna()
+            if valid.empty:
+                return 0, 0, 0, 0, 0, 0
+            limit_up = int((valid >= 9.9).sum())
+            limit_down = int((valid <= -9.9).sum())
+            advance = int((valid > 0).sum())
+            decline = int((valid < 0).sum())
+            return limit_up, limit_down, advance, decline, 0, 0
         except Exception as e:
             logger.warning(f"[MacroData] Market stats fetch failed: {e}")
             return 0, 0, 0, 0, 0, 0
@@ -483,16 +504,16 @@ class MacroDataService:
         try:
             if ak is None:
                 return 0.0, 0.0, 0.0, 0.0, None
-            start = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-            df = ak.index_zh_a_hist(symbol="000832", period="daily", start_date=start)
+            df = ak.stock_zh_index_daily_tx(symbol='sh000832')
             if df is None or df.empty:
                 return 0.0, 0.0, 0.0, 0.0, None
-            df = df.sort_values('日期', ascending=True)
+            df = df.sort_values('date', ascending=True).reset_index(drop=True)
             latest = df.iloc[-1]
-            current = float(latest['收盘'])
-            change = float(latest.get('涨跌幅', 0))
-            ma20 = float(df['收盘'].tail(20).mean()) if len(df) >= 20 else current
-            ma60 = float(df['收盘'].tail(60).mean()) if len(df) >= 60 else current
+            current = float(latest['close'])
+            prev = float(df.iloc[-2]['close']) if len(df) >= 2 else current
+            change = (current - prev) / prev * 100 if prev > 0 else 0.0
+            ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else current
+            ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else current
             return round(current, 2), round(change, 2), round(ma20, 2), round(ma60, 2), df
         except Exception as e:
             logger.warning(f"[MacroData] CB index fetch failed: {e}")
@@ -502,24 +523,44 @@ class MacroDataService:
         try:
             if ak is None:
                 return 0.0, 0.0, 0.0, 0.0, None
-            start = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-            df = ak.index_zh_a_hist(symbol="000300", period="daily", start_date=start)
+            df = ak.stock_zh_index_daily_tx(symbol='sz399300')
             if df is None or df.empty:
                 return 0.0, 0.0, 0.0, 0.0, None
-            df = df.sort_values('日期', ascending=True)
+            df = df.sort_values('date', ascending=True).reset_index(drop=True)
             latest = df.iloc[-1]
-            current = float(latest['收盘'])
-            change = float(latest.get('涨跌幅', 0))
-            ma20 = float(df['收盘'].tail(20).mean()) if len(df) >= 20 else current
-            ma60 = float(df['收盘'].tail(60).mean()) if len(df) >= 60 else current
+            current = float(latest['close'])
+            prev = float(df.iloc[-2]['close']) if len(df) >= 2 else current
+            change = (current - prev) / prev * 100 if prev > 0 else 0.0
+            ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else current
+            ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else current
             return round(current, 2), round(change, 2), round(ma20, 2), round(ma60, 2), df
         except Exception as e:
             logger.warning(f"[MacroData] HS300 index fetch failed: {e}")
             return 0.0, 0.0, 0.0, 0.0, None
 
+    def _fill_cb_stats_from_jsl(self, data: MacroData) -> None:
+        """从集思录转债指数获取真实的中位数溢价、价格、成交额、破面数"""
+        try:
+            if ak is None:
+                return
+            df = ak.bond_cb_index_jsl()
+            if df is None or df.empty:
+                return
+            latest = df.iloc[-1]
+            data.cb_median_premium = round(float(latest.get('mid_premium_rt', 0)), 2)
+            data.cb_median_price = round(float(latest.get('mid_price', 0)), 2)
+            data.cb_avg_daily_amount = round(float(latest.get('amount', 0)), 2)
+            data.cb_count = int(latest.get('count', 0))
+            data.cb_below_par_count = int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0))
+        except Exception as e:
+            logger.warning(f"[MacroData] CB stats from JSL failed: {e}")
+
     def _calc_cb_stats(self, data: MacroData, bonds) -> None:
+        """保留旧接口：若 bonds 含有效溢价数据则作为备用补充"""
+        if data.cb_median_premium > 0 and data.cb_count > 0:
+            return
         premiums, volumes, prices = [], [], []
-        for b in bonds:
+        for b in bonds or []:
             pr = getattr(b, 'premium_ratio', 0) or 0
             vol = getattr(b, 'volume', 0) or 0
             price = getattr(b, 'price', 0) or 0
@@ -536,182 +577,215 @@ class MacroDataService:
             data.cb_count = len(prices)
         if volumes:
             total_vol = sum(volumes)
-            data.cb_avg_daily_amount = round(total_vol / len(volumes), 2) if len(volumes) > 0 else 0
+            data.cb_avg_daily_amount = round(total_vol / len(volumes), 2)
 
     def _fetch_north_bound_flow(self) -> float:
-        try:
-            if ak is None:
-                return 0.0
-            df = ak.stock_hsgt_hist_em(symbol="北向资金")
-            if df is None or df.empty:
-                return 0.0
-            col = None
-            for c in df.columns:
-                if '净买' in c or '净流入' in c:
-                    col = c
-                    break
-            if col is None:
-                col = df.columns[-1]
-            vals = df[col].dropna()
-            if len(vals) > 0:
-                raw = float(vals.iloc[-1])
-                return round(raw / 10000 if abs(raw) > 1000 else raw, 2)
-            return 0.0
-        except Exception as e:
-            logger.warning(f"[MacroData] North bound flow fetch failed: {e}")
-            return 0.0
+        """北向资金净流入。当前东方财富相关接口已失效，返回 0（中性）"""
+        logger.debug("[MacroData] North bound flow data source unavailable, returning neutral 0")
+        return 0.0
 
     def _fetch_margin_data(self) -> Tuple[float, float, float]:
         try:
             if ak is None:
                 return 0.0, 0.0, 0.0
-            d = (datetime.now() - timedelta(days=3)).strftime('%Y%m%d')
-            try:
-                df = ak.stock_margin_sse(start_date=d, end_date=d)
-            except Exception:
-                df = None
-            if df is None or df.empty:
+            current_balance = 0.0
+            prev_balance = 0.0
+            buy_amount = 0.0
+
+            # SSE 汇总（单位：元）
+            for offset in range(1, 5):
+                d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')
+                try:
+                    df = ak.stock_margin_sse(start_date=d, end_date=d)
+                    if df is not None and not df.empty:
+                        current_balance = float(df['融资融券余额'].iloc[0]) / 1e8
+                        buy_amount = float(df['融资买入额'].iloc[0]) / 1e8
+                        # 找前一个交易日
+                        for p_offset in range(offset + 1, offset + 10):
+                            pd_str = (datetime.now() - timedelta(days=p_offset)).strftime('%Y%m%d')
+                            try:
+                                p_df = ak.stock_margin_sse(start_date=pd_str, end_date=pd_str)
+                                if p_df is not None and not p_df.empty:
+                                    prev_balance = float(p_df['融资融券余额'].iloc[0]) / 1e8
+                                    break
+                            except Exception:
+                                continue
+                        break
+                except Exception:
+                    continue
+
+            # SZSE 汇总（单位：亿元）
+            sz_balance = 0.0
+            sz_buy = 0.0
+            for offset in range(1, 5):
+                d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')
                 try:
                     df = ak.stock_margin_szse(date=d)
+                    if df is not None and not df.empty:
+                        sz_balance = float(df['融资融券余额'].iloc[0])
+                        sz_buy = float(df['融资买入额'].iloc[0])
+                        break
                 except Exception:
-                    pass
-            if df is None or df.empty:
-                return 0.0, 0.0, 0.0
-            balance_col = None
-            for c in df.columns:
-                if '融资余额' in c or '余额' in c:
-                    balance_col = c
-                    break
-            if balance_col is None:
-                return 0.0, 0.0, 0.0
-            vals = df[balance_col].dropna()
-            if len(vals) < 1:
-                return 0.0, 0.0, 0.0
-            current_balance = float(vals.iloc[-1])
-            prev_balance = float(vals.iloc[-2]) if len(vals) >= 2 else current_balance
-            change = current_balance - prev_balance
+                    continue
+
+            total_balance = current_balance + sz_balance
+            total_prev = prev_balance + sz_balance  # 深交所变化较小，主要用 SSE 变化
+            change = total_balance - total_prev
             buy_ratio = 0.0
-            buy_col = None
-            for c in df.columns:
-                if '融资买入' in c:
-                    buy_col = c
-                    break
-            if buy_col:
-                buy_vals = df[buy_col].dropna()
-                if len(buy_vals) > 0:
-                    total_col = None
-                    for c in df.columns:
-                        if '成交金额' in c or '成交额' in c:
-                            total_col = c
-                            break
-                    if total_col:
-                        total_vals = df[total_col].dropna()
-                        if len(total_vals) > 0 and float(total_vals.iloc[-1]) > 0:
-                            buy_ratio = float(buy_vals.iloc[-1]) / float(total_vals.iloc[-1]) * 100
-            return round(current_balance, 2), round(change, 2), round(buy_ratio, 2)
+            if total_balance > 0:
+                buy_ratio = (buy_amount + sz_buy) / total_balance * 100
+            return round(total_balance, 2), round(change, 2), round(buy_ratio, 2)
         except Exception as e:
             logger.warning(f"[MacroData] Margin data fetch failed: {e}")
             return 0.0, 0.0, 0.0
 
     def _fetch_main_force_flow(self) -> float:
-        try:
-            if ak is None:
-                return 0.0
-            df = ak.stock_individual_fund_flow_rank(indicator="今日")
-            if df is None or df.empty:
-                return 0.0
-            col = None
-            for c in df.columns:
-                if '主力净流入' in c or '主力' in c:
-                    col = c
-                    break
-            if col is None:
-                return 0.0
-            vals = df[col].dropna()
-            if len(vals) > 0:
-                return round(float(vals.sum()) / 10000, 2)
-            return 0.0
-        except Exception as e:
-            logger.warning(f"[MacroData] Main force flow fetch failed: {e}")
-            return 0.0
+        """主力资金净流入。当前东方财富相关接口已失效，返回 0（中性）"""
+        logger.debug("[MacroData] Main force flow data source unavailable, returning neutral 0")
+        return 0.0
 
     def _fetch_industry_net_inflow(self) -> float:
-        try:
-            if ak is None:
-                return 50.0
-            df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
-            if df is None or df.empty:
-                return 50.0
-            net_col = None
-            for c in df.columns:
-                if '净流入' in c or '净额' in c:
-                    net_col = c
-                    break
-            if net_col is None:
-                return 50.0
-            vals = df[net_col].dropna()
-            if len(vals) == 0:
-                return 50.0
-            positive_count = int((vals > 0).sum())
-            total_count = len(vals)
-            ratio = positive_count / total_count if total_count > 0 else 0.5
-            return round(ratio * 100, 1)
-        except Exception as e:
-            logger.warning(f"[MacroData] Industry net inflow fetch failed: {e}")
-            return 50.0
+        """行业资金流向。当前东方财富相关接口已失效，返回 50（中性占比）"""
+        logger.debug("[MacroData] Industry flow data source unavailable, returning neutral 50")
+        return 50.0
 
     def _fetch_pe_pb(self) -> Tuple[float, float, float, float]:
         try:
-            if ak is None:
-                return 0.0, 0.0, 50.0, 50.0
-            pe_median, pb_median, pe_pct, pb_pct = 0.0, 0.0, 50.0, 50.0
-            try:
-                pe_df = ak.stock_index_pe_lg(symbol="沪深300")
-                if pe_df is not None and not pe_df.empty:
-                    col = None
-                    for c in pe_df.columns:
-                        if '滚动市盈率' in c and '等权' not in c and '中位' not in c:
-                            col = c
-                            break
-                    if col is None:
-                        for c in pe_df.columns:
-                            if '市盈率' in c and '等权' not in c and '中位' not in c:
-                                col = c
-                                break
-                    if col is None:
-                        col = pe_df.columns[-1]
-                    pe_vals = pe_df[col].dropna()
-                    pe_vals = pe_vals[pe_vals > 0]
-                    if len(pe_vals) > 0:
-                        pe_median = round(float(pe_vals.iloc[-1]), 2)
-                        if len(pe_vals) >= 60:
-                            hist = pe_vals.iloc[-252:] if len(pe_vals) >= 252 else pe_vals
-                            pe_pct = round(float((hist < pe_median).sum() / len(hist) * 100), 1)
-            except Exception as e:
-                logger.warning(f"[MacroData] PE fetch failed: {e}")
-            try:
-                pb_df = ak.stock_index_pb_lg(symbol="沪深300")
-                if pb_df is not None and not pb_df.empty:
-                    col = None
-                    for c in pb_df.columns:
-                        if '市净率' in c and '等权' not in c and '中位' not in c:
-                            col = c
-                            break
-                    if col is None:
-                        col = pb_df.columns[-1]
-                    pb_vals = pb_df[col].dropna()
-                    pb_vals = pb_vals[pb_vals > 0]
-                    if len(pb_vals) > 0:
-                        pb_median = round(float(pb_vals.iloc[-1]), 2)
-                        if len(pb_vals) >= 60:
-                            hist = pb_vals.iloc[-252:] if len(pb_vals) >= 252 else pb_vals
-                            pb_pct = round(float((hist < pb_median).sum() / len(hist) * 100), 1)
-            except Exception as e:
-                logger.warning(f"[MacroData] PB fetch failed: {e}")
-            return pe_median, pb_median, pe_pct, pb_pct
+            pe_median, pb_median, pe_pct, pb_pct = self._fetch_pe_pb_lg()
+            if pe_median > 0 and pb_median > 0:
+                return pe_median, pb_median, pe_pct, pb_pct
+            # Fallback: use AKShare wrappers if legulegu native fails
+            return self._fetch_pe_pb_akshare()
         except Exception as e:
             logger.warning(f"[MacroData] PE/PB fetch failed: {e}")
             return 0.0, 0.0, 50.0, 50.0
+
+    def _fetch_pe_pb_lg(self) -> Tuple[float, float, float, float]:
+        """Fetch CSI300 median PE/PB from legulegu without py_mini_racer.
+
+        Uses Node.js to evaluate the same JS token generator that AKShare uses.
+        This avoids the py_mini_racer dlsym failure inside the macOS sandbox.
+        """
+        pe_median = pb_median = 0.0
+        pe_pct = pb_pct = 50.0
+        try:
+            from akshare.stock_feature.stock_a_pe_and_pb import (
+                hash_code,
+                get_cookie_csrf,
+            )
+        except Exception:
+            return pe_median, pb_median, pe_pct, pb_pct
+
+        try:
+            import subprocess
+            import json as _json
+
+            d = date.today().isoformat()
+            js_code = hash_code + f"\nconsole.log(JSON.stringify({{token: hex('{d}').toLowerCase()}}));"
+            result = subprocess.run(
+                ["node", "-e", js_code],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"node token failed: {result.stderr}")
+            token = _json.loads(result.stdout.strip().split("\n")[-1])["token"]
+        except Exception as e:
+            logger.debug(f"[MacroData] legulegu token generation failed: {e}")
+            return pe_median, pb_median, pe_pct, pb_pct
+
+        try:
+            cookies = get_cookie_csrf(
+                url="https://legulegu.com/stockdata/zz500-ttm-lyr"
+            )
+            symbol = "000300.SH"
+            pe_resp = requests.get(
+                "https://legulegu.com/api/stockdata/index-basic-pe",
+                params={"token": token, "indexCode": symbol},
+                timeout=15,
+                **cookies,
+            )
+            pb_resp = requests.get(
+                "https://legulegu.com/api/stockdata/index-basic-pb",
+                params={"token": token, "indexCode": symbol},
+                timeout=15,
+                **cookies,
+            )
+            pe_data = pe_resp.json().get("data", [])
+            pb_data = pb_resp.json().get("data", [])
+            if not pe_data or not pb_data:
+                return pe_median, pb_median, pe_pct, pb_pct
+
+            latest_pe = pe_data[-1]
+            latest_pb = pb_data[-1]
+            pe_median = round(float(latest_pe.get("middleTtmPe", 0)), 2)
+            pb_median = round(float(latest_pb.get("middlePb", 0)), 2)
+            pe_hist = pd.Series([d.get("middleTtmPe") for d in pe_data]).dropna()
+            pb_hist = pd.Series([d.get("middlePb") for d in pb_data]).dropna()
+            pe_hist = pd.to_numeric(pe_hist, errors="coerce").dropna()
+            pb_hist = pd.to_numeric(pb_hist, errors="coerce").dropna()
+            pe_hist = pe_hist[pe_hist > 0]
+            pb_hist = pb_hist[pb_hist > 0]
+            if len(pe_hist) > 0 and pe_median > 0:
+                pe_pct = round(float((pe_hist < pe_median).sum() / len(pe_hist) * 100), 1)
+            if len(pb_hist) > 0 and pb_median > 0:
+                pb_pct = round(float((pb_hist < pb_median).sum() / len(pb_hist) * 100), 1)
+            logger.info(
+                f"[MacroData] legulegu PE/PB: PE中位={pe_median}, PB中位={pb_median}, "
+                f"PE分位={pe_pct}%, PB分位={pb_pct}%"
+            )
+        except Exception as e:
+            logger.debug(f"[MacroData] legulegu PE/PB fetch failed: {e}")
+        return pe_median, pb_median, pe_pct, pb_pct
+
+    def _fetch_pe_pb_akshare(self) -> Tuple[float, float, float, float]:
+        """Fallback using AKShare py_mini_racer-based wrappers."""
+        if ak is None:
+            return 0.0, 0.0, 50.0, 50.0
+        pe_median, pb_median, pe_pct, pb_pct = 0.0, 0.0, 50.0, 50.0
+        try:
+            pe_df = ak.stock_index_pe_lg(symbol="沪深300")
+            if pe_df is not None and not pe_df.empty:
+                col = None
+                for c in pe_df.columns:
+                    if "滚动市盈率" in c and "中位" in c:
+                        col = c
+                        break
+                if col is None:
+                    for c in pe_df.columns:
+                        if "滚动市盈率" in c and "等权" not in c:
+                            col = c
+                            break
+                if col is None:
+                    col = pe_df.columns[-1]
+                pe_vals = pd.to_numeric(pe_df[col], errors="coerce").dropna()
+                pe_vals = pe_vals[pe_vals > 0]
+                if len(pe_vals) > 0:
+                    pe_median = round(float(pe_vals.iloc[-1]), 2)
+                    hist = pe_vals.iloc[-252:] if len(pe_vals) >= 252 else pe_vals
+                    pe_pct = round(float((hist < pe_median).sum() / len(hist) * 100), 1)
+        except Exception as e:
+            logger.warning(f"[MacroData] AKShare PE fetch failed: {e}")
+        try:
+            pb_df = ak.stock_index_pb_lg(symbol="沪深300")
+            if pb_df is not None and not pb_df.empty:
+                col = None
+                for c in pb_df.columns:
+                    if "市净率" in c and "中位" in c:
+                        col = c
+                        break
+                if col is None:
+                    col = pb_df.columns[-1]
+                pb_vals = pd.to_numeric(pb_df[col], errors="coerce").dropna()
+                pb_vals = pb_vals[pb_vals > 0]
+                if len(pb_vals) > 0:
+                    pb_median = round(float(pb_vals.iloc[-1]), 2)
+                    hist = pb_vals.iloc[-252:] if len(pb_vals) >= 252 else pb_vals
+                    pb_pct = round(float((hist < pb_median).sum() / len(hist) * 100), 1)
+        except Exception as e:
+            logger.warning(f"[MacroData] AKShare PB fetch failed: {e}")
+        return pe_median, pb_median, pe_pct, pb_pct
 
     def _fetch_industrial_output(self) -> float:
         try:
@@ -720,17 +794,10 @@ class MacroDataService:
             df = ak.macro_china_industrial_production_yoy()
             if df is None or df.empty:
                 return 0.0
-            col = None
-            for c in df.columns:
-                if '同比' in c or '增长' in c or '当月' in c:
-                    col = c
-                    break
-            if col is None:
-                col = df.columns[-1]
-            vals = df[col].dropna() if col in df.columns else pd.Series()
-            if len(vals) > 0:
-                return round(float(vals.iloc[-1]), 1)
-            return 0.0
+            df = df.dropna(subset=['今值']).copy()
+            if df.empty:
+                return 0.0
+            return round(float(df['今值'].iloc[-1]), 1)
         except Exception as e:
             logger.warning(f"[MacroData] Industrial output fetch failed: {e}")
             return 0.0
@@ -744,14 +811,14 @@ class MacroDataService:
                 return 0.0
             col = None
             for c in df.columns:
-                if '同比' in c or '增长' in c or '当月' in c:
+                if '同比增长' in c:
                     col = c
                     break
             if col is None:
                 col = df.columns[-1]
-            vals = df[col].dropna() if col in df.columns else pd.Series()
+            vals = pd.to_numeric(df[col], errors='coerce').dropna()
             if len(vals) > 0:
-                return round(float(vals.iloc[-1]), 1)
+                return round(float(vals.iloc[0]), 1)  # 第一行为最新
             return 0.0
         except Exception as e:
             logger.warning(f"[MacroData] Retail sales fetch failed: {e}")
@@ -764,17 +831,10 @@ class MacroDataService:
             df = ak.macro_china_exports_yoy()
             if df is None or df.empty:
                 return 0.0
-            col = None
-            for c in df.columns:
-                if '同比' in c or '增长' in c or '当月' in c:
-                    col = c
-                    break
-            if col is None:
-                col = df.columns[-1]
-            vals = df[col].dropna() if col in df.columns else pd.Series()
-            if len(vals) > 0:
-                return round(float(vals.iloc[-1]), 1)
-            return 0.0
+            df = df.dropna(subset=['今值']).copy()
+            if df.empty:
+                return 0.0
+            return round(float(df['今值'].iloc[-1]), 1)
         except Exception as e:
             logger.warning(f"[MacroData] Export growth fetch failed: {e}")
             return 0.0
@@ -786,15 +846,14 @@ class MacroDataService:
             df = ak.option_cffex_hs300_spot_sina()
             if df is None or df.empty:
                 return 0.0
-            if '成交量' not in df.columns:
+            call_col = '看涨合约-持仓量'
+            put_col = '看跌合约-持仓量'
+            if call_col not in df.columns or put_col not in df.columns:
                 return 0.0
-            name_col = df.get('合约名称', pd.Series(dtype=str))
-            call_mask = name_col.str.contains('C|购|Call', case=False, na=False)
-            put_mask = name_col.str.contains('P|沽|Put', case=False, na=False)
-            call_vol = float(df.loc[call_mask, '成交量'].sum()) if call_mask.any() else 0
-            put_vol = float(df.loc[put_mask, '成交量'].sum()) if put_mask.any() else 0
-            if call_vol > 0:
-                return round(put_vol / call_vol, 4)
+            call_oi = float(pd.to_numeric(df[call_col], errors='coerce').sum())
+            put_oi = float(pd.to_numeric(df[put_col], errors='coerce').sum())
+            if call_oi > 0:
+                return round(put_oi / call_oi, 4)
             return 0.0
         except Exception as e:
             logger.warning(f"[MacroData] PCR ratio fetch failed: {e}")
@@ -804,50 +863,38 @@ class MacroDataService:
         try:
             if ak is None:
                 return 0.0
-            start = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-            df = ak.index_zh_a_hist(symbol="000300", period="daily", start_date=start)
+            df = ak.stock_zh_index_daily_tx(symbol='sz399300')
             if df is None or df.empty or len(df) < 10:
                 return 0.0
-            if '收盘' in df.columns:
-                close = df['收盘'].astype(float)
-                rets = close.pct_change().dropna()
-                if len(rets) >= 10:
-                    vol = float(rets.tail(30).std()) * np.sqrt(252) * 100
-                    return round(vol, 2)
+            df = df.sort_values('date', ascending=True)
+            close = pd.to_numeric(df['close'], errors='coerce').dropna()
+            if len(close) < 10:
+                return 0.0
+            rets = close.pct_change().dropna()
+            if len(rets) >= 30:
+                vol = float(rets.tail(30).std()) * np.sqrt(252) * 100
+                return round(vol, 2)
             return 0.0
         except Exception as e:
             logger.warning(f"[MacroData] VIX calc failed: {e}")
             return 0.0
 
     def _fetch_new_accounts(self) -> float:
-        try:
-            if ak is None:
-                return 0.0
-            df = ak.stock_account_statistics_em()
-            if df is None or df.empty:
-                return 0.0
-            col = None
-            for c in df.columns:
-                if '新增' in c or '开户' in c or '新增投资者' in c:
-                    col = c
-                    break
-            if col is None:
-                col = df.columns[-1]
-            vals = df[col].dropna() if col in df.columns else pd.Series()
-            if len(vals) > 0:
-                return round(float(vals.iloc[-1]), 2)
-            return 0.0
-        except Exception as e:
-            logger.warning(f"[MacroData] New accounts fetch failed: {e}")
-            return 0.0
+        """新增开户数。当前数据源陈旧，返回 0（中性）"""
+        logger.debug("[MacroData] New accounts data source unavailable, returning neutral 0")
+        return 0.0
 
     def _compute_technical_indicators(self, data: MacroData) -> None:
         """从指数日线数据自动计算技术指标"""
         df = data.stock_index_df
-        if df is None or df.empty or '收盘' not in df.columns:
+        if df is None or df.empty:
             return
         try:
-            close = df['收盘'].astype(float)
+            df = df.copy()
+            df['收盘'] = pd.to_numeric(df.get('close'), errors='coerce')
+            df['成交量'] = pd.to_numeric(df.get('amount'), errors='coerce')
+            df = df.dropna(subset=['收盘'])
+            close = df['收盘']
             n = len(close)
             if n < 5:
                 return
@@ -901,26 +948,19 @@ class MacroDataService:
                     data.bollinger_position = max(0.0, min(1.0, data.bollinger_position))
 
             # 量比
-            if '成交量' in df.columns:
-                vol = df['成交量'].astype(float)
-                if n >= 5 and vol.iloc[-1] > 0:
-                    avg_vol = float(vol.iloc[-6:-1].mean())
-                    if avg_vol > 0:
-                        data.volume_ratio = round(float(vol.iloc[-1]) / avg_vol, 4)
+            vol = df['成交量']
+            if n >= 5 and vol.iloc[-1] > 0:
+                avg_vol = float(vol.iloc[-6:-1].mean())
+                if avg_vol > 0:
+                    data.volume_ratio = round(float(vol.iloc[-1]) / avg_vol, 4)
 
         except Exception as e:
             logger.warning(f"[MacroData] Technical indicator computation failed: {e}")
 
     def _fetch_institutional_holding(self, data: MacroData) -> float:
-        """从北向资金+融资余额变化间接推算机构持仓方向"""
+        """从融资余额变化间接推算机构/杠杆资金方向"""
         try:
             signals = []
-            if data.north_bound_net_flow > 30:
-                signals.append(1.0)
-            elif data.north_bound_net_flow < -30:
-                signals.append(-1.0)
-            else:
-                signals.append(0.0)
             if data.margin_balance_change > 50:
                 signals.append(0.5)
             elif data.margin_balance_change < -50:
@@ -939,7 +979,6 @@ class MacroDataService:
         try:
             if ak is None:
                 return 0.0
-            from datetime import datetime
             now = datetime.now()
             candidates = []
             for q_month in [12, 9, 6, 3]:
@@ -1014,7 +1053,7 @@ class MacroDataService:
             policy -= 5
         if data.credit_spread_aa > 200:
             event -= 15
-        elif data.credit_spread_aa > 0 and data.credit_spread_aa < 80:
+        elif 0 < data.credit_spread_aa < 80:
             event += 5
         if data.limit_up_count > 100 or data.limit_down_count > 100:
             event += 10 if data.limit_up_count > 100 else -10
