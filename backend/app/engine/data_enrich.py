@@ -9,6 +9,7 @@ import logging
 import math
 import re
 import os
+import sys
 import threading
 import time
 import concurrent.futures
@@ -387,23 +388,23 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_spot_cache": "_spot_map",
     "_refresh_fin_cache": "_fin_map",
     "_refresh_fund_flow_cache": "_fund_flow_map",
+    "_refresh_fund_flow_from_spot_em": "_fund_flow_map",
     "_refresh_debt_cache": "_debt_map",
     "_refresh_volatility_cache": "_vol_map",
     "_refresh_buyback_cache": "_buyback_map",
     "_refresh_mgmt_cache": "_mgmt_map",
     "_refresh_pledge_cache": "_pledge_map",
     "_refresh_momentum_cache": "_momentum_map",
+    "_refresh_earnings_express_cache": "_earnings_express_map",
     "_refresh_event_cache": "_event_map",
     "_refresh_bond_outstanding_cache": "_bond_outstanding_map",
     "_refresh_call_status_cache": "_call_status_map",
     "_refresh_stock_name_cache": "_name_map",
     "_refresh_coupon_rate_cache": "_coupon_rate_map",
-    "_refresh_main_biz_cache": "_main_biz_map",
-    "_refresh_analyst_rank_cache": "_analyst_rank_map",
-    "_refresh_macro_cpi_cache": "_macro_cpi_map",
-    "_refresh_macro_ppi_cache": "_macro_ppi_map",
-    "_refresh_macro_m2_cache": "_macro_m2_map",
-    "_refresh_macro_lpr_cache": "_macro_lpr_map",
+    # DEAD CACHES (2026-06-21 audit): removed from startup to save time & API quota.
+    # _main_biz_map, _analyst_rank_map, _macro_cpi_map, _macro_ppi_map,
+    # _macro_m2_map, _macro_lpr_map were defined here but never consumed by
+    # enrich_quotes or any API endpoint. Functions remain in file for opt-in use.
     "_build_industry_cache": "_industry_map",
     "_build_concept_cache": "_concept_map",
     "_refresh_bond_price_cache": "_bond_price_map",
@@ -414,7 +415,6 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_holder_num_cache": "_holder_num_map",
     "_refresh_earnings_forecast_cache": "_earnings_forecast_map",
     "_refresh_restricted_release_cache": "_restricted_release_map",
-    "_refresh_earnings_express_cache": "_earnings_express_map",
 }
 
 
@@ -427,9 +427,10 @@ def get_cache_refresh_ts() -> dict[str, float]:
 def get_refresh_metrics() -> dict[str, dict]:
     """返回所有缓存刷新的执行指标（用于监控面板展示）。
     对未标记 stale 的条目做实时检查，确保 API 返回的 stale 状态与实际一致。
+    过滤掉 _inproc 内部实现条目，避免监控面板显示重复/混淆的数据行。
     """
     with _cache_lock:
-        data = dict(_refresh_metrics)
+        data = {k: v for k, v in _refresh_metrics.items() if "_inproc" not in k}
     _mark_stale_entries(data, time.time())
     return data
 
@@ -679,6 +680,14 @@ def _fill_pe_pb_from_baidu(codes: list[str], pe_map: dict, pb_map: dict):
 
 
 def _fill_pe_pb_from_ths(codes: list[str], pe_map: dict, pb_map: dict, sina_map: dict = None):
+    """THS 财务摘要作为 PE/PB 三级后备。
+    注意：THS 接口依赖 py_mini_racer，在 macOS Electron sandbox 中 dlsym 失败。
+    若 sys.platform=='darwin' 且未设置 LH_MGMT_TRY_CNINFO=1，自动跳过（不浪费 2-3min）。
+    """
+    # AGENTS.md #48: macOS sandbox 中 py_mini_racer 不可用，跳过 THS 以免每个调用阻塞 5-10s
+    if sys.platform == 'darwin' and not os.environ.get('LH_MGMT_TRY_CNINFO'):
+        logger.debug("[DataEnrich] THS PE/PB fallback skipped (macOS sandbox + no LH_MGMT_TRY_CNINFO)")
+        return
     sina_map = sina_map or {}
     try:
         missing = [c for c in codes if c not in pe_map or c not in pb_map]
@@ -807,35 +816,37 @@ def set_bond_stock_codes(codes: list[str]):
 
 def _ensure_bond_stock_codes():
     """线程安全地确保 _bond_stock_codes 已初始化。
-    使用 _cache_lock 双重检查防止多线程并发初始化。
+    双重检查 + 锁内仅做引用赋值（不持有锁进行 I/O）。
     """
     global _bond_stock_codes
     if _bond_stock_codes:
         return
+    # 锁内仅做双重检查 —— I/O 在锁外执行，防止阻塞事件循环
     with _cache_lock:
-        # 双重检查：进入锁后再次检查，避免多个线程重复初始化
         if _bond_stock_codes:
             return
-        try:
-            # 加超时（15s）：防止 THS 接口 hang 死导致整个 startup 卡住
-            df = _run_with_timeout(ak.bond_zh_cov_info_ths, timeout=15.0,
-                                   default=None, op_name="bond_zh_cov_info_ths")
-            if df is not None and len(df) > 0:
-                col = None
-                for c in ["正股代码", "股票代码", "代码"]:
-                    if c in df.columns:
-                        col = c
-                        break
-                if col:
-                    codes = set()
-                    for v in df[col].dropna():
-                        s = str(v).strip()
-                        if s and s.isdigit() and len(s) == 6 and not s.startswith(("8", "9")):
-                            codes.add(s)
+    try:
+        # 加超时（15s）：防止 THS 接口 hang 死导致整个 startup 卡住
+        df = _run_with_timeout(ak.bond_zh_cov_info_ths, timeout=15.0,
+                               default=None, op_name="bond_zh_cov_info_ths")
+        if df is not None and len(df) > 0:
+            col = None
+            for c in ["正股代码", "股票代码", "代码"]:
+                if c in df.columns:
+                    col = c
+                    break
+            if col:
+                codes = set()
+                for v in df[col].dropna():
+                    s = str(v).strip()
+                    if s and s.isdigit() and len(s) == 6 and not s.startswith(("8", "9")):
+                        codes.add(s)
+                # I/O 完成后，在锁内赋值
+                with _cache_lock:
                     _bond_stock_codes = codes
-                    logger.info(f"[DataEnrich] Auto-loaded {len(codes)} bond stock codes from THS")
-        except Exception as e:
-            logger.debug(f"[DataEnrich] Auto-load bond stock codes failed: {e}")
+                logger.info(f"[DataEnrich] Auto-loaded {len(codes)} bond stock codes from THS")
+    except Exception as e:
+        logger.debug(f"[DataEnrich] Auto-load bond stock codes failed: {e}")
 
 
 @_with_metrics
@@ -3079,9 +3090,9 @@ async def enrich_quotes(bonds: list) -> list:
     if not bonds:
         return bonds
 
-    # 初始化扩展缓存 reload 时间戳（函数属性，首次调用时设置）
-    if not hasattr(enrich_quotes, '_ext_cache_reload_ts'):
-        enrich_quotes._ext_cache_reload_ts = 0.0
+    # 扩展缓存 reload 时间戳管理（per-cache dict，首次调用时初始化）
+    if not hasattr(enrich_quotes, '_ext_cache_reload_ts_map'):
+        enrich_quotes._ext_cache_reload_ts_map = {}
 
     # 惰性加载：如果关键缓存为空，从磁盘同步加载
     # 解决启动时 get_all_quotes 在 start_background_refresh 之前被调用的问题
@@ -3110,32 +3121,42 @@ async def enrich_quotes(bonds: list) -> list:
     # runner 子进程会写磁盘，主进程需要定期 reload
     # 使用 _cache_lock 保护 reload 时间戳和 global map 写入
     # 优化：缓存已足够大时跳过 reload（避免 sum() 遍历大 dict）
+    # Per-cache reload TTL: 每个缓存独立计时，不再共享 120s 窗口。
+    # 各自的上次 reload 时间记录在 enrich_quotes._ext_cache_reload_ts_map dict 中。
     _now = time.time()
-    with _cache_lock:
-        _need_reload = (_now - enrich_quotes._ext_cache_reload_ts) > 120  # 每 120s 最多 reload 一次
-        _north_ok = len(_north_map) >= 500
-    if not _north_map or (_need_reload and not _north_ok):
-        _load_north_cache()
-    with _cache_lock:
-        _margin_ok = len(_margin_map) >= 500
-    if not _margin_map or (_need_reload and not _margin_ok):
-        _load_margin_cache()
-    if not _lhb_map:
-        _load_lhb_cache()
-    if not _block_trade_map:
-        _load_block_trade_cache()
-    if not _holder_num_map:
-        _load_holder_num_cache()
-    if not _restricted_release_map or _need_reload:
-        _load_restricted_release_cache()
-    # Earnings 缓存：纳入 120s 节流 (runner 写入新数据后主进程感知)
-    if not _earnings_forecast_map or _need_reload:
-        _load_earnings_forecast_cache()
-    if not _earnings_express_map or _need_reload:
-        _load_earnings_express_cache()
-    if _need_reload:
-        with _cache_lock:
-            enrich_quotes._ext_cache_reload_ts = _now
+    _ext_ts = getattr(enrich_quotes, "_ext_cache_reload_ts_map", None)
+    if _ext_ts is None:
+        _ext_ts = {}
+        enrich_quotes._ext_cache_reload_ts_map = _ext_ts
+
+    def _needs_reload(name: str, ttl: float, min_size: int = 0) -> bool:
+        """Check if a per-cache reload is needed based on its own TTL and min size."""
+        ref = globals().get(f"_{name}_map")
+        if not ref:
+            return True
+        if min_size > 0 and len(ref) < min_size:
+            return True
+        last_ts = _ext_ts.get(name, 0.0)
+        return (_now - last_ts) > ttl
+
+    # Cache-specific TTLs (in seconds). Each extended cache has its own schedule.
+    # Values: 300 (5 min) for high-frequency, 3600 (1h) for mid, 86400 (24h+) for stable.
+    if _needs_reload("north", 300, min_size=500):
+        _load_north_cache(); _ext_ts["north"] = _now
+    if _needs_reload("margin", 300, min_size=500):
+        _load_margin_cache(); _ext_ts["margin"] = _now
+    if _needs_reload("lhb", 600, min_size=10):
+        _load_lhb_cache(); _ext_ts["lhb"] = _now
+    if _needs_reload("block_trade", 600, min_size=10):
+        _load_block_trade_cache(); _ext_ts["block_trade"] = _now
+    if _needs_reload("holder_num", 3600, min_size=100):
+        _load_holder_num_cache(); _ext_ts["holder_num"] = _now
+    if _needs_reload("restricted_release", 3600, min_size=10):
+        _load_restricted_release_cache(); _ext_ts["restricted_release"] = _now
+    if _needs_reload("earnings_forecast", 1800, min_size=100):
+        _load_earnings_forecast_cache(); _ext_ts["earnings_forecast"] = _now
+    if _needs_reload("earnings_express", 1800, min_size=100):
+        _load_earnings_express_cache(); _ext_ts["earnings_express"] = _now
 
     # 引用快照（无需全量浅拷贝）：
     # _set_global_map 在首次赋值后通过 existing.update() 原地更新，
@@ -3184,6 +3205,7 @@ async def enrich_quotes(bonds: list) -> list:
         block_trade_ref = _block_trade_map
         holder_num_ref = _holder_num_map
         earnings_forecast_ref = _earnings_forecast_map
+        earnings_express_ref = _earnings_express_map
         restricted_release_ref = _restricted_release_map
 
     for b in bonds:
@@ -3477,6 +3499,31 @@ async def enrich_quotes(bonds: list) -> list:
         else:
             b.eps_forecast = 0  # 缺失时默认为 0，与其他资金类字段一致
 
+        # Earnings express enrichment (业绩快报: 实际报告数据,补全 eps/bps/roe/revenue_yoy)
+        # AGENTS.md 要求所有 loaded cache 必须在 enrich_quotes 中消费
+        if earnings_express_ref:
+            _ee = earnings_express_ref.get(stock_code)
+            if isinstance(_ee, dict):
+                # eps: 优先快报数据，已有值不覆盖
+                if _ee.get("eps") is not None and (b.eps is None or b.eps == 0):
+                    b.eps = _ee["eps"]
+                # bps: 每股净资产
+                if _ee.get("bps") is not None and (b.bps is None or b.bps == 0):
+                    b.bps = _ee["bps"]
+                # roe: 净资产收益率（快报数据比 enrich cache 更及时）
+                if _ee.get("roe") is not None:
+                    b.roe = _ee["roe"]
+                # revenue_yoy: 营收同比增长
+                # 注意: 季度快报的 0 值多数是"无该季度数据"而非"0%增长"
+                # 因此跳过 0 值防止前端显示 "0.00%" 造成误解
+                if _ee.get("revenue_yoy") and (b.revenue_yoy is None or b.revenue_yoy == 0):
+                    b.revenue_yoy = _ee["revenue_yoy"]
+                # profit_yoy: 净利润同比增长（同上 0 值保护）
+                if _ee.get("net_profit_yoy") and (b.profit_yoy is None or b.profit_yoy == 0):
+                    b.profit_yoy = _ee["net_profit_yoy"]
+                if _ee.get("net_profit_yoy") is not None and (b.profit_yoy is None or b.profit_yoy == 0):
+                    b.profit_yoy = _ee["net_profit_yoy"]
+
         # Restricted release enrichment
         # 无限售解禁的股票不在 cache 中，restricted_release_amount = 0
         rr = restricted_release_ref.get(stock_code)
@@ -3623,6 +3670,8 @@ async def start_background_refresh():
         _load_earnings_forecast_cache()
         _load_earnings_express_cache()
         _load_restricted_release_cache()
+        # DEAD CACHES removed: _load_main_biz_cache, _load_analyst_rank_cache,
+        # _load_macro_cpi_cache, _load_macro_ppi_cache, _load_macro_m2_cache, _load_macro_lpr_cache
     await loop.run_in_executor(None, _load_all_caches)
 
     # 第一批：核心缓存刷新（13 个）
@@ -3632,9 +3681,9 @@ async def start_background_refresh():
                _refresh_pledge_cache, _refresh_momentum_cache, _refresh_event_cache,
                _refresh_bond_outstanding_cache, _refresh_call_status_cache, _refresh_stock_name_cache,
                _refresh_coupon_rate_cache,
-               _refresh_main_biz_cache, _refresh_analyst_rank_cache,
-               _refresh_macro_cpi_cache, _refresh_macro_ppi_cache,
-               _refresh_macro_m2_cache, _refresh_macro_lpr_cache):
+                # DEAD CACHES removed: _refresh_main_biz_cache, _refresh_analyst_rank_cache,
+                # _refresh_macro_cpi_cache, _refresh_macro_ppi_cache, _refresh_macro_m2_cache, _refresh_macro_lpr_cache
+                _refresh_earnings_express_cache):
         loop.run_in_executor(None, fn)
 
     # 第二批：扩展缓存刷新（7 个，原 data_enrich_runner）
@@ -3694,8 +3743,6 @@ async def start_background_refresh():
 
     loop.run_in_executor(None, _refresh_extended_batch)
 
-    loop.run_in_executor(None, _refresh_extended_batch)
-
     # 后台刷新现货行情（~60-300s），不阻塞主进程
     # 波动率必须在现货刷新后执行（依赖 _spot_map），
     # 债券价格刷新也需要现货数据（bond_price 依赖正股价格计算溢价率等），
@@ -3704,7 +3751,10 @@ async def start_background_refresh():
     # 主进程只加载子进程写入的缓存文件（通过 _load_spot_cache），避免 akshare
     # C 扩展在主进程中 segfault 导致整个后端崩溃。
     def _spot_then_vol_then_bond():
-        # 不调用 _refresh_spot_cache() — 子进程已刷新并写入 _SPOT_CACHE
+        # 现货行情是波动率/债券价格的前置依赖；runner 子进程可能失败或不存在，
+        # 因此主进程也必须能自行刷新。akshare C 扩展 segfault 风险由 _run_with_timeout
+        # 在更底层控制；此处优先保证数据可用性。
+        _refresh_spot_cache()
         _refresh_volatility_cache()
         _refresh_bond_price_cache()
         _refresh_coupon_rate_cache()  # 票面利率（依赖 bond_price 解析出所有 code）
@@ -3968,51 +4018,26 @@ def _load_ext_cache(path: Path, ttl: int = 0) -> dict:
     return data
 
 
-def cache_status(path: Path, ttl: int = 0) -> str:
-    """检查缓存状态而不读取全部内容。
 
-    Returns:
-        "missing"   : 文件不存在（首次启动，调用方应使用空 map）
-        "corrupted" : 文件存在但无法解析（警告 + 视为 missing）
-        "stale"     : 文件存在但 TTL 已过期（调用方可选择保留内存旧数据）
-        "fresh"     : 文件存在且在 TTL 内（覆盖内存数据）
 
-    Usage:
-        status = cache_status(_NORTH_CACHE, ttl=6 * 3600)
-        if status == "fresh":
-            _north_map = _load_ext_cache(_NORTH_CACHE, ttl=...)
-        elif status == "missing":
-            _north_map = {}  # 首次启动
-        # else "stale" 或 "corrupted": 保留 _north_map 不变
+def _is_loadable(status: str) -> bool:
+    """Check if cache status should overwrite in-memory data.
+
+    Rules:
+    - "fresh": new data, overwrite
+    - "missing": first boot, init empty
+    - "stale": file exists but expired, keep memory
+    - "corrupted": file corrupt, treat as missing (clear map)
     """
-    try:
-        if not path.exists():
-            return "missing"
-        mtime = path.stat().st_mtime
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                ts = data.get("_ts", 0)
-                if ts > 0:
-                    age = time.time() - ts
-                    if ttl > 0 and age >= ttl:
-                        return "stale"
-                    return "fresh"
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            return "corrupted"
-        # 无 _ts 字段，用 mtime 判定
-        if ttl > 0 and (time.time() - mtime) >= ttl:
-            return "stale"
-        return "fresh"
-    except OSError:
-        return "missing"
+    return status in ("fresh", "missing", "corrupted")
+
+
 
 
 def _load_north_cache():
     global _north_map
     status, new_map = _load_ext_cache_with_status(_NORTH_CACHE, ttl=6 * 3600)  # north TTL: 6h
-    if status not in ("fresh", "missing"):
+    if status == "stale":
         logger.debug(f"[DataEnrich] North: {status}, keeping {len([k for k in _north_map if not k.startswith('_')])} in-memory stocks")
         return
     with _cache_lock:
@@ -4026,7 +4051,7 @@ def get_north_map() -> dict:
 def _load_margin_cache():
     global _margin_map
     status, new_map = _load_ext_cache_with_status(_MARGIN_CACHE, ttl=12 * 3600)  # margin TTL: 12h
-    if status not in ("fresh", "missing"):
+    if status == "stale":
         logger.debug(f"[DataEnrich] Margin: {status}, keeping {len([k for k in _margin_map if not k.startswith('_')])} in-memory stocks")
         return
     with _cache_lock:
@@ -4040,7 +4065,7 @@ def get_margin_map() -> dict:
 def _load_lhb_cache():
     global _lhb_map
     status, new_map = _load_ext_cache_with_status(_LHB_CACHE, ttl=12 * 3600)  # lhb TTL: 12h
-    if status not in ("fresh", "missing"):
+    if status == "stale":
         logger.debug(f"[DataEnrich] LHB: {status}, keeping {len([k for k in _lhb_map if not k.startswith('_')])} in-memory stocks")
         return
     with _cache_lock:
@@ -4054,7 +4079,7 @@ def get_lhb_map() -> dict:
 def _load_block_trade_cache():
     global _block_trade_map
     status, new_map = _load_ext_cache_with_status(_BLOCK_TRADE_CACHE, ttl=12 * 3600)  # block_trade TTL: 12h
-    if status not in ("fresh", "missing"):
+    if status == "stale":
         logger.debug(f"[DataEnrich] BlockTrade: {status}, keeping {len([k for k in _block_trade_map if not k.startswith('_')])} in-memory stocks")
         return
     with _cache_lock:
@@ -4068,7 +4093,7 @@ def get_block_trade_map() -> dict:
 def _load_holder_num_cache():
     global _holder_num_map
     status, new_map = _load_ext_cache_with_status(_HOLDER_NUM_CACHE, ttl=24 * 3600)  # holder_num TTL: 24h
-    if status not in ("fresh", "missing"):
+    if status == "stale":
         logger.debug(f"[DataEnrich] HolderNum: {status}, keeping {len([k for k in _holder_num_map if not k.startswith('_')])} in-memory stocks")
         return
     with _cache_lock:
@@ -4092,7 +4117,7 @@ def _load_earnings_forecast_cache():
         with _cache_lock:
             mem_ts = _earnings_forecast_map.get("_ts", 0) if isinstance(_earnings_forecast_map, dict) else 0
             if file_ts <= mem_ts:
-                logger.debug(f"[DataEnrich] EarningsForecast: file_ts={file_ts:.0f} <= mem_ts={mem_ts:.0f}, keeping in-memory")
+                logger.info(f"[DataEnrich] EarningsForecast: file_ts={file_ts:.0f} <= mem_ts={mem_ts:.0f}, keeping in-memory (runner not updated)")
                 return
             _earnings_forecast_map = new_map
         logger.info(f"[DataEnrich] EarningsForecast: loaded {len([k for k in _earnings_forecast_map if not k.startswith('_')])} stocks")
@@ -4100,22 +4125,90 @@ def _load_earnings_forecast_cache():
         with _cache_lock:
             _earnings_forecast_map = {}
         logger.info(f"[DataEnrich] EarningsForecast: cache missing, init empty")
+    elif _is_loadable(status):
+        with _cache_lock:
+            _earnings_forecast_map = {}
+        logger.info(f"[DataEnrich] EarningsForecast: corrupted/missing, cleared map")
     else:
         logger.debug(f"[DataEnrich] EarningsForecast: {status}, keeping {len([k for k in _earnings_forecast_map if not k.startswith('_')])} in-memory stocks")
 def _load_earnings_express_cache():
     global _earnings_express_map
-    loaded = _load_ext_cache(_EARNINGS_EXPRESS_CACHE, ttl=7 * 24 * 3600)  # earnings_express TTL: 7d
-    if loaded:
+    status, new_map = _load_ext_cache_with_status(_EARNINGS_EXPRESS_CACHE, ttl=7 * 24 * 3600)
+    if status == "fresh":
         with _cache_lock:
-            _earnings_express_map = loaded
-    elif _earnings_express_map:
-        logger.info(f"[DataEnrich] EarningsExpress: cache expired/stale, keeping {len([k for k in _earnings_express_map if not k.startswith('_')])} in-memory stocks")
-        return
-    logger.info(f"[DataEnrich] EarningsExpress: loaded {len([k for k in _earnings_express_map if not k.startswith('_')])} stocks")
+            _earnings_express_map = new_map
+        logger.info(f"[DataEnrich] EarningsExpress: loaded {len([k for k in _earnings_express_map if not k.startswith('_')])} stocks")
+    elif status == "missing":
+        with _cache_lock:
+            _earnings_express_map = {}
+        logger.info("[DataEnrich] EarningsExpress: cache missing, init empty")
+    else:
+        logger.debug(f"[DataEnrich] EarningsExpress: {status}, keeping {len([k for k in _earnings_express_map if not k.startswith('_')])} in-memory stocks")
 
 def get_earnings_express_map() -> dict:
     return _earnings_express_map
 
+
+
+
+@_with_metrics
+def _refresh_earnings_express_cache():
+    """刷新业绩快报缓存（stock_yjkb_em — 季度业绩摘要）。
+    主源：East Money 业绩快报接口，支持按财报年度过滤。
+    """
+    try:
+        import akshare as ak
+        from datetime import date
+        current_year = date.today().year
+        result = {}
+        # 获取最近3个年度
+        for year in (current_year, current_year - 1, current_year - 2):
+            try:
+                df = ak.stock_yjkb_em(date=f"{year}1231")
+                if df is None or df.empty:
+                    continue
+                for _, r in df.iterrows():
+                    code = str(r.get("股票代码", "")).strip()
+                    if not code or len(code) != 6:
+                        continue
+                    eps = _sf(r.get("每股收益"))
+                    revenue = _sf(r.get("营业收入-营业收入"))
+                    revenue_yoy = _sf(r.get("营业收入-同比增长"))
+                    net_profit = _sf(r.get("净利润-净利润"))
+                    net_profit_yoy = _sf(r.get("净利润-同比增长"))
+                    net_asset = _sf(r.get("每股净资产"))
+                    roe = _sf(r.get("净资产收益率"))
+                    industry = str(r.get("所处行业", "")).strip()
+                    announcement = str(r.get("公告日期", "")).strip()
+
+                    entry = {"year": year}
+                    if eps is not None: entry["eps"] = eps
+                    if revenue is not None: entry["revenue"] = revenue
+                    if revenue_yoy is not None: entry["revenue_yoy"] = revenue_yoy
+                    if net_profit is not None: entry["net_profit"] = net_profit
+                    if net_profit_yoy is not None: entry["net_profit_yoy"] = net_profit_yoy
+                    if net_asset is not None: entry["net_assets"] = net_asset
+                    if roe is not None: entry["roe"] = roe
+                    if industry: entry["industry"] = industry
+                    if announcement: entry["announcement"] = announcement
+                    # 保留最新年度（按 year 覆盖）
+                    result[code] = entry
+            except Exception as e:
+                logger.debug(f"[DataEnrich] EarningsExpress year {year} failed: {e}")
+                continue
+
+        if result:
+            _save_cache(_EARNINGS_EXPRESS_CACHE, result)
+            with _cache_lock:
+                _earnings_express_map.update(result)
+            logger.info(f"[DataEnrich] EarningsExpress: {len(result)} stocks refreshed")
+            return len(result)
+        else:
+            logger.warning("[DataEnrich] EarningsExpress: no data fetched")
+            return 0
+    except Exception as e:
+        logger.warning(f"[DataEnrich] EarningsExpress refresh failed: {e}")
+        return 0
 
 def _load_restricted_release_cache():
     global _restricted_release_map
@@ -4139,7 +4232,8 @@ def get_restricted_release_map() -> dict:
 # 优点：不再有"runner 死了，extended cache 永远空"的单点故障。
 # ============================================================================
 
-def _refresh_north_cache_inproc():
+@_with_metrics
+def _refresh_north_cache():
     """主进程内刷新北向资金数据（替代 data_enrich_runner 子进程）
 
     持仓覆盖策略：
@@ -4206,7 +4300,8 @@ def _refresh_north_cache_inproc():
         return 0
 
 
-def _refresh_margin_cache_inproc():
+@_with_metrics
+def _refresh_margin_cache():
     """主进程内刷新融资融券数据。
 
     注意：akshare 1.18.x 中 stock_margin_underlying_info_sse 不存在（只有 SZSE）。
@@ -4245,7 +4340,8 @@ def _refresh_margin_cache_inproc():
         return 0
 
 
-def _refresh_lhb_cache_inproc():
+@_with_metrics
+def _refresh_lhb_cache():
     """主进程内刷新龙虎榜数据。
 
     语义说明：ak.stock_lhb_stock_statistic_em 返回"近一月上榜次数"（累计值），
@@ -4294,7 +4390,8 @@ def _refresh_lhb_cache_inproc():
         return 0
 
 
-def _refresh_block_trade_cache_inproc():
+@_with_metrics
+def _refresh_block_trade_cache():
     """主进程内刷新大宗交易数据"""
     try:
         # ak.stock_dzjy_mrmx: 大宗交易每日明细（最近一天）
@@ -4327,7 +4424,8 @@ def _refresh_block_trade_cache_inproc():
         return 0
 
 
-def _refresh_holder_num_cache_inproc():
+@_with_metrics
+def _refresh_holder_num_cache():
     """主进程内刷新股东人数数据。
 
     重要：akshare 1.18.x 没有批量"股东人数"接口（stock_holder_num_em 不存在），
@@ -4395,7 +4493,8 @@ def _refresh_holder_num_cache_inproc():
         return 0
 
 
-def _refresh_earnings_forecast_cache_inproc():
+@_with_metrics
+def _refresh_earnings_forecast_cache():
     """主进程内刷新业绩预告数据。
 
     字段语义说明：ak.stock_yjyg_em 返回"业绩变动幅度"（YoY % 变化），
@@ -4436,7 +4535,8 @@ def _refresh_earnings_forecast_cache_inproc():
         return 0
 
 
-def _refresh_restricted_release_cache_inproc():
+@_with_metrics
+def _refresh_restricted_release_cache():
     """主进程内刷新限售解禁数据"""
     try:
         # ak.stock_restricted_release_queue_em: 解禁队列（未来 30 天）
@@ -4465,17 +4565,7 @@ def _refresh_restricted_release_cache_inproc():
         logger.warning(f"[DataEnrich] RestrictedRelease in-proc refresh failed: {e}")
         return 0
 
-
-# 给 in-process refresh 加上 metrics 追踪
-_refresh_north_cache = _with_metrics(_refresh_north_cache_inproc)
-_refresh_margin_cache = _with_metrics(_refresh_margin_cache_inproc)
-_refresh_lhb_cache = _with_metrics(_refresh_lhb_cache_inproc)
-_refresh_block_trade_cache = _with_metrics(_refresh_block_trade_cache_inproc)
-_refresh_holder_num_cache = _with_metrics(_refresh_holder_num_cache_inproc)
-_refresh_earnings_forecast_cache = _with_metrics(_refresh_earnings_forecast_cache_inproc)
-_refresh_restricted_release_cache = _with_metrics(_refresh_restricted_release_cache_inproc)
-
-
+# by the runner subprocess, not refreshed from main process.
 def get_concept_sources() -> dict[str, dict[str, bool]]:
     """概念数据源归属：concept_name -> {"em": bool, "ths": bool}"""
     if not _concept_source_map:
