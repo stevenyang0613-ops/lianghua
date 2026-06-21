@@ -63,6 +63,7 @@ const SectorRotation = lazy(() => import('./pages/SectorRotation'))
 const SectorRotationStock = lazy(() => import('./pages/SectorRotationStock'))
 const PaperTrade = lazy(() => import('./pages/PaperTrade'))
 const DataSourceMonitor = lazy(() => import('./pages/DataSourceMonitor'))
+const EnrichmentDashboard = lazy(() => import('./pages/EnrichmentDashboard'))
 
 // 注册 Service Worker (仅在浏览器/PWA 环境下, Electron 不支持 Service Worker)
 function registerServiceWorker() {
@@ -210,6 +211,7 @@ export default function App() {
         <Route path="/data-import-export" element={<ErrorBoundary><DataImportExport /></ErrorBoundary>} />
         <Route path="/ops" element={<ErrorBoundary><OpsDashboard /></ErrorBoundary>} />
         <Route path="/data-source-monitor" element={<ErrorBoundary><DataSourceMonitor /></ErrorBoundary>} />
+        <Route path="/enrichment-dashboard" element={<ErrorBoundary><EnrichmentDashboard /></ErrorBoundary>} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

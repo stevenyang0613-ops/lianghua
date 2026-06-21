@@ -32,6 +32,7 @@ import {
   SwapOutlined,
   ApiOutlined,
   SearchOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 
@@ -130,6 +131,7 @@ const menuGroups: MenuGroup[] = [
       { key: '/sync', icon: <CloudSyncOutlined />, label: '数据同步' },
       { key: '/performance', icon: <ThunderboltOutlined />, label: '性能监控' },
       { key: '/data-source-monitor', icon: <CloudSyncOutlined />, label: '数据源监控' },
+      { key: '/enrichment-dashboard', icon: <BarChartOutlined />, label: '数据富化看板' },
       { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
     ],
   },
