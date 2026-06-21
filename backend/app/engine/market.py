@@ -1,7 +1,10 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, date
 from typing import Optional, Callable, Awaitable
+
+import pandas as pd
 
 from app.adapters.akshare import AKShareAdapter
 from app.engine.storage import DataStorage
@@ -226,12 +229,41 @@ class MarketEngine:
                         pe=r.get("pe"),
                         pb=r.get("pb"),
                         iv=r.get("iv"),
+                        iv_source=r.get("iv_source"),
+                        bond_value=r.get("bond_value"),
                         buyback_amount=r.get("buyback_amount"),
                         mgmt_buy_price=r.get("mgmt_buy_price"),
                         outstanding_scale=r.get("outstanding_scale"),
                         turnover_rate=r.get("turnover_rate"),
                         net_capital_flow=r.get("net_capital_flow"),
                         net_capital_flow_pct=r.get("net_capital_flow_pct"),
+                        net_super_flow=r.get("net_super_flow"),
+                        net_big_flow=r.get("net_big_flow"),
+                        pledge_ratio=r.get("pledge_ratio"),
+                        momentum_5d=r.get("momentum_5d"),
+                        momentum_10d=r.get("momentum_10d"),
+                        momentum_20d=r.get("momentum_20d"),
+                        momentum_60d=r.get("momentum_60d"),
+                        event_score=r.get("event_score"),
+                        event_detail=r.get("event_detail"),
+                        stock_name=str(r.get("stock_name") or ""),
+                        # Bug 10 fix: read back concepts from JSON column
+                        concepts=json.loads(r["concepts"]) if r.get("concepts") else None,
+                        # 14 new columns (added 2026-06-21)
+                        hv=r.get("hv"),
+                        rating_score=r.get("rating_score"),
+                        pure_bond_premium_ratio=r.get("pure_bond_premium_ratio"),
+                        north_net=r.get("north_net"),
+                        margin_balance=r.get("margin_balance"),
+                        lhb_count=r.get("lhb_count"),
+                        block_trade_amount=r.get("block_trade_amount"),
+                        holder_num_change=r.get("holder_num_change"),
+                        eps_forecast=r.get("eps_forecast"),
+                        eps=r.get("eps"),
+                        bps=r.get("bps"),
+                        revenue_yoy=r.get("revenue_yoy"),
+                        profit_yoy=r.get("profit_yoy"),
+                        restricted_release_amount=r.get("restricted_release_amount"),
                     ))
                 except (ValueError, TypeError, KeyError):
                     continue
@@ -263,9 +295,13 @@ class MarketEngine:
         strategy = XibuSevenDimensionStrategy()
         strategy.on_init(df)
 
+        # 检测市场环境并传入向量化计算
+        from app.strategies.xibu_seven_dimension import _detect_market_env
+        market_env, _ = _detect_market_env(df, pd.Timestamp.now(), None, None)
+
         # 优先使用向量化计算
         if hasattr(strategy, 'calc_vectorized'):
-            scores, _ = strategy.calc_vectorized(df)
+            scores, _ = strategy.calc_vectorized(df, market_env)
         else:
             scores = []
             for _, row in df.iterrows():
@@ -395,12 +431,16 @@ class MarketEngine:
             except Exception as e:
                 logger.warning(f"[MarketEngine] get_all_quotes enrich failed: {e}")
 
-        return list(self._quotes.values())
+        # 深拷贝避免外部修改污染内部状态
+        import copy
+        return copy.deepcopy(list(self._quotes.values()))
 
     async def get_quote(self, code: str) -> Optional[ConvertibleQuote]:
-        """获取单只可转债行情"""
+        """获取单只可转债行情 — 返回深拷贝避免外部修改污染内部状态"""
+        import copy
         async with self._lock:
-            return self._quotes.get(code)
+            quote = self._quotes.get(code)
+            return copy.deepcopy(quote) if quote is not None else None
 
     def get_refresh_interval(self) -> int:
         """根据当前时段返回刷新间隔：交易时段10秒，非交易时段60秒"""

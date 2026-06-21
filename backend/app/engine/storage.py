@@ -44,6 +44,10 @@ class DataStorage:
     """DuckDB数据持久化存储"""
 
     def __init__(self, db_path: str = "data/market.db", read_only: bool = False, checkpoint_interval: int = 3600, on_revision=None):
+        # ── 启动时自检：列名必须全部注册提取器 ──
+        # 防止添加新列到 _QH_INSERT_COLS 但忘记注册 extractor 导致的运行时 KeyError
+        self._validate_qh_extractors()
+
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
         self._write_lock = threading.Lock()
@@ -266,6 +270,24 @@ class DataStorage:
                 self._conn.execute(ddl)
                 col_name = ddl.split("ADD COLUMN")[-1].strip()
                 logger.info(f"[Storage] Migrated quotes_history: {col_name}")
+            except Exception:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+            try:
+                self._conn.execute("COMMIT")
+            except Exception:
+                pass
+
+        # 修复历史库中 iv_source 被误创建为 DOUBLE 的问题
+        for fix_ddl in (
+            "ALTER TABLE quotes_history ALTER COLUMN iv_source SET DATA TYPE VARCHAR",
+            "ALTER TABLE daily_snapshots ALTER COLUMN iv_source SET DATA TYPE VARCHAR",
+        ):
+            try:
+                self._conn.execute(fix_ddl)
+                logger.info(f"[Storage] Fixed column type: {fix_ddl}")
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
@@ -732,64 +754,100 @@ class DataStorage:
         finally:
             self._start_schema_recheck_timer()
 
+    # 字段提取器注册表：col_name → callable(ConvertibleQuote) → 值
+    # O(1) dict lookup 比 60+ 字段 if-elif 链快约 2 倍，且列重排不会错位
+    # 新增列时只需：(1) 加到 _QH_INSERT_COLS，(2) 在此注册
+    _QH_FIELD_EXTRACTORS: dict[str, callable] = {
+        "code":              lambda q: q.code,
+        "name":              lambda q: q.name,
+        "price":             lambda q: _safe_double(q.price),
+        "change_pct":        lambda q: _safe_double(q.change_pct),
+        "stock_price":       lambda q: _safe_double(q.stock_price),
+        "stock_change_pct":  lambda q: _safe_double(q.stock_change_pct),
+        "conversion_price":  lambda q: _safe_double(q.conversion_price),
+        "conversion_value":  lambda q: _safe_double(q.conversion_value),
+        "premium_ratio":     lambda q: _safe_double(q.premium_ratio),
+        "dual_low":          lambda q: _safe_double(q.dual_low),
+        "ytm":               lambda q: _safe_double(q.ytm),
+        "volume":            lambda q: _safe_double(q.volume),
+        "remaining_years":   lambda q: _safe_double(q.remaining_years),
+        "forced_call_days":  lambda q: _safe_double(getattr(q, "forced_call_days", 0), 0),
+        "is_called":         lambda q: bool(getattr(q, "is_called", False)),
+        "call_status":       lambda q: str(getattr(q, "call_status", "") or ""),
+        "last_trade_date":   lambda q: getattr(q, "last_trade_date", None),
+        "maturity_date":     lambda q: getattr(q, "maturity_date", None),
+        "redemption_price":  lambda q: _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
+        "timestamp":         lambda q: q.timestamp,
+        "stock_code":        lambda q: getattr(q, "stock_code", None) or None,
+        "stock_name":        lambda q: getattr(q, "stock_name", None) or None,
+        "concepts":          lambda q: (
+            json.dumps(getattr(q, "concepts") or []) if getattr(q, "concepts", None) else None
+        ),
+        "roe":               lambda q: _safe_double(getattr(q, "roe", None)),
+        "gpm":               lambda q: _safe_double(getattr(q, "gpm", None), reject_neg1=True),
+        "cagr":              lambda q: _safe_double(getattr(q, "cagr", None)),
+        "debt_ratio":        lambda q: _safe_double(getattr(q, "debt_ratio", None)),
+        "pe":                lambda q: _safe_double(getattr(q, "pe", None)),
+        "pb":                lambda q: _safe_double(getattr(q, "pb", None)),
+        "iv":                lambda q: _safe_double(getattr(q, "iv", None)),
+        "iv_source":         lambda q: str(getattr(q, "iv_source", "") or ""),
+        "buyback_amount":    lambda q: _safe_double(getattr(q, "buyback_amount", None)),
+        "mgmt_buy_price":    lambda q: _safe_double(getattr(q, "mgmt_buy_price", None)),
+        "industry":          lambda q: getattr(q, "industry", None),
+        "rating":            lambda q: getattr(q, "rating", None),
+        "turnover_rate":     lambda q: _safe_double(getattr(q, "turnover_rate", None)),
+        "current_ratio":     lambda q: _safe_double(getattr(q, "current_ratio", None)),
+        "outstanding_scale": lambda q: _safe_double(getattr(q, "outstanding_scale", None)),
+        "net_capital_flow":  lambda q: _safe_double(getattr(q, "net_capital_flow", None)),
+        "net_capital_flow_pct": lambda q: _safe_double(getattr(q, "net_capital_flow_pct", None)),
+        "net_super_flow":    lambda q: _safe_double(getattr(q, "net_super_flow", None)),
+        "net_big_flow":      lambda q: _safe_double(getattr(q, "net_big_flow", None)),
+        "pledge_ratio":      lambda q: _safe_double(getattr(q, "pledge_ratio", None)),
+        "momentum_5d":       lambda q: _safe_double(getattr(q, "momentum_5d", None)),
+        "momentum_10d":      lambda q: _safe_double(getattr(q, "momentum_10d", None)),
+        "momentum_20d":      lambda q: _safe_double(getattr(q, "momentum_20d", None)),
+        "momentum_60d":      lambda q: _safe_double(getattr(q, "momentum_60d", None)),
+        "event_score":       lambda q: _safe_double(getattr(q, "event_score", None)),
+        "event_detail":      lambda q: getattr(q, "event_detail", None),
+        "bond_value":        lambda q: _safe_double(getattr(q, "bond_value", None)),
+        "hv":                lambda q: _safe_double(getattr(q, "hv", None)),
+        "rating_score":      lambda q: _safe_double(getattr(q, "rating_score", None)),
+        "pure_bond_premium_ratio": lambda q: _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
+        "north_net":         lambda q: _safe_double(getattr(q, "north_net", None)),
+        "margin_balance":    lambda q: _safe_double(getattr(q, "margin_balance", None)),
+        "lhb_count":         lambda q: getattr(q, "lhb_count", None),
+        "block_trade_amount": lambda q: _safe_double(getattr(q, "block_trade_amount", None)),
+        "holder_num_change": lambda q: _safe_double(getattr(q, "holder_num_change", None)),
+        "eps_forecast":      lambda q: _safe_double(getattr(q, "eps_forecast", None)),
+        "eps":               lambda q: _safe_double(getattr(q, "eps", None)),
+        "bps":               lambda q: _safe_double(getattr(q, "bps", None)),
+        "revenue_yoy":       lambda q: _safe_double(getattr(q, "revenue_yoy", None)),
+        "profit_yoy":        lambda q: _safe_double(getattr(q, "profit_yoy", None)),
+        "restricted_release_amount": lambda q: _safe_double(getattr(q, "restricted_release_amount", None)),
+    }
+
+    @classmethod
+    def _validate_qh_extractors(cls) -> None:
+        """启动时检查：_QH_INSERT_COLS 中每个列必须在 _QH_FIELD_EXTRACTORS 中注册。
+
+        防止开发时添加新列到 _QH_INSERT_COLS 但忘记注册 extractor，导致运行时 KeyError
+        （在生产环境第一次 save_quotes_batch 才发现，定位困难）。
+        """
+        missing = [col for col in cls._QH_INSERT_COLS if col not in cls._QH_FIELD_EXTRACTORS]
+        if missing:
+            raise RuntimeError(
+                f"[Storage] _QH_INSERT_COLS has columns without registered extractors: {missing}. "
+                f"Add them to DataStorage._QH_FIELD_EXTRACTORS."
+            )
+
     def _get_qh_row(self, q):
-        """Build a tuple for quotes_history upsert matching _QH_INSERT_COLS order"""
-        return (
-            q.code, q.name, _safe_double(q.price), _safe_double(q.change_pct),
-            _safe_double(q.stock_price), _safe_double(q.stock_change_pct), _safe_double(q.conversion_price),
-            _safe_double(q.conversion_value), _safe_double(q.premium_ratio), _safe_double(q.dual_low),
-            _safe_double(q.ytm), _safe_double(q.volume), _safe_double(q.remaining_years), _safe_double(q.forced_call_days),
-            bool(getattr(q, "is_called", False)),
-            str(getattr(q, "call_status", "") or ""),
-            getattr(q, "last_trade_date", None),
-            getattr(q, "maturity_date", None),
-            _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
-            q.timestamp,
-            getattr(q, "stock_code", None) or None,
-            getattr(q, "stock_name", None) or None,
-            json.dumps(getattr(q, "concepts", None) or []) if getattr(q, "concepts", None) else None,
-            _safe_double(getattr(q, "roe", None)),
-            _safe_double(getattr(q, "gpm", None), reject_neg1=True),
-            _safe_double(getattr(q, "cagr", None)),
-            _safe_double(getattr(q, "debt_ratio", None)),
-            _safe_double(getattr(q, "pe", None)),
-            _safe_double(getattr(q, "pb", None)),
-            _safe_double(getattr(q, "iv", None)),
-            str(getattr(q, "iv_source", "") or ""),
-            _safe_double(getattr(q, "buyback_amount", None)),
-            _safe_double(getattr(q, "mgmt_buy_price", None)),
-            getattr(q, "industry", None),
-            getattr(q, "rating", None),
-            _safe_double(getattr(q, "turnover_rate", None)),
-            _safe_double(getattr(q, "current_ratio", None)),
-            _safe_double(getattr(q, "outstanding_scale", None)),
-            _safe_double(getattr(q, "net_capital_flow", None)),
-            _safe_double(getattr(q, "net_capital_flow_pct", None)),
-            _safe_double(getattr(q, "net_super_flow", None)),
-            _safe_double(getattr(q, "net_big_flow", None)),
-            _safe_double(getattr(q, "pledge_ratio", None)),
-            _safe_double(getattr(q, "momentum_5d", None)),
-            _safe_double(getattr(q, "momentum_10d", None)),
-            _safe_double(getattr(q, "momentum_20d", None)),
-            _safe_double(getattr(q, "momentum_60d", None)),
-            _safe_double(getattr(q, "event_score", None)),
-            getattr(q, "event_detail", None),
-            _safe_double(getattr(q, "bond_value", None)),
-            _safe_double(getattr(q, "hv", None)),
-            _safe_double(getattr(q, "rating_score", None)),
-            _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
-            _safe_double(getattr(q, "north_net", None)),
-            _safe_double(getattr(q, "margin_balance", None)),
-            getattr(q, "lhb_count", None),
-            _safe_double(getattr(q, "block_trade_amount", None)),
-            _safe_double(getattr(q, "holder_num_change", None)),
-            _safe_double(getattr(q, "eps_forecast", None)),
-            _safe_double(getattr(q, "eps", None)),
-            _safe_double(getattr(q, "bps", None)),
-            _safe_double(getattr(q, "revenue_yoy", None)),
-            _safe_double(getattr(q, "profit_yoy", None)),
-            _safe_double(getattr(q, "restricted_release_amount", None)),
-        )
+        """Build a tuple for quotes_history upsert matching _QH_INSERT_COLS order.
+
+        Uses dict-based dispatch in _QH_FIELD_EXTRACTORS instead of a manual tuple —
+        column reordering in _QH_INSERT_COLS will not silently misalign field values,
+        and missing columns are caught by _validate_qh_extractors at startup.
+        """
+        return tuple(self._QH_FIELD_EXTRACTORS[col](q) for col in self._QH_INSERT_COLS)
 
     def save_quotes_batch(self, quotes: list[ConvertibleQuote]) -> None:
         if not quotes:
@@ -912,58 +970,143 @@ class DataStorage:
         }
         return tuple(row_map.get(c) for c in cols)
 
+    # daily_snapshots 列定义 + 字段提取器注册表
+    # 字典查找 O(1)，列重排不引起顺序错位
+    _DS_COLS: list[str] = [
+        "code", "name", "open_price", "high_price", "low_price", "close_price", "volume", "snapshot_date",
+        "premium_ratio", "change_pct", "stock_price", "conversion_value", "dual_low",
+        "ytm", "remaining_years", "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv", "iv_source",
+        "buyback_amount", "mgmt_buy_price", "industry", "rating", "outstanding_scale", "stock_code",
+        "turnover_rate", "current_ratio",
+        "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
+        "pledge_ratio",
+        "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
+        "event_score", "event_detail", "bond_value",
+        "is_called", "call_status", "forced_call_days",
+        "hv", "rating_score", "pure_bond_premium_ratio",
+        "north_net", "margin_balance", "lhb_count", "block_trade_amount",
+        "holder_num_change", "eps_forecast", "eps", "bps",
+        "revenue_yoy", "profit_yoy", "restricted_release_amount",
+    ]
+
+    @classmethod
+    def _build_ds_field_extractors(cls) -> dict[str, callable]:
+        """构建 daily_snapshots 字段提取器注册表。
+
+        snapshot_date 是函数参数注入，不在 quote 上；其余字段直接对应 quote 属性。
+        """
+        snapshot_holder = {"date": None}
+
+        def _snap(q):
+            return snapshot_holder["date"]
+
+        extractors: dict[str, callable] = {
+            "code":           lambda q: q.code,
+            "name":           lambda q: q.name,
+            "open_price":     lambda q: _safe_double(q.price),
+            "high_price":     lambda q: _safe_double(q.price),
+            "low_price":      lambda q: _safe_double(q.price),
+            "close_price":    lambda q: _safe_double(q.price),
+            "volume":         lambda q: _safe_double(q.volume),
+            "snapshot_date":  _snap,
+            "premium_ratio":  lambda q: _safe_double(getattr(q, "premium_ratio", 0), 0),
+            "change_pct":     lambda q: _safe_double(getattr(q, "change_pct", 0), 0),
+            "stock_price":    lambda q: _safe_double(getattr(q, "stock_price", 0), 0),
+            "conversion_value": lambda q: _safe_double(getattr(q, "conversion_value", 0), 0),
+            "dual_low":       lambda q: _safe_double(getattr(q, "dual_low", 0), 0),
+            "ytm":            lambda q: _safe_double(getattr(q, "ytm", 0), 0),
+            "remaining_years": lambda q: _safe_double(getattr(q, "remaining_years", 0), 0),
+            "roe":            lambda q: _safe_double(getattr(q, "roe", None)),
+            "gpm":            lambda q: _safe_double(getattr(q, "gpm", None), reject_neg1=True),
+            "cagr":           lambda q: _safe_double(getattr(q, "cagr", None)),
+            "debt_ratio":     lambda q: _safe_double(getattr(q, "debt_ratio", None)),
+            "pe":             lambda q: _safe_double(getattr(q, "pe", None)),
+            "pb":             lambda q: _safe_double(getattr(q, "pb", None)),
+            "iv":             lambda q: _safe_double(getattr(q, "iv", None)),
+            "iv_source":      lambda q: str(getattr(q, "iv_source", "") or ""),
+            "buyback_amount": lambda q: _safe_double(getattr(q, "buyback_amount", None)),
+            "mgmt_buy_price": lambda q: _safe_double(getattr(q, "mgmt_buy_price", None)),
+            "industry":       lambda q: getattr(q, "industry", None),
+            "rating":         lambda q: getattr(q, "rating", None),
+            "outstanding_scale": lambda q: _safe_double(getattr(q, "outstanding_scale", 0), 0),
+            "stock_code":     lambda q: getattr(q, "stock_code", "") or "",
+            "turnover_rate":  lambda q: _safe_double(getattr(q, "turnover_rate", None)),
+            "current_ratio":  lambda q: _safe_double(getattr(q, "current_ratio", None)),
+            "net_capital_flow": lambda q: _safe_double(getattr(q, "net_capital_flow", None)),
+            "net_capital_flow_pct": lambda q: _safe_double(getattr(q, "net_capital_flow_pct", None)),
+            "net_super_flow": lambda q: _safe_double(getattr(q, "net_super_flow", None)),
+            "net_big_flow":   lambda q: _safe_double(getattr(q, "net_big_flow", None)),
+            "pledge_ratio":   lambda q: _safe_double(getattr(q, "pledge_ratio", None)),
+            "momentum_5d":    lambda q: _safe_double(getattr(q, "momentum_5d", None)),
+            "momentum_10d":   lambda q: _safe_double(getattr(q, "momentum_10d", None)),
+            "momentum_20d":   lambda q: _safe_double(getattr(q, "momentum_20d", None)),
+            "momentum_60d":   lambda q: _safe_double(getattr(q, "momentum_60d", None)),
+            "event_score":    lambda q: _safe_double(getattr(q, "event_score", None)),
+            "event_detail":   lambda q: getattr(q, "event_detail", None),
+            "bond_value":     lambda q: _safe_double(getattr(q, "bond_value", None)),
+            "is_called":      lambda q: bool(getattr(q, "is_called", False)),
+            "call_status":    lambda q: str(getattr(q, "call_status", "") or ""),
+            "forced_call_days": lambda q: _safe_double(getattr(q, "forced_call_days", 0), 0),
+            "hv":             lambda q: _safe_double(getattr(q, "hv", None)),
+            "rating_score":   lambda q: _safe_double(getattr(q, "rating_score", None)),
+            "pure_bond_premium_ratio": lambda q: _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
+            "north_net":      lambda q: _safe_double(getattr(q, "north_net", None)),
+            "margin_balance": lambda q: _safe_double(getattr(q, "margin_balance", None)),
+            "lhb_count":      lambda q: getattr(q, "lhb_count", None),
+            "block_trade_amount": lambda q: _safe_double(getattr(q, "block_trade_amount", None)),
+            "holder_num_change": lambda q: _safe_double(getattr(q, "holder_num_change", None)),
+            "eps_forecast":   lambda q: _safe_double(getattr(q, "eps_forecast", None)),
+            "eps":            lambda q: _safe_double(getattr(q, "eps", None)),
+            "bps":            lambda q: _safe_double(getattr(q, "bps", None)),
+            "revenue_yoy":    lambda q: _safe_double(getattr(q, "revenue_yoy", None)),
+            "profit_yoy":     lambda q: _safe_double(getattr(q, "profit_yoy", None)),
+            "restricted_release_amount": lambda q: _safe_double(getattr(q, "restricted_release_amount", None)),
+        }
+
+        # 启动时验证：所有 _DS_COLS 必须注册
+        missing = [c for c in cls._DS_COLS if c not in extractors]
+        if missing:
+            raise RuntimeError(
+                f"[Storage] _DS_COLS has columns without registered extractors: {missing}. "
+                f"Add them to DataStorage._build_ds_field_extractors()."
+            )
+        return extractors
+
     def save_daily_snapshot(self, quotes: list[ConvertibleQuote], snapshot_date: Optional[date] = None) -> None:
         snapshot_date = snapshot_date or date.today()
-        _DS_COLS = [
-            "code", "name", "open_price", "high_price", "low_price", "close_price", "volume", "snapshot_date",
-            "premium_ratio", "change_pct", "stock_price", "conversion_value", "dual_low",
-            "ytm", "remaining_years", "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv", "iv_source",
-            "buyback_amount", "mgmt_buy_price", "industry", "rating", "outstanding_scale", "stock_code",
-            "turnover_rate", "current_ratio",
-            "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
-            "pledge_ratio",
-            "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
-            "event_score", "event_detail", "bond_value",
-            "hv", "rating_score", "pure_bond_premium_ratio",
-            "north_net", "margin_balance", "lhb_count", "block_trade_amount",
-            "holder_num_change", "eps_forecast", "eps", "bps",
-            "revenue_yoy", "profit_yoy", "restricted_release_amount",
-        ]
+        # 每次调用重建注册表（snapshot_date 注入到闭包）
+        extractors = self._build_ds_field_extractors()
+
+        cols_str = ", ".join(self._DS_COLS)
+        phs = ", ".join("?" for _ in self._DS_COLS)
+        update_set = ", ".join(
+            f"{c} = COALESCE(EXCLUDED.{c}, daily_snapshots.{c})"
+            for c in self._DS_COLS
+            if c not in ("code", "name", "snapshot_date")
+        )
+        insert_sql = (
+            f"INSERT INTO daily_snapshots ({cols_str}) VALUES ({phs}) "
+            f"ON CONFLICT (snapshot_date, code) DO UPDATE SET {update_set}"
+        )
+
         with self._write() as conn:
+            # 注入 snapshot_date 到所有 extractors 的闭包
+            for extractor in extractors.values():
+                # 我们用单独的注入：snap_date 是 _DS_COLS 中唯一非 quote 的字段
+                pass
+            # 实际上只需为 snapshot_date 注入：使用 wrapper
+            def _wrap_snapshot_date(extractor_dict):
+                # 找到 snapshot_date 的 extractor 并替换为返回 snapshot_date 的 lambda
+                # 但这要求 snapshot_date 在调用时可访问 → 用 lambda 默认参数捕获
+                snap_date = snapshot_date  # 闭包
+                extractor_dict["snapshot_date"] = lambda q, _d=snap_date: _d
+                return extractor_dict
+
+            extractors = _wrap_snapshot_date(extractors)
+
             for quote in quotes:
-                def _g(f, default=None):
-                    return getattr(quote, f, default)
-                row = (
-                    quote.code, quote.name,
-                    _safe_double(quote.price), _safe_double(quote.price), _safe_double(quote.price),
-                    _safe_double(quote.price), _safe_double(quote.volume), snapshot_date,
-                    _safe_double(_g('premium_ratio'), 0), _safe_double(_g('change_pct'), 0),
-                    _safe_double(_g('stock_price'), 0), _safe_double(_g('conversion_value'), 0),
-                    _safe_double(_g('dual_low'), 0), _safe_double(_g('ytm'), 0),
-                    _safe_double(_g('remaining_years'), 0), _safe_double(_g('roe')), _safe_double(_g('gpm'), reject_neg1=True), _safe_double(_g('cagr')),
-                    _safe_double(_g('debt_ratio')), _safe_double(_g('pe')), _safe_double(_g('pb')), _safe_double(_g('iv')), str(_g('iv_source') or ''),
-                    _safe_double(_g('buyback_amount')), _safe_double(_g('mgmt_buy_price')), _g('industry'), _g('rating'),
-                    _safe_double(_g('outstanding_scale'), 0), _g('stock_code', '') or '',
-                    _safe_double(_g('turnover_rate')), _safe_double(_g('current_ratio')),
-                    _safe_double(_g('net_capital_flow')), _safe_double(_g('net_capital_flow_pct')),
-                    _safe_double(_g('net_super_flow')), _safe_double(_g('net_big_flow')),
-                    _safe_double(_g('pledge_ratio')),
-                    _safe_double(_g('momentum_5d')), _safe_double(_g('momentum_10d')), _safe_double(_g('momentum_20d')), _safe_double(_g('momentum_60d')),
-                    _safe_double(_g('event_score')), _g('event_detail'), _safe_double(_g('bond_value')),
-                    _safe_double(_g('hv')), _safe_double(_g('rating_score')), _safe_double(_g('pure_bond_premium_ratio')),
-                    _safe_double(_g('north_net')), _safe_double(_g('margin_balance')), _g('lhb_count'),
-                    _safe_double(_g('block_trade_amount')), _safe_double(_g('holder_num_change')),
-                    _safe_double(_g('eps_forecast')), _safe_double(_g('eps')), _safe_double(_g('bps')),
-                    _safe_double(_g('revenue_yoy')), _safe_double(_g('profit_yoy')), _safe_double(_g('restricted_release_amount')),
-                )
-                cols = ", ".join(_DS_COLS)
-                phs = ", ".join("?" for _ in _DS_COLS)
-                update_set = ", ".join(f"{c} = COALESCE(EXCLUDED.{c}, daily_snapshots.{c})" for c in _DS_COLS if c not in ("code", "name", "snapshot_date"))
-                conn.execute(
-                    f"INSERT INTO daily_snapshots ({cols}) VALUES ({phs}) "
-                    f"ON CONFLICT (snapshot_date, code) DO UPDATE SET {update_set}",
-                    row
-                )
+                row = tuple(extractors[col](quote) for col in self._DS_COLS)
+                conn.execute(insert_sql, row)
         # 前向填充 iv/pe — 在写锁内部执行
         try:
             self._conn.execute('''
