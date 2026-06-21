@@ -51,6 +51,8 @@ class MarketEngine:
         self._storage = storage
         self._last_snapshot_date: Optional[str] = None
         self._last_cache_date: Optional[str] = None
+        self._last_periodic_save: Optional[float] = 0  # timestamp of last periodic save
+        self._PERIODIC_SAVE_INTERVAL = 300  # 5 minutes
 
     async def start(self) -> None:
         """启动定时刷新
@@ -142,6 +144,14 @@ class MarketEngine:
                     self._last_cache_date = today
                     self._storage.save_quotes_batch(bonds)
                     self._storage.save_daily_snapshot(bonds)
+                    self._last_periodic_save = asyncio.get_event_loop().time()
+                else:
+                    # Periodic save every 5 minutes to capture enrichment updates
+                    now = asyncio.get_event_loop().time()
+                    if now - self._last_periodic_save >= self._PERIODIC_SAVE_INTERVAL:
+                        self._storage.save_quotes_batch(bonds)
+                        self._last_periodic_save = now
+                        logger.debug(f"[MarketEngine] Periodic save: {len(bonds)} bonds")
             except Exception as e:
                 logger.warning(f"[MarketEngine] Cache to storage failed: {e}")
 
@@ -373,6 +383,18 @@ class MarketEngine:
                                 logger.warning(f"[MarketEngine] get_all_quotes enrich failed: {enr_e}")
                 except Exception as e:
                     logger.debug(f"[MarketEngine] get_all_quotes storage fallback failed: {e}")
+
+        # Always enrich before returning to avoid stale data (AGENTS.md audit fix)
+        if self._quotes:
+            try:
+                from app.engine.data_enrich import enrich_quotes
+                bonds = list(self._quotes.values())
+                enriched = await enrich_quotes(bonds)
+                if enriched:
+                    self._quotes = {b.code: b for b in enriched}
+            except Exception as e:
+                logger.warning(f"[MarketEngine] get_all_quotes enrich failed: {e}")
+
         return list(self._quotes.values())
 
     async def get_quote(self, code: str) -> Optional[ConvertibleQuote]:
