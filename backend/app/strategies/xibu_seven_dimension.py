@@ -1,5 +1,5 @@
 """
-松岗七维量化打分策略 V3.0
+西部七维量化打分策略 V3.0
 
 核心逻辑：转债价格 = 债底价值 + 转股价值 + 期权价值 + 波动率溢价
 正股七维评分占55%，转债自身评分占45%
@@ -37,21 +37,25 @@ class BufferStatus:
     days_below_60: int  # 连续在60名外的天数
 
 
-class SonggangSevenDimensionStrategy(Strategy):
-    """松岗七维量化打分策略 - V3.0"""
+class XibuSevenDimensionStrategy(Strategy):
+    """西部七维量化打分策略 - V4.0"""
 
-    name = "松岗七维打分策略"
-    description = "融合七维量化打分 + 多因子估值 + 动态择时 + 前60名强制轮换 + 缓冲带机制"
+    name = "西部七维打分策略"
+    description = "v4.0: 七维打分 + 多因子估值 + 周频调仓 + 动量过滤 + 仓位管理 + 缓冲带"
 
     params = [
         StrategyParam(name="hold_count", label="持有数量", type="int", default=60, min_val=10, max_val=100),
-        StrategyParam(name="buffer_size", label="缓冲带大小", type="int", default=5, min_val=0, max_val=10),
-        StrategyParam(name="buffer_days", label="缓冲观察天数", type="int", default=3, min_val=1, max_val=7),
+        StrategyParam(name="buffer_size", label="缓冲带大小", type="int", default=8, min_val=0, max_val=15),
+        StrategyParam(name="buffer_days", label="缓冲观察天数", type="int", default=5, min_val=1, max_val=10),
         StrategyParam(name="min_credit_score", label="最低信用评分", type="float", default=60, min_val=0, max_val=100),
         StrategyParam(name="max_premium", label="溢价率上限(%)", type="float", default=100, min_val=10, max_val=150),
         StrategyParam(name="min_remaining_months", label="最小剩余期限(月)", type="int", default=6, min_val=1, max_val=36),
         StrategyParam(name="aum_level", label="AUM规模等级", type="str", default="small", description="small/medium/large"),
         StrategyParam(name="market_env", label="市场环境", type="str", default="neutral", description="bull/bear/neutral"),
+        StrategyParam(name="rebalance_days", label="调仓间隔(天)", type="int", default=5, min_val=1, max_val=20),
+        StrategyParam(name="min_hold_days", label="最小持仓天数", type="int", default=3, min_val=0, max_val=15),
+        StrategyParam(name="momentum_filter", label="启用动量过滤", type="bool", default=True),
+        StrategyParam(name="position_sizing", label="仓位管理模式", type="str", default="score_weighted", description="equal_weight/score_weighted"),
     ]
 
     # 正股七维权重（55分）
@@ -85,6 +89,8 @@ class SonggangSevenDimensionStrategy(Strategy):
         self._buffer_tracker: dict[str, BufferStatus] = {}
         self._veto_results: dict[str, VetoResult] = {}
         self._prev_selected: set[str] = set()
+        self._hold_since: dict[str, int] = {}  # v4.0
+        self._last_rebalance_idx: int = -999  # v4.0
         self._market_env_cache: Optional[str] = None
         self._market_env_ts: Optional[datetime] = None
 
@@ -102,9 +108,9 @@ class SonggangSevenDimensionStrategy(Strategy):
                     days_below_60=d['days_below_60'],
                 )
             if saved:
-                logger.info(f"[SonggangSeven] Loaded {len(saved)} buffer states from DB")
+                logger.info(f"[XibuSeven] Loaded {len(saved)} buffer states from DB")
         except Exception as e:
-            logger.warning(f"[SonggangSeven] load_buffer_from_storage failed: {e}")
+            logger.warning(f"[XibuSeven] load_buffer_from_storage failed: {e}")
 
     def save_buffer_to_storage(self, storage) -> None:
         """持久化缓冲带状态到 DuckDB"""
@@ -113,7 +119,7 @@ class SonggangSevenDimensionStrategy(Strategy):
         try:
             storage.save_buffer_tracker(self._buffer_tracker)
         except Exception as e:
-            logger.warning(f"[SonggangSeven] save_buffer_to_storage failed: {e}")
+            logger.warning(f"[XibuSeven] save_buffer_to_storage failed: {e}")
 
     def _normalize_rank(self, series: pd.Series, ascending: bool = True) -> pd.Series:
         """将 Series 转换为 0~1 的排名分数"""
@@ -492,7 +498,7 @@ class SonggangSevenDimensionStrategy(Strategy):
 
     # ==================== 综合评分 ====================
 
-    def calc_vectorized(self, df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
+    def calc_vectorized(self, df: pd.DataFrame, current_date: date) -> tuple[list[dict], list[dict]]:
         """
         向量化计算全部评分，消除 iterrows 循环。
         返回 (scores_list, vetoed_list)，格式与 _calc_total_score 逐行调用一致。
@@ -552,25 +558,25 @@ class SonggangSevenDimensionStrategy(Strategy):
         # 收集否决结果
         vetoed_list = []
         veto_indices = np.where(veto_any)[0]
-        for idx in veto_indices:
+        for vi in veto_indices:
             reasons = []
-            if veto1[idx]:
-                reasons.append(f"信用评分{credit[idx]:.1f}<{min_credit_score}")
-            if veto2[idx]:
-                reasons.append(f"溢价率{premium_ratio[idx]:.1f}%>{max_premium}%")
-            if veto3[idx]:
-                reasons.append(f"剩余期限{remaining_years[idx]*12:.1f}月<{min_months}月")
-            if veto4[idx]:
-                reasons.append(f"强赎倒计时{forced_call_days[idx]:.0f}天")
-            if veto5[idx]:
-                reasons.append(f"成交额{volume_wan[idx]/10000:.2f}亿<{min_liquidity/10000:.2f}亿")
-            if veto6[idx]:
-                reasons.append(f"价格异常{price[idx]:.2f}")
+            if veto1[vi]:
+                reasons.append(f"信用评分{credit[vi]:.1f}<{min_credit_score}")
+            if veto2[vi]:
+                reasons.append(f"溢价率{premium_ratio[vi]:.1f}%>{max_premium}%")
+            if veto3[vi]:
+                reasons.append(f"剩余期限{remaining_years[vi]*12:.1f}月<{min_months}月")
+            if veto4[vi]:
+                reasons.append(f"强赎倒计时{forced_call_days[vi]:.0f}天")
+            if veto5[vi]:
+                reasons.append(f"成交额{volume_wan[vi]/10000:.2f}亿<{min_liquidity/10000:.2f}亿")
+            if veto6[vi]:
+                reasons.append(f"价格异常{price[vi]:.2f}")
             vetoed_list.append({
-                "code": codes[idx],
-                "name": names[idx],
+                "code": codes[vi],
+                "name": names[vi],
                 "reasons": reasons,
-                "credit_score": round(float(credit[idx]), 1),
+                "credit_score": round(float(credit[vi]), 1),
             })
 
         # 通过否决的行索引
@@ -703,8 +709,9 @@ class SonggangSevenDimensionStrategy(Strategy):
         D[:, 10][(p_credit >= 60) & (p_credit < 70)] = 4.0
 
         # ===== 动态市场环境检测 + 权重调整 =====
-        now = datetime.now()
-        if self._market_env_cache and self._market_env_ts and (now - self._market_env_ts).seconds < 300:
+        # 改进 (2025-06-15ad): 解耦市场环境检测——直接传入 current_date，不再依赖 self._dates[idx]
+        current_dt = pd.to_datetime(current_date)
+        if self._market_env_cache and self._market_env_ts and (current_dt - self._market_env_ts).seconds < 300:
             market_env = self._market_env_cache
         else:
             avg_change = float(change_pct.mean()) if 'change_pct' in df.columns else 0
@@ -716,7 +723,7 @@ class SonggangSevenDimensionStrategy(Strategy):
             else:
                 market_env = 'neutral'
             self._market_env_cache = market_env
-            self._market_env_ts = now
+            self._market_env_ts = current_dt
 
         sw, bw = self._adjust_weights_by_market(market_env)
 
@@ -837,9 +844,12 @@ class SonggangSevenDimensionStrategy(Strategy):
         基于全市场涨跌幅分布
         """
         # 检查缓存（每5分钟更新一次）
-        now = datetime.now()
+        # 使用当前时间（非向量化模式下的回测日期由调用方设置）
+        current_dt = getattr(self, '_current_backtest_date', pd.Timestamp.now())
+        if not isinstance(current_dt, pd.Timestamp):
+            current_dt = pd.Timestamp(current_dt)
         if self._market_env_cache and self._market_env_ts:
-            if (now - self._market_env_ts).seconds < 300:
+            if (current_dt - self._market_env_ts).seconds < 300:
                 return self._market_env_cache
 
         # 计算市场指标
@@ -855,7 +865,7 @@ class SonggangSevenDimensionStrategy(Strategy):
             env = 'neutral'
 
         self._market_env_cache = env
-        self._market_env_ts = now
+        self._market_env_ts = current_dt
         return env
 
     def _adjust_weights_by_market(self, market_env: str) -> tuple[dict, dict]:
@@ -985,28 +995,55 @@ class SonggangSevenDimensionStrategy(Strategy):
             if isinstance(sample_date, date):
                 self._dates = sorted(data['date'].unique())
             else:
-                # [Fix] 防御性降级：date 列类型异常时回退到当前日期，
-                # 避免将价格等数值误当作时间戳导致后续逻辑崩溃
-                logger.warning(
-                    f"[SonggangSeven] data['date'] 列类型异常 ({type(sample_date).__name__}), "
-                    f"已回退到当前日期"
-                )
-                self._dates = [datetime.now().date()]
+                # 修复 (2025-06-15): date列类型异常时尝试转换，而非直接fallback到当前日期
+                # 原逻辑: self._dates = [datetime.now().date()] -> 导致所有日期相同，策略失效
+                try:
+                    converted = pd.to_datetime(data['date'], errors='coerce')
+                    if converted.isna().all():
+                        raise ValueError("date列转换后全为NaT")
+                    data['date'] = converted.dt.date
+                    self._data['date'] = converted.dt.date
+                    self._dates = sorted(self._data['date'].unique())
+                    logger.info(f"[XibuSeven] date列已从 {type(sample_date).__name__} 转换为 date")
+                except Exception as e:
+                    logger.error(f"[XibuSeven] date列转换失败: {e}, 回退到当前日期")
+                    self._dates = [datetime.now().date()]
         else:
             self._dates = [datetime.now().date()]
 
     def on_data(self, data: pd.DataFrame, idx: int) -> Optional[list[dict]]:
-        """在每个时间点生成交易信号（使用向量化评分，50-100x 提速）"""
+        """V4.0: 周频调仓 + 动量过滤 + 仓位管理（向量化评分）"""
+        # 改进 (2025-06-15ad): 防御 _dates 空列表，避免后续索引越界
+        assert self._dates and len(self._dates) > 0, "_dates 未初始化"
         current_date = self._dates[idx] if idx < len(self._dates) else datetime.now().date()
         day_data = data.copy()
 
         if day_data.empty:
             return None
 
-        # 使用向量化评分替代 iterrows（50-100x 提速）
-        scores_list, vetoed_list = self.calc_vectorized(day_data)
+        # 清理退市债券的缓冲状态
+        active_codes = set(day_data['code'].values) if 'code' in day_data.columns else set()
+        stale_buffer_codes = [c for c in self._buffer_tracker if c not in active_codes]
+        for c in stale_buffer_codes:
+            del self._buffer_tracker[c]
+        if stale_buffer_codes:
+            logger.debug(f"[XibuSeven] 清理 {len(stale_buffer_codes)} 只退市债券的缓冲状态")
 
-        # 同步否决结果到 _veto_results
+        # === V4.0: 调仓频率控制 ===
+        rebalance_days = self.get_param('rebalance_days')
+        is_rebalance_day = (idx - self._last_rebalance_idx) >= rebalance_days
+
+        # 非调仓日只检查是否需要卖出（最小持仓期之外的止损逻辑）
+        if not is_rebalance_day:
+            # 没有主动卖出逻辑，持仓等待下一个调仓日
+            # 但仍需更新hold_since中存在的持仓的跟踪
+            return None
+
+        self._last_rebalance_idx = idx
+
+        # 向量化评分
+        scores_list, vetoed_list = self.calc_vectorized(day_data, current_date)
+
         for v in vetoed_list:
             code = v.get('code', '')
             self._veto_results[code] = VetoResult(
@@ -1018,45 +1055,82 @@ class SonggangSevenDimensionStrategy(Strategy):
         if not scores_list:
             return None
 
-        # scores_list 已按 total 降序排列
         hold_count = self.get_param('hold_count')
+        min_hold_days = self.get_param('min_hold_days')
+        momentum_filter = self.get_param('momentum_filter')
+        position_sizing = self.get_param('position_sizing')
+
+        # === V4.0: 动量过滤（买入前检查短期趋势）===
+        if momentum_filter:
+            code_momentum_ok = {}
+            for s in scores_list:
+                code = s['code']
+                chg = s.get('change_pct', 0)
+                # 短期动量需要为正（或至少>-2%）
+                code_momentum_ok[code] = chg > -2
+        else:
+            code_momentum_ok = {s['code']: True for s in scores_list}
 
         # 生成信号
         signals = []
         new_selected = set()
+        buy_candidates = []
 
         for rank, s in enumerate(scores_list, 1):
             code = s['code']
             was_held = code in self._prev_selected
 
+            # 最小持仓期检查
+            hold_start = self._hold_since.get(code, -999)
+            held_days = idx - hold_start if hold_start >= 0 else 999
+            is_locked = held_days < min_hold_days
+
             should_hold, reason = self._should_hold_with_buffer(code, rank, was_held)
 
             if should_hold:
                 new_selected.add(code)
-
+                if code not in self._hold_since:
+                    self._hold_since[code] = idx
+                
                 if not was_held and rank <= hold_count:
-                    signals.append({
-                        'code': code,
-                        'action': 'buy',
+                    # 动量过滤
+                    if not code_momentum_ok.get(code, True):
+                        continue
+                    buy_candidates.append({
+                        'code': code, 'action': 'buy',
                         'price': float(s['price']),
                         'reason': f'评分{s["total"]:.1f}，{reason}',
-                        'score': s['total'],
-                        'rank': rank,
+                        'score': s['total'], 'rank': rank,
                     })
+                    self._hold_since[code] = idx
 
-        # 卖出不再持有的标的
+        # === V4.0: 仓位管理 ===
+        # 得分加权模式：每笔buy带上建议仓位权重
+        if position_sizing == 'score_weighted' and buy_candidates:
+            scores_arr = np.array([b['score'] for b in buy_candidates])
+            if scores_arr.sum() > 0:
+                weights = scores_arr / scores_arr.sum()
+            else:
+                weights = np.ones(len(buy_candidates)) / len(buy_candidates)
+            for i, b in enumerate(buy_candidates):
+                b['alloc_weight'] = float(weights[i])
+
+        signals.extend(buy_candidates)
+
+        # 卖出
         to_sell = self._prev_selected - new_selected
+        # 但受最小持仓期保护的持仓不卖
+        protected_sell = {c for c in to_sell if c in self._hold_since and (idx - self._hold_since[c]) < min_hold_days}
+        to_sell = to_sell - protected_sell
+        # 保留受保护的持仓
+        new_selected |= protected_sell
+
         code_price_map = {row['code']: row.get('price', 0) for _, row in day_data.iterrows()} if not day_data.empty else {}
         for code in to_sell:
             p = code_price_map.get(code, 0)
             if p > 0:
-                signals.append({
-                    'code': code,
-                    'action': 'sell',
-                    'price': float(p),
-                    'reason': '跌出白名单',
-                    'rank': None,
-                })
+                signals.append({'code': code, 'action': 'sell', 'price': float(p), 'reason': '跌出白名单', 'rank': None})
+                self._hold_since.pop(code, None)
 
         self._prev_selected = new_selected
         return signals if signals else None
@@ -1074,3 +1148,4 @@ class SonggangSevenDimensionStrategy(Strategy):
         self._buffer_tracker.clear()
         self._veto_results.clear()
         self._prev_selected.clear()
+        self._hold_since.clear()

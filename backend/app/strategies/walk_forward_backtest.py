@@ -11,7 +11,7 @@ Walk-Forward回测验证框架 V3.0
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Callable
 import pandas as pd
 import numpy as np
@@ -89,9 +89,9 @@ class WalkForwardValidator:
 
         while True:
             train_start = current
-            train_end = current + timedelta(days=train_months * 30)
-            test_start = train_end + timedelta(days=1)
-            test_end = test_start + timedelta(days=test_months * 30)
+            train_end = current + pd.DateOffset(months=train_months)
+            test_start = train_end + pd.DateOffset(days=1)
+            test_end = test_start + pd.DateOffset(months=test_months)
 
             if test_end > end:
                 break
@@ -103,7 +103,7 @@ class WalkForwardValidator:
                 test_end.strftime('%Y-%m-%d'),
             ))
 
-            current = current + timedelta(days=step_months * 30)
+            current = current + pd.DateOffset(months=step_months)
 
         return ranges
 
@@ -121,8 +121,9 @@ class WalkForwardValidator:
         commission = trade_amount * self.DEFAULT_PARAMS['commission_rate']
         slippage = trade_amount * self.DEFAULT_PARAMS['slippage_rate']
 
-        # 冲击成本
-        impact = (trade_amount / daily_volume) * self.DEFAULT_PARAMS['impact_coefficient'] * trade_amount
+        # 冲击成本: 按参与率比例估算，上限100%
+        participation = min(trade_amount / daily_volume, 1.0) if daily_volume > 0 else 1.0
+        impact = trade_amount * self.DEFAULT_PARAMS['impact_coefficient'] * participation
 
         return commission + slippage + impact
 
@@ -200,12 +201,13 @@ class WalkForwardValidator:
                     })
                     del positions[code]
 
-            # 计算当日净值
-            position_value = sum(
-                pos['volume'] * day_data[day_data['code'] == code]['price'].iloc[0]
-                for code, pos in positions.items()
-                if code in day_data['code'].values
-            )
+            # 计算当日净值（防御停牌/退市）
+            position_value = 0.0
+            for code, pos in positions.items():
+                if code in day_data['code'].values:
+                    code_rows = day_data[day_data['code'] == code]['price']
+                    if not code_rows.empty:
+                        position_value += pos['volume'] * float(code_rows.iloc[0])
             total_value = capital + position_value
             daily_values.append(total_value)
 

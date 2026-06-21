@@ -42,6 +42,14 @@ class Strategy(ABC):
                 return float(val)
             except (TypeError, ValueError):
                 return 0.0
+        if ptype == "bool":
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes")
+            return bool(val)
+        if ptype == "str":
+            return str(val) if val is not None else ""
         return val
 
     @abstractmethod

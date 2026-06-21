@@ -3,9 +3,25 @@
 """
 import builtins
 import _pytest.assertion.rewrite as _ar
+import warnings
 import pytest
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
+
+# 在 jieba 导入前静默其 SyntaxWarning（jieba/posseg/__init__.py 中的无效转义序列）
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba")
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="jieba.posseg")
+# passlib 内部使用已弃用的 crypt 模块（Python 3.13 将移除），静默该警告
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="passlib")
+
+
+def pytest_configure(config):
+    """注册自定义 pytest 标记，避免使用未注册标记时的 warning。"""
+    config.addinivalue_line(
+        "markers",
+        "serial: 标记该测试必须串行执行（不可与其他测试并行）。"
+        "适用于存在 fixture 共享状态竞争的测试。",
+    )
 
 import bcrypt
 

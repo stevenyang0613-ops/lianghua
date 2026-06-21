@@ -17,13 +17,13 @@ from datetime import datetime, timedelta
 
 # ==================== 七维打分策略测试 ====================
 
-class TestSonggangSevenDimensionStrategy:
-    """松岗七维打分策略测试"""
+class TestXibuSevenDimensionStrategy:
+    """西部七维打分策略测试"""
 
     @pytest.fixture
     def strategy(self):
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
-        return SonggangSevenDimensionStrategy()
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        return XibuSevenDimensionStrategy()
 
     @pytest.fixture
     def sample_data(self):
@@ -47,7 +47,7 @@ class TestSonggangSevenDimensionStrategy:
 
     def test_strategy_init(self, strategy):
         """测试策略初始化"""
-        assert strategy.name == "松岗七维打分策略"
+        assert strategy.name == "西部七维打分策略"
         assert strategy.STOCK_WEIGHTS['momentum'] == 0.30
         assert strategy.BOND_WEIGHTS['valuation'] == 0.38
 

@@ -219,23 +219,16 @@ class FactorDataSource:
             if time.time() - self._pledge_ts < 3600 and self._pledge_map:
                 return
             try:
-                from datetime import datetime
-                for offset in range(30):
-                    date_str = (datetime.now() - timedelta(days=offset)).strftime("%Y%m%d")
-                    try:
-                        df = ak.stock_gpzy_pledge_ratio_em(date=date_str)
-                        if df is not None and not df.empty:
-                            for _, r in df.iterrows():
-                                code = str(r.get("股票代码", "")).strip()
-                                pct = r.get("质押比例", None)
-                                if code and pct is not None and pd.notna(pct):
-                                    try:
-                                        self._pledge_map[code] = float(pct)
-                                    except (ValueError, TypeError):
-                                        pass
-                            break
-                    except Exception:
-                        continue
+                df = ak.stock_gpzy_pledge_ratio_em()
+                if df is not None and not df.empty:
+                    for _, r in df.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        pct = r.get("质押比例", None)
+                        if code and pct is not None and pd.notna(pct):
+                            try:
+                                self._pledge_map[code] = float(pct)
+                            except (ValueError, TypeError):
+                                pass
                 self._pledge_ts = time.time()
                 logger.info(f"[FactorDS] 质押比例: {len(self._pledge_map)} 股票")
             except Exception as e:
@@ -276,7 +269,7 @@ class FactorDataSource:
         """
         if not code or not ak:
             return {}
-        clean = code[2:] if code.startswith(('sh', 'sz', 'bj')) else code
+        clean = code[2:] if code.startswith(('sh', 'sz', 'bj')) and len(code) > 2 else code
         try:
             df = ak.stock_zyjs_ths(symbol=clean)
             if df is None or df.empty:

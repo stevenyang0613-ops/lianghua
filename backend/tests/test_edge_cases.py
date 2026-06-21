@@ -14,6 +14,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import asyncio
 import threading
+import logging
+
+_logger = logging.getLogger(__name__)
 
 
 # ==================== 空数据处理测试 ====================
@@ -23,9 +26,9 @@ class TestEmptyDataHandling:
 
     def test_empty_dataframe_scoring(self):
         """测试空数据评分"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
         empty_df = pd.DataFrame()
 
         # 初始化应该能处理空数据
@@ -37,9 +40,9 @@ class TestEmptyDataHandling:
 
     def test_missing_columns_handling(self):
         """测试缺失列处理"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
 
         # 缺失关键列的数据
         incomplete_df = pd.DataFrame({
@@ -59,9 +62,9 @@ class TestEmptyDataHandling:
 
     def test_all_nan_values(self):
         """测试全NaN值"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
 
         nan_df = pd.DataFrame({
             'code': ['123456'],
@@ -83,8 +86,8 @@ class TestEmptyDataHandling:
         # 应该处理NaN值
         try:
             result = strategy.on_data(nan_df, 0)
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug("Expected exception in NaN handling test: %s", _e)
 
 
 # ==================== 极端值测试 ====================
@@ -109,9 +112,9 @@ class TestExtremeValues:
 
     def test_zero_price(self):
         """测试零价格"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
 
         zero_price_df = pd.DataFrame({
             'code': ['123456'],
@@ -138,9 +141,9 @@ class TestExtremeValues:
 
     def test_extreme_premium(self):
         """测试极端溢价率"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy(max_premium=100)
+        strategy = XibuSevenDimensionStrategy(max_premium=100)
 
         extreme_premium_df = pd.DataFrame({
             'code': ['123456'],
@@ -165,9 +168,9 @@ class TestExtremeValues:
 
     def test_negative_ytm(self):
         """测试负YTM"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
 
         negative_ytm_df = pd.DataFrame({
             'code': ['123456'],
@@ -199,9 +202,9 @@ class TestConcurrentAccess:
 
     def test_concurrent_scoring(self):
         """测试并发评分"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
 
         # 创建测试数据
         test_df = pd.DataFrame({
@@ -277,9 +280,10 @@ class TestErrorRecovery:
 
     def test_invalid_date_format(self):
         """测试无效日期格式"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
+        original_params = dict(strategy._params)  # 快照原始参数
 
         # 无效日期数据
         invalid_date_df = pd.DataFrame({
@@ -300,8 +304,11 @@ class TestErrorRecovery:
         # 应该能处理
         try:
             strategy.on_init(invalid_date_df)
-        except Exception:
-            pass  # 允许抛出异常
+        except Exception as _e:
+            _logger.debug("Expected exception in invalid date test: %s", _e)
+
+        # 断言：策略参数未被无效输入污染
+        assert strategy._params == original_params, "策略参数不应被无效输入修改"
 
     def test_division_by_zero_in_metrics(self):
         """测试除零错误"""
@@ -319,8 +326,8 @@ class TestErrorRecovery:
             assert result['score'] >= 0
         except ZeroDivisionError:
             pytest.fail("Should handle division by zero")
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug("Expected exception in zero division test: %s", _e)
 
     def test_infinite_value_handling(self):
         """测试无穷大值处理"""
@@ -346,9 +353,10 @@ class TestDataTypeHandling:
 
     def test_string_price_conversion(self):
         """测试字符串价格转换"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
+        original_params = dict(strategy._params)  # 快照原始参数
 
         # 字符串类型的价格
         string_df = pd.DataFrame({
@@ -369,21 +377,25 @@ class TestDataTypeHandling:
         # 应该能处理
         try:
             strategy.on_init(string_df)
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug("Expected exception in string type test: %s", _e)
+
+        # 断言：策略参数未被无效输入污染
+        assert strategy._params == original_params, "策略参数不应被字符串类型输入修改"
 
     def test_mixed_types(self):
         """测试混合类型"""
-        from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
-        strategy = SonggangSevenDimensionStrategy()
+        strategy = XibuSevenDimensionStrategy()
+        original_params = dict(strategy._params)  # 快照原始参数
 
-        # 混合类型数据
+        # 混合类型数据（显式 dtype=object 避免 Pandas 2.x FutureWarning）
         mixed_df = pd.DataFrame({
-            'code': [123456, '123457'],  # 数字和字符串混合
+            'code': pd.array([123456, '123457'], dtype=object),
             'name': ['测试转债1', '测试转债2'],
-            'price': [100.5, '101.5'],
-            'premium_ratio': [30, '35.5'],
+            'price': pd.array([100.5, '101.5'], dtype=object),
+            'premium_ratio': pd.array([30, '35.5'], dtype=object),
             'volume': [1, 2],
             'dual_low': [130, 137],
             'change_pct': [0, 1],
@@ -396,8 +408,11 @@ class TestDataTypeHandling:
 
         try:
             strategy.on_init(mixed_df)
-        except Exception:
-            pass
+        except Exception as _e:
+            _logger.debug("Expected exception in mixed types test: %s", _e)
+
+        # 断言：策略参数未被无效输入污染
+        assert strategy._params == original_params, "策略参数不应被混合类型输入修改"
 
 
 # ==================== 运行测试 ====================

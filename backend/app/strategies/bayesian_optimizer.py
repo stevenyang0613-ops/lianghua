@@ -135,22 +135,37 @@ class AcquisitionFunction:
         """计算采集函数值"""
         std = np.sqrt(var)
 
-        if self.acquisition_type == AcquisitionType.EI:
-            # Expected Improvement
-            z = (mu - best_so_far) / std
-            ei = std * (z * self._norm_cdf(z) + self._norm_pdf(z))
-            return ei
+        # 快速路径：std 全为 0 或 NaN 时，无法计算采集函数，直接返回零向量
+        if not np.any(np.isfinite(std)) or np.all(std == 0):
+            return np.zeros_like(mu)
 
-        elif self.acquisition_type == AcquisitionType.UCB:
-            # Upper Confidence Bound
-            return mu + self.kappa * std
+        # 使用 errstate 抑制 GP 不收敛时的 RuntimeWarning
+        with np.errstate(invalid='ignore', divide='ignore'):
+            if self.acquisition_type == AcquisitionType.EI:
+                # Expected Improvement
+                # 注意：当部分位置 std=0 时，z = (mu - best) / std 会产生 ±inf，
+                # 这是数学上正确的（确定性采样点无改进空间）。后续 np.where(np.isfinite)
+                # 将 inf/NaN 置 0，使 argmax 忽略这些点。std 全为 0 的情况已在上方
+                # early return 处理。
+                z = (mu - best_so_far) / std
+                ei = std * (z * self._norm_cdf(z) + self._norm_pdf(z))
+                # 防御：GP 回归不收敛时 std/var 可能为 NaN/Inf，导致 ei 为非有限值
+                # 将非有限值置 0，使 argmax 忽略这些采样点
+                ei = np.where(np.isfinite(ei), ei, 0.0)
+                return ei
 
-        elif self.acquisition_type == AcquisitionType.PI:
-            # Probability of Improvement
-            z = (mu - best_so_far) / std
-            return self._norm_cdf(z)
+            elif self.acquisition_type == AcquisitionType.UCB:
+                # Upper Confidence Bound
+                ucb = mu + self.kappa * std
+                return np.where(np.isfinite(ucb), ucb, 0.0)
 
-        return mu
+            elif self.acquisition_type == AcquisitionType.PI:
+                # Probability of Improvement
+                z = (mu - best_so_far) / std
+                pi = self._norm_cdf(z)
+                return np.where(np.isfinite(pi), pi, 0.0)
+
+            return np.where(np.isfinite(mu), mu, 0.0)
 
     @staticmethod
     def _norm_cdf(x: np.ndarray) -> np.ndarray:

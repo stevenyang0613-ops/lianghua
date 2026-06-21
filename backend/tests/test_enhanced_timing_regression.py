@@ -196,7 +196,7 @@ class TestEnsembleMethod:
 class TestSafeScoreHelper:
     def test_zero_returns_neutral(self):
         from app.strategies.enhanced_timing_model import safe_score
-        assert safe_score(0, lambda v: v * 2) == 50.0
+        assert safe_score(0, lambda v: v * 2, neutral=50.0) == 50.0
 
     def test_nonzero_uses_func(self):
         from app.strategies.enhanced_timing_model import safe_score
@@ -204,11 +204,23 @@ class TestSafeScoreHelper:
 
     def test_nan_returns_neutral(self):
         from app.strategies.enhanced_timing_model import safe_score
-        assert safe_score(float('nan'), lambda v: v) == 50.0
+        assert safe_score(float('nan'), lambda v: v, neutral=50.0) == 50.0
 
     def test_has_data_false_returns_neutral(self):
         from app.strategies.enhanced_timing_model import safe_score
-        assert safe_score(100, lambda v: v, has_data=False) == 50.0
+        assert safe_score(100, lambda v: v, neutral=50.0, has_data=False) == 50.0
+
+    def test_zero_with_treat_zero_as_missing_false(self):
+        """当 treat_zero_as_missing=False 时，0 是有效值，应走 score_fn"""
+        from app.strategies.enhanced_timing_model import safe_score
+        assert safe_score(0, lambda v: v * 2, treat_zero_as_missing=False) == 0
+
+    def test_default_neutral_is_nan(self):
+        """默认 neutral 为 NaN，缺失数据返回 NaN"""
+        from app.strategies.enhanced_timing_model import safe_score
+        import math
+        result = safe_score(float('nan'), lambda v: v)
+        assert math.isnan(result)
 
 
 # ==================== 权重一致性 ====================

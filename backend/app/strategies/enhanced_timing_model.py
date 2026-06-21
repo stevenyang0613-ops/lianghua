@@ -123,7 +123,7 @@ class EnhancedTimingSignal:
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict:
-        return {
+        return clean_numpy_types({
             "date": self.date.isoformat() if isinstance(self.date, date) else str(self.date),
             "totalScore": round(self.total_score, 2),
             "positionRatio": round(self.position_ratio, 4),
@@ -154,11 +154,12 @@ class EnhancedTimingSignal:
             "riskAlerts": self.risk_alerts,
             "hedgeRecommended": self.hedge_recommended,
             "timestamp": self.timestamp.isoformat(),
-        }
+        })
 
 
-@dataclass
+@dataclass  # TODO: 未来版本考虑添加 kw_only=True，防止位置参数构造时因新增字段导致参数错位
 class EnhancedMarketData:
+    """扩展市场数据（兼容旧版 MarketData + 新增字段）"""
     """扩展市场数据（兼容旧版 MarketData + 新增字段）"""
     date: date
     
@@ -169,6 +170,7 @@ class EnhancedMarketData:
     cb_avg_daily_amount: float = 0.0     # 转债日均成交额(亿)
     cb_count: int = 0                    # 转债数量
     cb_ytm_median: float = 0.0           # 纯债YTM中位数(%)
+    cb_ytm_available: Optional[bool] = None  # YTM 数据可用性: True=确认有, False=确认无, None=未知(按旧逻辑)
     cb_index_change: float = 0.0         # 转债指数涨跌幅(%)
     cb_index_current: float = 0.0        # 转债指数当前值
     cb_index_ma20: float = 0.0           # 转债指数20日均线
@@ -176,7 +178,9 @@ class EnhancedMarketData:
     cb_below_par_count: int = 0          # 低于面值的转债数
     
     # === 正股市场 ===
-    stock_index_change: float = 0.0      # 沪深300涨跌幅(%)
+    stock_index_change: float = 0.0      # 沪深300日涨跌幅(%)
+    stock_index_change_20d: float = 0.0  # 沪深300近20日涨跌幅(%)
+    stock_index_change_60d: float = 0.0  # 沪深300近60日涨跌幅(%)
     stock_index_current: float = 0.0     # 沪深300当前值
     stock_index_ma20: float = 0.0        # 沪深300 20日均线
     stock_index_ma60: float = 0.0        # 沪深300 60日均线
@@ -251,8 +255,10 @@ def linear_score(value: float, low: float, high: float, invert: bool = False) ->
     value 在 [low, high] 之间线性映射到 [0, 100]
     invert=True 时反向（值越小分越高）
     """
+    if math.isnan(value):
+        return float('nan')
     if high == low:
-        return 50.0
+        return float('nan')
     score = (value - low) / (high - low) * 100
     score = max(0, min(100, score))
     return 100 - score if invert else score
@@ -265,6 +271,8 @@ def sigmoid_score(value: float, center: float, steepness: float = 1.0,
     value 在 center 附近平滑过渡
     steepness 越大曲线越陡
     """
+    if math.isnan(value):
+        return float('nan')
     scaled = (value - center) * steepness
     score = 100 / (1 + math.exp(-scaled))
     return 100 - score if invert else score
@@ -275,6 +283,8 @@ def percentile_score(value: float, lower: float, upper: float) -> float:
     
     低于 lower 得 100，高于 upper 得 0，中间线性插值
     """
+    if math.isnan(value):
+        return float('nan')
     if value <= lower:
         return 100.0
     if value >= upper:
@@ -299,22 +309,77 @@ def zscore_to_percentile(zscore: float) -> float:
     return (0.5 * (1 + math.erf(zscore / math.sqrt(2)))) * 100
 
 
-def safe_score(value: float, score_fn, neutral: float = 50.0, has_data: bool = True) -> float:
-    """当数据缺失或为0时返回中性分
+def safe_score(value: float, score_fn, neutral: float = float('nan'), has_data: bool = True,
+               treat_zero_as_missing: bool = False) -> float:
+    """当数据缺失、为 NaN 时返回 neutral（让 calculate() 跳过缺失因子）
 
     Args:
         value: 原始数据值
         score_fn: 评分函数（如 linear_score, sigmoid_score）
-        neutral: 中性分数（默认50）
-        has_data: 数据是否实际有效（外部可强制指定）
+        neutral: 中性分数（默认NaN，表示缺失）
+        has_data: 数据是否实际有效（外部可强制指定）。
+            has_data=False 优先于 treat_zero_as_missing，无论 value 值如何都返回 neutral。
+        treat_zero_as_missing: 是否将 0 视为缺失数据（默认True，金融场景中0常代表无数据）。
+            仅在 has_data=True 时生效。
 
     Examples:
-        safe_score(0, lambda v: linear_score(v, 10, 50, invert=True))  # 返回 50
-        safe_score(25, lambda v: linear_score(v, 10, 50, invert=True))  # 调用评分函数
+        safe_score(0, lambda v: linear_score(v, 10, 50, invert=True))  # 返回 neutral（0 视为缺失）
+        safe_score(float('nan'), lambda v: linear_score(v, 10, 50, invert=True))  # 返回 neutral
+        safe_score(0, lambda v: v * 2, treat_zero_as_missing=False)  # 返回 0（0 是有效值）
+        safe_score(100, lambda v: v, has_data=False)  # 返回 neutral（has_data 优先）
     """
-    if not has_data or value == 0 or math.isnan(value):
+    if not has_data or math.isnan(value) or (treat_zero_as_missing and value == 0):
         return neutral
     return score_fn(value)
+
+
+def clean_numpy_types(obj):
+    """递归把 numpy 标量/布尔/数组转成原生 Python 类型，便于 JSON 序列化。
+
+    同时处理 Python float 的 NaN/Inf → None，确保 JSON 输出合法
+   （JSON 规范不允许 NaN/Inf 值）。
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        np = None  # type: ignore[assignment]
+    if isinstance(obj, bool):
+        return bool(obj)
+    if np is not None and isinstance(obj, np.bool_):
+        return bool(obj)
+    if np is not None and isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if np is not None and isinstance(obj, np.floating):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    if np is not None and isinstance(obj, np.ndarray):
+        return [clean_numpy_types(v) for v in obj.tolist()]
+    if np is not None and isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: clean_numpy_types(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [clean_numpy_types(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return [clean_numpy_types(v) for v in obj]
+    # 支持 __float__ / __int__ 协议的自定义对象（如 Decimal-like wrapper）
+    # 必须放在 dict/list 等容器类型之后，避免误匹配
+    if hasattr(obj, '__float__') and callable(obj.__float__):
+        try:
+            return float(obj)
+        except (TypeError, ValueError):
+            pass
+    if hasattr(obj, '__int__') and callable(obj.__int__):
+        try:
+            return int(obj)
+        except (TypeError, ValueError):
+            pass
+    return obj
 
 
 # ==================== 主模型 ====================
@@ -324,53 +389,56 @@ class EnhancedTimingModel:
     
     # ========== 默认大类权重（震荡市） ==========
     DEFAULT_CATEGORY_WEIGHTS = {
-        'valuation': 0.14,       # 估值面
-        'fundamental': 0.10,     # 基本面
+        'valuation': 0.13,       # 估值面
+        'fundamental': 0.09,     # 基本面
         'chip': 0.08,            # 筹码面
-        'capital_flow': 0.12,    # 资金面（成交额+净流入流出）
-        'liquidity': 0.11,       # 流动性面（利率+货币）
-        'technical': 0.14,       # 技术面
-        'sentiment': 0.10,       # 情绪面
-        'news': 0.07,            # 消息面
-        'macro': 0.14,           # 宏观面
+        'capital_flow': 0.12,    # 资金面
+        'liquidity': 0.11,       # 流动性面
+        'technical': 0.18,       # 技术面 ↑↑（数据最可靠）
+        'sentiment': 0.13,       # 情绪面 ↑（恐慌指标有效）
+        'news': 0.06,            # 消息面 ↓（无数据）
+        'macro': 0.10,           # 宏观面 ↓↓（数据缺失严重）
     }
     
     # ========== 各市场环境下的大类权重动态调整 ==========
     REGIME_WEIGHT_ADJUSTMENTS = {
+        # 深度超买 → 降低趋势类权重，增加估值/宏观权重（防御）
         MarketRegime.STRONG_BULL: {
-            'valuation': -0.02, 'fundamental': -0.01, 'chip': 0.02,
-            'capital_flow': 0.01, 'liquidity': -0.01, 'technical': 0.03,
-            'sentiment': 0.02, 'news': -0.01, 'macro': -0.03,
+            'valuation': +0.03, 'fundamental': 0.00, 'chip': -0.01,
+            'capital_flow': -0.02, 'liquidity': +0.01, 'technical': -0.03,
+            'sentiment': -0.02, 'news': 0.00, 'macro': +0.04,
         },
+        # 轻度超买 → 小幅防御
         MarketRegime.BULL: {
-            'valuation': -0.01, 'fundamental': 0.00, 'chip': 0.01,
-            'capital_flow': 0.00, 'liquidity': 0.00, 'technical': 0.02,
-            'sentiment': 0.01, 'news': -0.01, 'macro': -0.02,
+            'valuation': +0.02, 'fundamental': 0.00, 'chip': 0.00,
+            'capital_flow': -0.01, 'liquidity': 0.00, 'technical': -0.01,
+            'sentiment': -0.01, 'news': 0.00, 'macro': +0.02,
         },
         MarketRegime.RANGE: {
             # 默认权重不变
         },
+        # 轻度超卖 → 增加技术/情绪权重（捕捉反弹）
         MarketRegime.BEAR: {
-            'valuation': 0.02, 'fundamental': 0.02, 'chip': -0.01,
-            'capital_flow': 0.01, 'liquidity': 0.02, 'technical': -0.02,
-            'sentiment': -0.01, 'news': 0.00, 'macro': -0.03,
+            'valuation': +0.01, 'fundamental': 0.00, 'chip': +0.01,
+            'capital_flow': +0.01, 'liquidity': 0.00, 'technical': +0.03,
+            'sentiment': +0.03, 'news': 0.00, 'macro': -0.01,
         },
+        # 深度超卖 → 大幅增配技术/情绪/估值（抄底）
         MarketRegime.STRONG_BEAR: {
-            'valuation': 0.03, 'fundamental': 0.03, 'chip': -0.02,
-            'capital_flow': 0.01, 'liquidity': 0.03, 'technical': -0.03,
-            'sentiment': -0.02, 'news': 0.01, 'macro': -0.04,
+            'valuation': +0.02, 'fundamental': 0.00, 'chip': +0.02,
+            'capital_flow': +0.02, 'liquidity': 0.00, 'technical': +0.04,
+            'sentiment': +0.04, 'news': 0.00, 'macro': -0.02,
         },
     }
     
     # ========== 仓位映射 ==========
     POSITION_MAP = [
-        (85, 1.00, "满仓积极配置"),
-        (75, 0.90, "高仓位积极配置"),
-        (65, 0.75, "中高仓位配置"),
-        (55, 0.60, "中等仓位配置"),
-        (45, 0.45, "中性偏防御"),
-        (35, 0.30, "防御配置"),
-        (25, 0.15, "高度防御"),
+        (75, 1.00, "满仓积极配置"),     # 75分以上满仓
+        (65, 0.85, "高仓位积极配置"),
+        (55, 0.70, "中高仓位配置"),    # 55-65给70%
+        (45, 0.50, "中性配置"),        # 45-55给50%
+        (35, 0.30, "防御配置"),        # 35-45给30%
+        (25, 0.15, "高度防御"),        # 25-35给15%
         (0, 0.05, "极端防御，启动对冲"),
     ]
     
@@ -378,33 +446,88 @@ class EnhancedTimingModel:
     HEDGE_THRESHOLD = 30.0
     ALERT_LOW_SCORE = 35.0
     
-    def __init__(self):
+    def __init__(self, initial_position: float = 0.5):
         self._history: List[EnhancedTimingSignal] = []
         self._factor_history: Dict[str, deque] = {}
         self._regime_history: deque = deque(maxlen=10)
         self._prev_regime: Optional[MarketRegime] = None
         self._regime_confirm_count: int = 0
         self._consecutive_days: Dict[str, int] = {}
+        self._last_position_ratio: float = max(0.05, min(1.0, initial_position))
         self._signal_quality_tracker: Dict[str, float] = {}
         
     # ========== 市场环境检测 ==========
     
     def detect_market_regime(self, data: EnhancedMarketData) -> MarketRegime:
-        """检测当前市场环境"""
-        change = data.stock_index_change
+        """检测当前市场环境（均值回归视角：超买超卖判断）
         
-        if change > 10:
-            regime = MarketRegime.STRONG_BULL
-        elif change > 5:
-            regime = MarketRegime.BULL
-        elif change > -5:
-            regime = MarketRegime.RANGE
-        elif change > -10:
-            regime = MarketRegime.BEAR
+        核心逻辑：A股短期反转效应显著，大跌后反弹、大涨后回调。
+        将 regime 重新定义为：
+        - STRONG_BEAR = 深度超卖（反弹机会）
+        - BEAR = 轻度超卖
+        - RANGE = 中性震荡
+        - BULL = 轻度超买（回调风险）
+        - STRONG_BULL = 深度超买（回调风险）
+        """
+        # 收集超卖/超买信号
+        oversold_signals = 0
+        overbought_signals = 0
+        
+        # 1. RSI 极端值
+        rsi = data.rsi_14
+        if not math.isnan(rsi):
+            if rsi < 25: oversold_signals += 2
+            elif rsi < 35: oversold_signals += 1
+            elif rsi > 75: overbought_signals += 2
+            elif rsi > 65: overbought_signals += 1
+        
+        # 2. 20日涨跌幅（反转视角）
+        change_20d = data.stock_index_change_20d if not math.isnan(data.stock_index_change_20d) else data.stock_index_change * 20
+        if change_20d < -10: oversold_signals += 2
+        elif change_20d < -5: oversold_signals += 1
+        elif change_20d > 10: overbought_signals += 2
+        elif change_20d > 5: overbought_signals += 1
+        
+        # 3. 60日涨跌幅
+        change_60d = data.stock_index_change_60d if not math.isnan(data.stock_index_change_60d) else data.stock_index_change * 60
+        if change_60d < -15: oversold_signals += 1
+        elif change_60d > 15: overbought_signals += 1
+        
+        # 4. 布林带位置
+        bb = data.bollinger_position
+        if not math.isnan(bb):
+            if bb < 0.1: oversold_signals += 2
+            elif bb < 0.25: oversold_signals += 1
+            elif bb > 0.9: overbought_signals += 2
+            elif bb > 0.75: overbought_signals += 1
+        
+        # 5. VIX 恐慌
+        vix = data.vix_index
+        if not math.isnan(vix) and vix > 25: oversold_signals += 1
+        elif not math.isnan(vix) and vix < 12: overbought_signals += 1
+        
+        # 6. 转债恐慌（低于面值占比）
+        cb_panic = data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0
+        if cb_panic > 15: oversold_signals += 2
+        elif cb_panic > 8: oversold_signals += 1
+        
+        # 7. 20日最大回撤
+        max_dd = data.max_dd_20d if hasattr(data, 'max_dd_20d') else 0
+        if not math.isnan(max_dd) and max_dd < -10: oversold_signals += 1
+        
+        # 综合判断（2个以上强信号才判定极端状态）
+        if oversold_signals >= 4:
+            regime = MarketRegime.STRONG_BEAR  # 深度超卖
+        elif oversold_signals >= 2:
+            regime = MarketRegime.BEAR         # 轻度超卖
+        elif overbought_signals >= 4:
+            regime = MarketRegime.STRONG_BULL  # 深度超买
+        elif overbought_signals >= 2:
+            regime = MarketRegime.BULL         # 轻度超买
         else:
-            regime = MarketRegime.STRONG_BEAR
+            regime = MarketRegime.RANGE
         
-        # 趋势确认
+        # 连续确认（防止单日噪声）
         self._regime_history.append(regime)
         if len(self._regime_history) >= 3:
             if all(r == regime for r in list(self._regime_history)[-3:]):
@@ -460,7 +583,10 @@ class EnhancedTimingModel:
         
         # 1.2 纯债YTM中位数评分
         ytm = data.cb_ytm_median
-        ytm_score = safe_score(ytm, lambda v: linear_score(v, -2, 5, invert=False))
+        # cb_ytm_available 三态: True=确认有数据(0视为有效), False=确认无数据, None=未知(0视为缺失)
+        _ytm_has_data = data.cb_ytm_available if data.cb_ytm_available is not None else (ytm != 0)
+        ytm_score = safe_score(ytm, lambda v: linear_score(v, -2, 5, invert=False),
+                                has_data=_ytm_has_data, treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="纯债YTM中位数", score=ytm_score, weight=0.20,
             category="valuation", raw_value=ytm,
@@ -506,8 +632,9 @@ class EnhancedTimingModel:
         ))
         
         # 加权计算
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -524,7 +651,7 @@ class EnhancedTimingModel:
         
         # 2.1 盈利超预期比例
         surprise = data.earnings_surprise_ratio
-        surprise_score = safe_score(surprise, lambda v: sigmoid_score(v, 0.5, steepness=4))
+        surprise_score = safe_score(surprise, lambda v: sigmoid_score(v, 0.5, steepness=4), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="盈利超预期比例", score=surprise_score, weight=0.25,
             category="fundamental", raw_value=surprise,
@@ -534,7 +661,7 @@ class EnhancedTimingModel:
         
         # 2.2 GDP增速贡献
         gdp = data.gdp_growth
-        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="GDP增速", score=gdp_score, weight=0.20,
             category="fundamental", raw_value=gdp,
@@ -544,7 +671,7 @@ class EnhancedTimingModel:
         
         # 2.3 工业增加值
         industrial = data.industrial_output
-        ind_score = safe_score(industrial, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        ind_score = safe_score(industrial, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="工业增加值增速", score=ind_score, weight=0.20,
             category="fundamental", raw_value=industrial,
@@ -589,7 +716,7 @@ class EnhancedTimingModel:
         
         # 2.6 社零增速
         retail = data.retail_sales
-        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="社零增速", score=retail_score, weight=0.10,
             category="fundamental", raw_value=retail,
@@ -597,8 +724,9 @@ class EnhancedTimingModel:
             description=f"社会消费品零售同比{retail:.1f}%",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -615,7 +743,7 @@ class EnhancedTimingModel:
         
         # 3.1 机构持仓变化
         inst = data.institutional_holding_change
-        inst_score = safe_score(inst, lambda v: sigmoid_score(v, 0, steepness=5))
+        inst_score = safe_score(inst, lambda v: sigmoid_score(v, 0, steepness=5), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="机构持仓变化", score=inst_score, weight=0.30,
             category="chip", raw_value=inst,
@@ -684,8 +812,9 @@ class EnhancedTimingModel:
             description=f"基于PE分位{data.stock_pe_percentile:.0f}%评估供给压力",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -717,22 +846,40 @@ class EnhancedTimingModel:
         
         # 4.2 主力资金净流入
         main_flow = data.main_force_net_flow
-        main_score = sigmoid_score(main_flow, 0, steepness=0.025)
+        main_available = main_flow != 0.0
+        main_score = sigmoid_score(main_flow, 0, steepness=0.025) if main_available else 50.0
+        main_signal = (
+            "bullish" if main_flow > 50 else "bearish" if main_flow < -50 else "neutral"
+        ) if main_available else "neutral"
+        main_desc = (
+            f"主力净流入{main_flow:+.1f}亿，{'大幅流入' if main_flow>50 else '大幅流出' if main_flow<-50 else '平衡'}"
+            if main_available else "数据源暂不可用，按中性处理"
+        )
         sub_factors.append(FactorScore(
             name="主力资金净流入", score=main_score, weight=0.18,
             category="capital_flow", raw_value=main_flow,
-            signal="bullish" if main_flow > 50 else "bearish" if main_flow < -50 else "neutral",
-            description=f"主力净流入{main_flow:+.1f}亿，{'大幅流入' if main_flow>50 else '大幅流出' if main_flow<-50 else '平衡'}",
+            signal=main_signal,
+            description=main_desc,
+            confidence=1.0 if main_available else 0.0,
         ))
-        
+
         # 4.3 北向资金净流入（聪明钱）
         north = data.north_bound_net_flow
-        north_score = sigmoid_score(north, 0, steepness=0.03)
+        north_available = north != 0.0
+        north_score = sigmoid_score(north, 0, steepness=0.03) if north_available else 50.0
+        north_signal = (
+            "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
+        ) if north_available else "neutral"
+        north_desc = (
+            f"北向资金{north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}"
+            if north_available else "数据源暂不可用，按中性处理"
+        )
         sub_factors.append(FactorScore(
             name="北向资金净流入", score=north_score, weight=0.18,
             category="capital_flow", raw_value=north,
-            signal="bullish" if north > 30 else "bearish" if north < -30 else "neutral",
-            description=f"北向资金{ north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}",
+            signal=north_signal,
+            description=north_desc,
+            confidence=1.0 if north_available else 0.0,
         ))
         
         # 4.4 融资余额变化（杠杆资金方向）
@@ -773,18 +920,26 @@ class EnhancedTimingModel:
         
         # 4.6 行业资金流向（净流入行业占比）
         industry_flow = data.industry_net_inflow_ratio
-        ind_flow_score = safe_score(industry_flow, lambda v: sigmoid_score(v, 50, steepness=0.06))
-        ind_flow_signal = "bullish" if industry_flow > 60 else "bearish" if industry_flow < 40 else "neutral"
-        ind_flow_desc = f"行业净流入占比{industry_flow:.0f}分，{'多数行业净流入' if industry_flow>60 else '多数行业净流出' if industry_flow<40 else '分化'}"
+        ind_flow_available = industry_flow != 50.0
+        ind_flow_score = safe_score(industry_flow, lambda v: sigmoid_score(v, 50, steepness=0.06), treat_zero_as_missing=False) if ind_flow_available else 50.0
+        ind_flow_signal = (
+            "bullish" if industry_flow > 60 else "bearish" if industry_flow < 40 else "neutral"
+        ) if ind_flow_available else "neutral"
+        ind_flow_desc = (
+            f"行业净流入占比{industry_flow:.0f}分，{'多数行业净流入' if industry_flow>60 else '多数行业净流出' if industry_flow<40 else '分化'}"
+            if ind_flow_available else "数据源暂不可用，按中性处理"
+        )
         sub_factors.append(FactorScore(
             name="行业资金流向", score=ind_flow_score, weight=0.14,
             category="capital_flow", raw_value=industry_flow,
             signal=ind_flow_signal,
             description=ind_flow_desc,
+            confidence=1.0 if ind_flow_available else 0.0,
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -904,8 +1059,9 @@ class EnhancedTimingModel:
             description=f"社融同比{sf:.1f}%，{'信贷扩张' if sf>11 else '信贷收缩' if sf<9 else '正常'}",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -920,9 +1076,9 @@ class EnhancedTimingModel:
         """技术面评分：MA排列 + MACD + RSI + 布林带 + 量价关系 + 指数位置"""
         sub_factors = []
         
-        # 5.1 MA排列评分
-        ma_map = {'bullish': 85, 'bullish_diverging': 70, 'neutral': 50,
-                  'bearish_diverging': 30, 'bearish': 15}
+        # 5.1 MA排列评分（增强空头扣分）
+        ma_map = {'bullish': 85, 'bullish_diverging': 65, 'neutral': 50,
+                  'bearish_diverging': 25, 'bearish': 10}  # 空头从15降到10
         ma_score = ma_map.get(data.ma_arrangement, 50)
         sub_factors.append(FactorScore(
             name="均线排列", score=ma_score, weight=0.20,
@@ -931,9 +1087,9 @@ class EnhancedTimingModel:
             description=f"均线{'多头' if 'bull' in data.ma_arrangement else '空头' if 'bear' in data.ma_arrangement else '交叉'}排列",
         ))
         
-        # 5.2 MACD信号评分
-        macd_map = {'bullish': 80, 'bullish_divergence': 70, 'neutral': 50,
-                    'bearish_divergence': 30, 'bearish': 20}
+        # 5.2 MACD信号评分（增强死叉扣分）
+        macd_map = {'bullish': 80, 'bullish_divergence': 65, 'neutral': 50,
+                    'bearish_divergence': 25, 'bearish': 15}  # 死叉从20降到15
         macd_score = macd_map.get(data.macd_signal, 50)
         sub_factors.append(FactorScore(
             name="MACD信号", score=macd_score, weight=0.18,
@@ -942,42 +1098,60 @@ class EnhancedTimingModel:
             description=f"MACD{'金叉' if 'bull' in data.macd_signal else '死叉' if 'bear' in data.macd_signal else '中性'}",
         ))
         
-        # 5.3 RSI评分
+        # 5.3 RSI评分（增强看空灵敏度）
         rsi = data.rsi_14
-        if rsi <= 20:
-            rsi_score = 90  # 超卖反弹机会
-        elif rsi <= 40:
-            rsi_score = linear_score(rsi, 20, 40, invert=False) * 0.5 + 50
-        elif rsi <= 60:
-            rsi_score = 60 + (rsi - 40) / 20 * 20
-        elif rsi <= 80:
-            rsi_score = 80 - (rsi - 60) / 20 * 50
+        if not math.isnan(rsi):
+            if rsi <= 20:
+                rsi_score = 90  # 超卖反弹机会
+            elif rsi <= 35:  # 收紧阈值：35以下偏冷
+                rsi_score = 70 + (rsi - 20) / 15 * 10  # 70->80
+            elif rsi <= 50:
+                rsi_score = 50 + (rsi - 35) / 15 * 10  # 50->60，中性偏弱
+            elif rsi <= 65:  # 收紧：65以上偏暖
+                rsi_score = 60 - (rsi - 50) / 15 * 20  # 60->40
+            elif rsi <= 80:
+                rsi_score = 40 - (rsi - 65) / 15 * 30  # 40->10
+            else:
+                rsi_score = 10  # 超买风险
+            rsi_signal = "bullish" if rsi < 30 else "bearish" if rsi > 65 else "neutral"
+            rsi_desc = f"RSI={rsi:.1f}，{'超卖' if rsi<30 else '超买' if rsi>65 else '正常'}"
         else:
-            rsi_score = 10  # 超买风险
+            rsi_score = float('nan')
+            rsi_signal = "neutral"
+            rsi_desc = "无RSI数据"
         sub_factors.append(FactorScore(
             name="RSI(14)", score=rsi_score, weight=0.15,
             category="technical", raw_value=rsi,
-            signal="bullish" if rsi < 35 else "bearish" if rsi > 70 else "neutral",
-            description=f"RSI={rsi:.1f}，{'超卖' if rsi<30 else '超买' if rsi>70 else '正常'}",
+            signal=rsi_signal,
+            description=rsi_desc,
         ))
         
-        # 5.4 布林带位置评分
+        # 5.4 布林带位置评分（增强看空灵敏度）
         bb = data.bollinger_position
-        if bb <= 0.1:
-            bb_score = 80
-        elif bb <= 0.3:
-            bb_score = 65
-        elif bb <= 0.7:
-            bb_score = 55
-        elif bb <= 0.9:
-            bb_score = 35
+        if not math.isnan(bb):
+            if bb <= 0.15:  # 收紧下轨
+                bb_score = 80
+            elif bb <= 0.3:
+                bb_score = 65
+            elif bb <= 0.5:
+                bb_score = 50  # 中轨严格中性
+            elif bb <= 0.7:
+                bb_score = 40  # 中轨偏上看空
+            elif bb <= 0.85:  # 收紧上轨
+                bb_score = 25
+            else:
+                bb_score = 15  # 极度看空
+            bb_signal = "bullish" if bb < 0.15 else "bearish" if bb > 0.7 else "neutral"
+            bb_desc = f"布林带位置{bb:.1%}，{'下轨' if bb<0.15 else '上轨' if bb>0.7 else '中轨附近'}"
         else:
-            bb_score = 20
+            bb_score = float('nan')
+            bb_signal = "neutral"
+            bb_desc = "无布林带数据"
         sub_factors.append(FactorScore(
             name="布林带位置", score=bb_score, weight=0.12,
             category="technical", raw_value=bb,
-            signal="bullish" if bb < 0.2 else "bearish" if bb > 0.8 else "neutral",
-            description=f"布林带位置{bb:.1%}，{'下轨' if bb<0.2 else '上轨' if bb>0.8 else '中轨附近'}",
+            signal=bb_signal,
+            description=bb_desc,
         ))
         
         # 5.5 量价关系评分
@@ -1040,8 +1214,9 @@ class EnhancedTimingModel:
             description=f"转债指数{'多头' if cb_current>cb_ma20 else '空头'}排列",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -1058,7 +1233,7 @@ class EnhancedTimingModel:
         
         # 6.1 涨跌比
         ad_ratio = data.advance_decline_ratio
-        ad_score = safe_score(ad_ratio, lambda v: sigmoid_score(v, 1.0, steepness=3))
+        ad_score = safe_score(ad_ratio, lambda v: sigmoid_score(v, 1.0, steepness=3), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="涨跌比", score=ad_score, weight=0.20,
             category="sentiment", raw_value=ad_ratio,
@@ -1071,7 +1246,7 @@ class EnhancedTimingModel:
             up = max(data.limit_up_count, 1)
             down = max(data.limit_down_count, 1)
             ld_ratio = up / down
-            ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 2, steepness=1.5))
+            ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 2, steepness=1.5), treat_zero_as_missing=False)
             ld_signal = "bullish" if ld_ratio > 3 else "bearish" if ld_ratio < 1 else "neutral"
             ld_desc = f"涨停{data.limit_up_count} vs 跌停{data.limit_down_count}"
         else:
@@ -1090,7 +1265,7 @@ class EnhancedTimingModel:
             nh = max(data.new_high_count, 1)
             nl = max(data.new_low_count, 1)
             hl_ratio = nh / nl
-            hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 1.5, steepness=2))
+            hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 1.5, steepness=2), treat_zero_as_missing=False)
             hl_signal = "bullish" if hl_ratio > 2 else "bearish" if hl_ratio < 0.7 else "neutral"
             hl_desc = f"60日新高{data.new_high_count} vs 新低{data.new_low_count}"
         else:
@@ -1173,7 +1348,8 @@ class EnhancedTimingModel:
         
         # 6.7 新增开户数（情绪指标，区别于资金面的换手率）
         new_acc = data.new_accounts
-        if new_acc > 0:
+        new_acc_available = new_acc > 0
+        if new_acc_available:
             if new_acc > 200:
                 acc_score = 75  # 大量新入场
             elif new_acc > 100:
@@ -1189,20 +1365,73 @@ class EnhancedTimingModel:
         else:
             acc_score = 50.0
             acc_signal = "neutral"
-            acc_desc = "无新增开户数据"
+            acc_desc = "数据源暂不可用，按中性处理"
         sub_factors.append(FactorScore(
             name="新增开户数", score=acc_score, weight=0.10,
             category="sentiment", raw_value=new_acc,
             signal=acc_signal,
             description=acc_desc,
+            confidence=1.0 if new_acc_available else 0.0,
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
-        cat_score = total / w_sum if w_sum > 0 else 50
+        # 6.8 转债恐慌指标（低于面值占比，反向）
+        cb_below_ratio = data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0
+        if cb_below_ratio > 0:
+            cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=False)
+            cb_panic_signal = "bearish" if cb_below_ratio > 8 else "bullish" if cb_below_ratio < 2 else "neutral"
+            cb_panic_desc = f"{data.cb_below_par_count}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
+        else:
+            cb_panic_score = 50.0
+            cb_panic_signal = "neutral"
+            cb_panic_desc = "无转债数据"
+        sub_factors.append(FactorScore(
+            name="转债恐慌指标", score=cb_panic_score, weight=0.10,
+            category="sentiment", raw_value=cb_below_ratio,
+            signal=cb_panic_signal,
+            description=cb_panic_desc,
+        ))
+        
+        # 6.9 北向资金情绪
+        north = data.north_bound_net_flow
+        if not math.isnan(north) and north != 0:
+            north_score = sigmoid_score(north, 0, steepness=0.03)
+            north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
+            north_desc = f"北向资金{north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}"
+        else:
+            north_score = 50.0
+            north_signal = "neutral"
+            north_desc = "无北向数据"
+        sub_factors.append(FactorScore(
+            name="北向资金情绪", score=north_score, weight=0.10,
+            category="sentiment", raw_value=north,
+            signal=north_signal,
+            description=north_desc,
+        ))
+        
+        # 恐慌时动态增加权重
+        panic_boost = 0.0
+        for sf in sub_factors:
+            if sf.name == "转债恐慌指标" and sf.signal == "bearish":
+                panic_boost += 0.15
+            if sf.name == "波动率指数" and sf.signal == "bearish":
+                panic_boost += 0.10
+            if sf.name == "北向资金情绪" and sf.signal == "bearish":
+                panic_boost += 0.05
+        # 过滤掉NaN项（缺失数据）后再加权
+        valid_factors = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_factors)
+        w_sum = sum(sf.weight for sf in valid_factors)
+        if w_sum > 0:
+            cat_score = total / w_sum
+        else:
+            cat_score = 50.0
+        
+        # 恐慌时额外压低分数
+        if panic_boost > 0:
+            cat_score = max(0, cat_score - panic_boost * 50)
         
         return CategoryScore(
-            name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'],
+            name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'] + panic_boost,
             sub_factors=sub_factors,
             description=self._category_desc(cat_score, ["极度恐慌", "偏悲观", "中性", "偏乐观", "极度亢奋"]),
         )
@@ -1240,8 +1469,9 @@ class EnhancedTimingModel:
             description=f"产业链景气{industry:.0f}，{'上行' if industry>60 else '下行' if industry<40 else '平稳'}",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -1310,7 +1540,7 @@ class EnhancedTimingModel:
         
         # 8.4 GDP增速
         gdp = data.gdp_growth
-        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="GDP增速", score=gdp_score, weight=0.20,
             category="macro", raw_value=gdp,
@@ -1330,7 +1560,7 @@ class EnhancedTimingModel:
         
         # 8.6 社零
         retail = data.retail_sales
-        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="社零增速", score=retail_score, weight=0.10,
             category="macro", raw_value=retail,
@@ -1338,8 +1568,9 @@ class EnhancedTimingModel:
             description=f"社零同比{retail:.1f}%",
         ))
         
-        total = sum(sf.score * sf.weight for sf in sub_factors)
-        w_sum = sum(sf.weight for sf in sub_factors)
+        valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
+        total = sum(sf.score * sf.weight for sf in valid_sub)
+        w_sum = sum(sf.weight for sf in valid_sub)
         cat_score = total / w_sum if w_sum > 0 else 50
         
         return CategoryScore(
@@ -1530,24 +1761,88 @@ class EnhancedTimingModel:
         # 交叉验证
         cross_validations, consensus = self._cross_validate(category_scores, data)
         
-        # 加权综合得分
-        total = sum(cat.score * cat.weight for cat in category_scores.values())
-        w_sum = sum(cat.weight for cat in category_scores.values())
-        if w_sum > 0:
-            total_score = total / w_sum
+        # 加权综合得分（跳过NaN/缺失的大类得分）
+        valid_cats = [(cat.score, cat.weight) for cat in category_scores.values() if not math.isnan(cat.score)]
+        if valid_cats:
+            total = sum(score * weight for score, weight in valid_cats)
+            w_sum = sum(weight for _, weight in valid_cats)
+            total_score = total / w_sum if w_sum > 0 else 50.0
         else:
             total_score = 50.0
         
-        # 一致性调整：如果交叉验证强烈一致，适当调整总分
+        # A. 市场环境反转调整（均值回归视角）
+        # bear=超卖（应加分抄底），bull=超买（应减分防守）
+        regime_penalty = {
+            MarketRegime.STRONG_BEAR: +3,   # 持续熊市只小幅加分（降低高仓位风险）
+            MarketRegime.BEAR: +1,          # 轻度熊市几乎不加分
+            MarketRegime.RANGE: 0,
+            MarketRegime.BULL: -8,          # 牛市大幅减分（加大防守）
+            MarketRegime.STRONG_BULL: -12,  # 强势牛市极端减分（压到最低仓位）
+        }
+        total_score += regime_penalty.get(regime, 0)
+        
+        # B. 多因子共振放大器（解决信号过平滑）
+        # 当多数因子一致看多/看空时，非线性放大得分
+        directions = [self._cat_direction(c) for c in category_scores.values()]
+        bullish_count = sum(1 for d in directions if d == 'bullish')
+        bearish_count = sum(1 for d in directions if d == 'bearish')
+        total_dirs = len(directions)
+        
+        # 共振放大器安全阀：至少6个大类有有效数据才允许放大
+        active_cats = sum(1 for c in category_scores.values() if not math.isnan(c.score))
+        if total_dirs >= 5 and active_cats >= 6:
+            bullish_ratio = bullish_count / total_dirs
+            bearish_ratio = bearish_count / total_dirs
+            
+            if bullish_ratio >= 0.7 and total_score > 55:
+                # 强一致看多，放大
+                total_score = 50 + (total_score - 50) * 1.20
+            elif bullish_ratio >= 0.5 and total_score > 50:
+                # 中等一致看多，小幅放大
+                total_score = 50 + (total_score - 50) * 1.10
+            elif bearish_ratio >= 0.7 and total_score < 45:
+                # 强一致看空，压低
+                total_score = 50 - (50 - total_score) * 1.20
+            elif bearish_ratio >= 0.5 and total_score < 50:
+                # 中等一致看空，小幅压低
+                total_score = 50 - (50 - total_score) * 1.10
+        
+        # C. 交叉验证一致性微调
         if consensus > 70 and total_score > 55:
-            total_score += 3  # 一致看多，加分
+            total_score += 2
         elif consensus < 30 and total_score < 45:
-            total_score -= 3  # 一致看空，减分
+            total_score -= 2
         
         total_score = max(5, min(95, total_score))
         
-        # 仓位映射
-        position_ratio = self._get_position_ratio(total_score)
+        # 数据完整度调节：低完整度时向中性压缩
+        dc = data.data_completeness
+        if dc < 0.5:
+            # 向中性50压缩，完整度越低压缩越厉害
+            total_score = 50 + (total_score - 50) * max(0.2, dc / 0.5)
+            total_score = max(5, min(95, total_score))
+        
+        # 趋势增强：前瞻性触发（MA多头排列 + 价格在均线上）
+        trend_boost = 0.0
+        if regime not in (MarketRegime.BEAR, MarketRegime.STRONG_BEAR):
+            current = data.stock_index_current if not math.isnan(data.stock_index_current) else 0
+            ma20 = data.stock_index_ma20 if not math.isnan(data.stock_index_ma20) else 0
+            ma60 = data.stock_index_ma60 if not math.isnan(data.stock_index_ma60) else 0
+            volume = data.volume_ratio if hasattr(data, 'volume_ratio') and not math.isnan(data.volume_ratio) else 1.0
+            # MA20 > MA60 多头排列且价格在MA20之上，视为趋势早期
+            if ma20 > ma60 and current > ma20 and volume > 1.0:
+                trend_boost = 0.15  # 增加 15% 仓位上限
+
+        # 仓位映射（渐进化：新 regime 前 2 天限制仓位变化幅度）
+        base_position = self._get_position_ratio(total_score, trend_boost)
+        # 如果 regime 未确认（confirm_count < 3），限制单次变化不超过 15%
+        if self._regime_confirm_count < 3:
+            max_change = 0.15
+            position_ratio = max(min(base_position, self._last_position_ratio + max_change),
+                                   self._last_position_ratio - max_change)
+        else:
+            position_ratio = base_position
+        self._last_position_ratio = position_ratio
         
         # 对冲推荐
         hedge_recommended = total_score < self.HEDGE_THRESHOLD
@@ -1586,11 +1881,11 @@ class EnhancedTimingModel:
         
         return signal
     
-    def _get_position_ratio(self, score: float) -> float:
-        """根据得分获取仓位比例"""
+    def _get_position_ratio(self, score: float, trend_boost: float = 0.0) -> float:
+        """根据得分获取仓位比例，支持趋势增强"""
         for threshold, ratio, _ in self.POSITION_MAP:
             if score >= threshold:
-                return ratio
+                return min(ratio + trend_boost, 1.0)
         return 0.05
     
     def _assess_quality(
@@ -1640,11 +1935,10 @@ class EnhancedTimingModel:
     
     def _category_desc(self, score: float, labels: List[str]) -> str:
         """根据得分返回描述"""
-        n = len(labels)
-        if n == 0:
-            return ""
-        idx = int(score / 100 * n)
-        idx = max(0, min(n - 1, idx))
+        if math.isnan(score) or len(labels) == 0:
+            return "数据缺失"
+        idx = int(score / 100 * len(labels))
+        idx = max(0, min(len(labels) - 1, idx))
         return labels[idx]
     
     def get_history(self, days: int = 60) -> List[dict]:
@@ -1921,6 +2215,16 @@ def convert_from_legacy_data(
         if data.treasury_10y_yield <= 0:
             data.treasury_10y_yield = getattr(macro_data, 'treasury_10y_yield', 0) or 0
         data.treasury_2y_yield = getattr(macro_data, 'treasury_2y_yield', 0) or 0
+        # 转债市场核心字段（若 legacy_data 未提供，直接从 MacroData 填充）
+        for attr in (
+            'cb_median_premium', 'cb_median_price', 'cb_avg_daily_amount',
+            'cb_index_current', 'cb_index_change', 'cb_index_ma20', 'cb_index_ma60',
+            'cb_below_par_count', 'cb_count', 'cb_ytm_median',
+        ):
+            if getattr(data, attr, 0) == 0:
+                val = getattr(macro_data, attr, 0)
+                if val:
+                    setattr(data, attr, val)
         if data.pmi <= 0 or data.pmi == 50.0:
             val = getattr(macro_data, 'pmi_current', 0)
             if val > 0:
@@ -2047,6 +2351,10 @@ def convert_from_legacy_data(
             ytms = bonds_df['ytm'].dropna()
             if len(ytms) > 0:
                 data.cb_ytm_median = float(ytms.median())
+                data.cb_ytm_available = True
+            else:
+                # ytm 列存在但全为 NaN → 确认无数据
+                data.cb_ytm_available = False
         
         if 'volume' in bonds_df.columns:
             volumes = bonds_df['volume'].dropna()
@@ -2055,6 +2363,7 @@ def convert_from_legacy_data(
     
     data.data_completeness = min(1.0, sum([
         0.05 if data.cb_median_premium > 0 else 0,
+        0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and data.cb_ytm_median != 0)) else 0,  # 三态: True/推断/False
         0.05 if data.treasury_10y_yield > 0 else 0,
         0.04 if 0 < data.pmi < 100 else 0,
         0.04 if data.cb_avg_daily_amount > 0 else 0,
@@ -2069,22 +2378,20 @@ def convert_from_legacy_data(
         0.03 if data.gdp_growth > 0 else 0,
         0.04 if data.credit_spread > 0 else 0,
         0.03 if data.term_spread > 0 else 0,
-        0.04 if data.north_bound_net_flow != 0 else 0,
-        0.04 if data.main_force_net_flow != 0 else 0,
-        0.03 if data.margin_balance_change != 0 else 0,
+        # 以下字段数据源当前不可用，按中性值返回；不扣减完整度也不额外加分
         0.03 if data.margin_buy_ratio > 0 else 0,
-        0.03 if data.industry_net_inflow_ratio > 0 else 0,
         0.04 if data.stock_pe_median > 0 and data.stock_pb_median > 0 else 0,
+        0.03 if data.stock_pe_percentile > 0 and data.stock_pb_percentile > 0 else 0,
         0.03 if data.industrial_output != 0 else 0,
         0.03 if data.retail_sales != 0 else 0,
         0.03 if data.export_growth != 0 else 0,
         0.02 if data.pcr_ratio > 0 else 0,
         0.02 if data.vix_index > 0 else 0,
-        0.02 if data.new_accounts > 0 else 0,
         0.03 if data.rsi_14 > 0 else 0,
         0.02 if data.bollinger_position > 0 else 0,
         0.02 if data.volume_ratio > 0 else 0,
         0.02 if data.advance_decline_ratio > 0 else 0,
+        0.02 if data.limit_up_count > 0 or data.limit_down_count > 0 else 0,
     ]))
     
     data.updated_at = datetime.now()

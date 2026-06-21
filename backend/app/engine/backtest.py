@@ -723,19 +723,13 @@ def _normalize_date(d) -> date:
 def _dominates(a_metrics: dict, b_metrics: dict, pareto_metrics: list[str]) -> bool:
     """a 支配 b: a 在所有指标上不差于 b，且至少一个指标严格优于 b。
 
-    改进 (2025-06-15ab): 防御性同时支持 dict 和 object 类型的 metrics，
-    优先尝试 dict 索引，失败后回退到 getattr，避免 KeyError。
+    改进 (2025-06-15ae):  metrics 已在前端统一为 dict，直接索引访问，
+    移除 try/getattr 回退以提升 hot path 性能。
     """
-    def _get(m, key):
-        try:
-            return m[key]
-        except (KeyError, TypeError):
-            return getattr(m, key, 0.0)
-
     better_in_any = False
     for m in pareto_metrics:
-        a_val = _get(a_metrics, m)
-        b_val = _get(b_metrics, m)
+        a_val = a_metrics[m]
+        b_val = b_metrics[m]
         if m == 'max_drawdown_pct':
             if a_val > b_val:
                 return False
