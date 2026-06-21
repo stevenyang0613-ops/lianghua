@@ -20,7 +20,12 @@ class Settings(BaseSettings):
     market_refresh_interval: int = 60
     trading_refresh_interval: int = 10
     off_hours_refresh_interval: int = 60
-    allowed_origins: List[str] = ["http://localhost:5173", "http://localhost:8765", "null", "file://"]
+    allowed_origins: List[str] = [
+        "http://localhost:5173", "http://127.0.0.1:5173",  # Vite dev server
+        "http://localhost:8765", "http://127.0.0.1:8765",  # Backend direct
+        "http://localhost:8766", "http://127.0.0.1:8766",  # Electron frontend server
+        "null", "file://",  # Electron file:// and iframe
+    ]
     ws_auth_token: str = ""
 
     # SQLAlchemy 数据库 (AI/认证模块使用)
@@ -38,9 +43,11 @@ class Settings(BaseSettings):
     # AI 配置
     OPENAI_API_KEY: str = ""
     OPENAI_API_BASE: str = "https://api.openai.com/v1"
+    OPENAI_MODEL: str = "gpt-4"
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
     TAVILY_API_KEY: str = ""
     GITHUB_TOKEN: str = ""
 

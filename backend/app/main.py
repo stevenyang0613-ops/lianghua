@@ -155,6 +155,21 @@ import threading
 import time
 from pathlib import Path
 from contextlib import asynccontextmanager
+
+# 抑制 py_mini_racer (cninfo 数据源) 的 mr_free_context GC 错误
+# 该错误在 macOS Electron 沙盒中频繁触发但不影响功能
+# sys.excepthook 无法拦截 GC __del__ 中的异常，需直接 patch 类方法
+try:
+    import py_mini_racer
+    _original_del = py_mini_racer.MiniRacer.__del__
+    def _quiet_del(self):
+        try:
+            _original_del(self)
+        except (AttributeError, TypeError):
+            pass  # 静默处理 mr_free_context 等清理错误
+    py_mini_racer.MiniRacer.__del__ = _quiet_del
+except (ImportError, AttributeError):
+    pass  # py_mini_racer 不可用或已更新，跳过
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -170,6 +185,19 @@ class SafeJSONResponse(JSONResponse):
 
 
 def _clean_nan(obj):
+    import numpy as np
+    if isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return [_clean_nan(v) for v in obj.tolist()]
+    if isinstance(obj, np.generic):
+        return obj.item()
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
@@ -346,11 +374,23 @@ async def lifespan(app: FastAPI):
     # Connect signal engine to market engine for real-time signal generation
     engine.subscribe(signal_engine.process_quotes)
 
+    # Initialize PaperTradeManager for simulated trading
+    try:
+        from app.engine.paper_trade_manager import PaperTradeManager
+        paper_trade_manager = PaperTradeManager(storage=storage, market_engine=engine)
+        paper_trade_manager.load_accounts()
+        paper_trade_manager.ensure_default_accounts()
+        app.state.paper_trade_manager = paper_trade_manager
+        engine.subscribe(paper_trade_manager.on_quotes)
+        print(f"[Startup] ✅ PaperTradeManager initialized ({len(paper_trade_manager._accounts)} accounts)")
+    except Exception as e:
+        print(f"[Startup] ⚠ PaperTradeManager init failed (non-fatal): {e}")
+
     # 注册择时信号定时刷新任务（每5分钟刷新一次宏观数据+择时信号）
     async def _refresh_timing_signal():
         try:
-            bonds = await engine.get_all_quotes()
-            await macro_data_service.fetch_macro_data(bonds)
+            from app.api.xb_strategy import refresh_timing_signal_caches
+            await refresh_timing_signal_caches(engine, macro_data_service)
             logger.info("[Scheduler] Timing signal refreshed")
         except Exception as e:
             logger.warning(f"[Scheduler] Timing signal refresh failed: {e}")
@@ -438,7 +478,7 @@ async def lifespan(app: FastAPI):
         try:
             import numpy as np
             import pandas as pd
-            from app.strategies.songgang_seven_dimension import SonggangSevenDimensionStrategy
+            from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
             bonds = await engine.get_all_quotes()
             if not bonds:
@@ -455,11 +495,11 @@ async def lifespan(app: FastAPI):
                     'conversion_value': b.conversion_value or 0,
                     'stock_price': b.stock_price or 0, 'stock_change_pct': b.stock_change_pct or 0,
                     'forced_call_days': b.forced_call_days or 0,
-                    'date': datetime.now().date(),
+                    'date': datetime.datetime.now().date(),
                 })
 
             df = pd.DataFrame(rows)
-            strategy = SonggangSevenDimensionStrategy()
+            strategy = XibuSevenDimensionStrategy()
             strategy.on_init(df)
 
             scores = []
@@ -481,6 +521,13 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[Scheduler] Seven-dim snapshot refresh failed: {e}")
 
     scheduler.add_daily_task("refresh_seven_dim_history", _refresh_seven_dim_history, datetime.time(16, 30))
+
+    # 启动调度器（此前只添加了任务但未启动，导致所有定时任务从未执行）
+    try:
+        await scheduler.start()
+        logger.info("[Startup] Scheduler started")
+    except Exception as e:
+        logger.warning(f"[Startup] Scheduler start failed: {e}")
 
     logger.info(f"Starting {_settings.app_name} on {_settings.host}:{_settings.port}")
 
@@ -553,6 +600,40 @@ async def lifespan(app: FastAPI):
                 logger.info("[Startup] DataEnrich subprocess 3 started (spot/vol/fund-flow/bond-price)")
             except Exception as e:
                 logger.warning(f"[Startup] DataEnrich subprocess 3 start failed: {e}")
+
+            # 延迟刷新模拟盘持仓价格（轮询等待 MarketEngine 有行情数据后再刷新）
+            async def _delayed_refresh_paper_positions():
+                max_attempts = 10  # 最多尝试10次（5分钟）
+                for attempt in range(max_attempts):
+                    await asyncio.sleep(30)
+                    try:
+                        ptm = getattr(app.state, 'paper_trade_manager', None)
+                        if ptm is None:
+                            break
+                        # 检查 MarketEngine 是否已有行情数据
+                        me = getattr(app.state, 'engine', None)
+                        has_quotes = False
+                        if me is not None:
+                            # 如果 MarketEngine 明确标记 is_running=False（已停止），跳过本次等待
+                            # 注意：is_running 为 None 或不存在时，不跳过（引擎可能正在初始化）
+                            if getattr(me, 'is_running', None) is False:
+                                logger.debug("[Startup] PaperTrade waiting: MarketEngine not running yet (attempt %d/%d)" % (attempt + 1, max_attempts))
+                                continue
+                            lq = getattr(me, 'latest_quotes', None)
+                            if lq is None:
+                                gf = getattr(me, 'get_latest_quotes', None)
+                                if gf:
+                                    lq = gf()
+                            has_quotes = lq is not None and len(lq) > 0
+                        if has_quotes:
+                            ptm._refresh_position_prices()
+                            logger.info("[Startup] PaperTrade position prices refreshed (attempt %d)" % (attempt + 1))
+                            break
+                        else:
+                            logger.debug("[Startup] PaperTrade waiting for MarketEngine quotes (attempt %d/%d)" % (attempt + 1, max_attempts))
+                    except Exception as e:
+                        logger.debug(f"[Startup] Delayed position price refresh failed: {e}")
+            asyncio.create_task(_delayed_refresh_paper_positions())
 
             # 评分快照：直接从主进程运行（不再创建子进程，避免 DuckDB 锁冲突）
             try:
@@ -672,10 +753,21 @@ else:
 
 @app.middleware("http")
 async def spa_fallback(request: Request, call_next):
-    """动态 SPA 回退中间件：未匹配 GET 请求返回 index.html"""
+    """动态 SPA 回退中间件：优先返回真实静态文件，否则回退到 index.html"""
+    if (
+        request.method == "GET"
+        and not request.url.path.startswith("/api/")
+        and not request.url.path.startswith("/health")
+        and _frontend_dist is not None
+    ):
+        rel_path = request.url.path.lstrip('/')
+        if rel_path:
+            static_path = _frontend_dist / rel_path
+            if static_path.exists() and static_path.is_file():
+                return FileResponse(static_path)
     response = await call_next(request)
     if response.status_code == 404 and request.method == "GET":
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") or request.url.path.startswith("/health"):
             return response
         # 动态检查 frontend dist 是否存在（支持热构建场景）
         dist_dir = _frontend_dist
