@@ -1,6 +1,7 @@
 import os
 import threading
 import uuid
+import json
 from contextlib import contextmanager
 
 import duckdb
@@ -12,6 +13,31 @@ import logging
 from app.models.convertible import ConvertibleQuote
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_double(v, default=None, *, reject_neg1=False):
+    """确保值是 DOUBLE 兼容类型（float/int/None），拒绝字符串误入数值列。
+    
+    Args:
+        reject_neg1: 如果为 True，将 -1 视为标记值并返回 None（用于 gpm 列，
+                     -1 是"银行无毛利率"的应用层标记，不应持久化到数据库）。
+    """
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        if reject_neg1 and v == -1:
+            return None
+        return v
+    if isinstance(v, str):
+        # 字符串值不应出现在 DOUBLE 列中，强制转为 None 避免插入报错
+        try:
+            fv = float(v)
+            if reject_neg1 and fv == -1:
+                return None
+            return fv
+        except (ValueError, TypeError):
+            return default
+    return default
 
 
 class DataStorage:
@@ -537,6 +563,45 @@ class DataStorage:
             )
         """)
 
+        # 模拟盘账户表
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS paper_accounts (
+                id VARCHAR PRIMARY KEY,
+                strategy_id VARCHAR,
+                strategy_name VARCHAR,
+                initial_cash DOUBLE DEFAULT 100000,
+                is_running BOOLEAN DEFAULT FALSE,
+                params_json VARCHAR DEFAULT '{}',
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP
+            )
+        """)
+
+        # 模拟盘权益曲线表
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS paper_equity (
+                account_id VARCHAR,
+                ts TIMESTAMP,
+                total_asset DOUBLE,
+                cash DOUBLE,
+                market_value DOUBLE,
+                total_profit DOUBLE,
+                total_profit_pct DOUBLE
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_equity_account ON paper_equity(account_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_equity_ts ON paper_equity(account_id, ts)")
+
+        # 模拟盘账户状态持久化列迁移
+        for ddl in (
+            "ALTER TABLE paper_accounts ADD COLUMN cash_balance DOUBLE DEFAULT 0",
+            "ALTER TABLE paper_accounts ADD COLUMN positions_json VARCHAR DEFAULT '[]'",
+        ):
+            try:
+                self._conn.execute(ddl)
+            except Exception:
+                pass
+
     def _query_to_dicts(self, cursor) -> list[dict]:
         """从 cursor.description 获取列名，兼容别名和 JOIN 查询"""
         columns = [desc[0] for desc in cursor.description]
@@ -631,46 +696,46 @@ class DataStorage:
     def _get_qh_row(self, q):
         """Build a tuple for quotes_history upsert matching _QH_INSERT_COLS order"""
         return (
-            q.code, q.name, q.price, q.change_pct,
-            q.stock_price, q.stock_change_pct, q.conversion_price,
-            q.conversion_value, q.premium_ratio, q.dual_low,
-            q.ytm, q.volume, q.remaining_years, q.forced_call_days,
+            q.code, q.name, _safe_double(q.price), _safe_double(q.change_pct),
+            _safe_double(q.stock_price), _safe_double(q.stock_change_pct), _safe_double(q.conversion_price),
+            _safe_double(q.conversion_value), _safe_double(q.premium_ratio), _safe_double(q.dual_low),
+            _safe_double(q.ytm), _safe_double(q.volume), _safe_double(q.remaining_years), _safe_double(q.forced_call_days),
             bool(getattr(q, "is_called", False)),
             str(getattr(q, "call_status", "") or ""),
             getattr(q, "last_trade_date", None),
             getattr(q, "maturity_date", None),
-            float(getattr(q, "redemption_price", 0.0) or 0.0),
+            _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
             q.timestamp,
             getattr(q, "stock_code", None) or None,
             getattr(q, "stock_name", None) or None,
             json.dumps(getattr(q, "concepts", None) or []) if getattr(q, "concepts", None) else None,
-            getattr(q, "roe", None),
-            getattr(q, "gpm", None),
-            getattr(q, "cagr", None),
-            getattr(q, "debt_ratio", None),
-            getattr(q, "pe", None),
-            getattr(q, "pb", None),
-            getattr(q, "iv", None),
-            getattr(q, "iv_source", None),
-            getattr(q, "buyback_amount", None),
-            getattr(q, "mgmt_buy_price", None),
+            _safe_double(getattr(q, "roe", None)),
+            _safe_double(getattr(q, "gpm", None), reject_neg1=True),
+            _safe_double(getattr(q, "cagr", None)),
+            _safe_double(getattr(q, "debt_ratio", None)),
+            _safe_double(getattr(q, "pe", None)),
+            _safe_double(getattr(q, "pb", None)),
+            _safe_double(getattr(q, "iv", None)),
+            str(getattr(q, "iv_source", "") or ""),
+            _safe_double(getattr(q, "buyback_amount", None)),
+            _safe_double(getattr(q, "mgmt_buy_price", None)),
             getattr(q, "industry", None),
             getattr(q, "rating", None),
-            getattr(q, "turnover_rate", None),
-            getattr(q, "current_ratio", None),
-            getattr(q, "outstanding_scale", None),
-            getattr(q, "net_capital_flow", None),
-            getattr(q, "net_capital_flow_pct", None),
-            getattr(q, "net_super_flow", None),
-            getattr(q, "net_big_flow", None),
-            getattr(q, "pledge_ratio", None),
-            getattr(q, "momentum_5d", None),
-            getattr(q, "momentum_10d", None),
-            getattr(q, "momentum_20d", None),
-            getattr(q, "momentum_60d", None),
-            getattr(q, "event_score", None),
+            _safe_double(getattr(q, "turnover_rate", None)),
+            _safe_double(getattr(q, "current_ratio", None)),
+            _safe_double(getattr(q, "outstanding_scale", None)),
+            _safe_double(getattr(q, "net_capital_flow", None)),
+            _safe_double(getattr(q, "net_capital_flow_pct", None)),
+            _safe_double(getattr(q, "net_super_flow", None)),
+            _safe_double(getattr(q, "net_big_flow", None)),
+            _safe_double(getattr(q, "pledge_ratio", None)),
+            _safe_double(getattr(q, "momentum_5d", None)),
+            _safe_double(getattr(q, "momentum_10d", None)),
+            _safe_double(getattr(q, "momentum_20d", None)),
+            _safe_double(getattr(q, "momentum_60d", None)),
+            _safe_double(getattr(q, "event_score", None)),
             getattr(q, "event_detail", None),
-            getattr(q, "bond_value", None),
+            _safe_double(getattr(q, "bond_value", None)),
         )
 
     def save_quotes_batch(self, quotes: list[ConvertibleQuote]) -> None:
@@ -743,36 +808,38 @@ class DataStorage:
             "call_status": str(getattr(q, "call_status", "") or ""),
             "last_trade_date": getattr(q, "last_trade_date", None),
             "maturity_date": getattr(q, "maturity_date", None),
-            "redemption_price": float(getattr(q, "redemption_price", 0.0) or 0.0),
+            "redemption_price": _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
             "timestamp": q.timestamp,
             "stock_code": getattr(q, "stock_code", None) or None,
-            "roe": getattr(q, "roe", None),
-            "gpm": getattr(q, "gpm", None),
-            "cagr": getattr(q, "cagr", None),
-            "debt_ratio": getattr(q, "debt_ratio", None),
-            "pe": getattr(q, "pe", None),
-            "pb": getattr(q, "pb", None),
-            "iv": getattr(q, "iv", None),
-            "iv_source": getattr(q, "iv_source", None),
-            "buyback_amount": getattr(q, "buyback_amount", None),
-            "mgmt_buy_price": getattr(q, "mgmt_buy_price", None),
+            "stock_name": getattr(q, "stock_name", None) or None,
+            "concepts": json.dumps(getattr(q, "concepts", None) or []) if getattr(q, "concepts", None) else None,
+            "roe": _safe_double(getattr(q, "roe", None)),
+            "gpm": _safe_double(getattr(q, "gpm", None), reject_neg1=True),
+            "cagr": _safe_double(getattr(q, "cagr", None)),
+            "debt_ratio": _safe_double(getattr(q, "debt_ratio", None)),
+            "pe": _safe_double(getattr(q, "pe", None)),
+            "pb": _safe_double(getattr(q, "pb", None)),
+            "iv": _safe_double(getattr(q, "iv", None)),
+            "iv_source": str(getattr(q, "iv_source", None) or ""),
+            "buyback_amount": _safe_double(getattr(q, "buyback_amount", None)),
+            "mgmt_buy_price": _safe_double(getattr(q, "mgmt_buy_price", None)),
             "industry": getattr(q, "industry", None),
             "rating": getattr(q, "rating", None),
-            "turnover_rate": getattr(q, "turnover_rate", None),
-            "current_ratio": getattr(q, "current_ratio", None),
-            "outstanding_scale": getattr(q, "outstanding_scale", None),
-            "net_capital_flow": getattr(q, "net_capital_flow", None),
-            "net_capital_flow_pct": getattr(q, "net_capital_flow_pct", None),
-            "net_super_flow": getattr(q, "net_super_flow", None),
-            "net_big_flow": getattr(q, "net_big_flow", None),
-            "pledge_ratio": getattr(q, "pledge_ratio", None),
-            "momentum_5d": getattr(q, "momentum_5d", None),
-            "momentum_10d": getattr(q, "momentum_10d", None),
-            "momentum_20d": getattr(q, "momentum_20d", None),
-            "momentum_60d": getattr(q, "momentum_60d", None),
-            "event_score": getattr(q, "event_score", None),
+            "turnover_rate": _safe_double(getattr(q, "turnover_rate", None)),
+            "current_ratio": _safe_double(getattr(q, "current_ratio", None)),
+            "outstanding_scale": _safe_double(getattr(q, "outstanding_scale", None)),
+            "net_capital_flow": _safe_double(getattr(q, "net_capital_flow", None)),
+            "net_capital_flow_pct": _safe_double(getattr(q, "net_capital_flow_pct", None)),
+            "net_super_flow": _safe_double(getattr(q, "net_super_flow", None)),
+            "net_big_flow": _safe_double(getattr(q, "net_big_flow", None)),
+            "pledge_ratio": _safe_double(getattr(q, "pledge_ratio", None)),
+            "momentum_5d": _safe_double(getattr(q, "momentum_5d", None)),
+            "momentum_10d": _safe_double(getattr(q, "momentum_10d", None)),
+            "momentum_20d": _safe_double(getattr(q, "momentum_20d", None)),
+            "momentum_60d": _safe_double(getattr(q, "momentum_60d", None)),
+            "event_score": _safe_double(getattr(q, "event_score", None)),
             "event_detail": getattr(q, "event_detail", None),
-            "bond_value": getattr(q, "bond_value", None),
+            "bond_value": _safe_double(getattr(q, "bond_value", None)),
         }
         return tuple(row_map.get(c) for c in cols)
 
@@ -796,19 +863,19 @@ class DataStorage:
                 row = (
                     quote.code, quote.name, quote.price, quote.price, quote.price,
                     quote.price, quote.volume, snapshot_date,
-                    _g('premium_ratio', 0) or 0, _g('change_pct', 0) or 0,
-                    _g('stock_price', 0) or 0, _g('conversion_value', 0) or 0,
-                    _g('dual_low', 0) or 0, _g('ytm', 0) or 0,
-                    _g('remaining_years', 0) or 0, _g('roe'), _g('gpm'), _g('cagr'),
-                    _g('debt_ratio'), _g('pe'), _g('pb'), _g('iv'), _g('iv_source'),
-                    _g('buyback_amount'), _g('mgmt_buy_price'), _g('industry'), _g('rating'),
-                    _g('outstanding_scale', 0) or 0, _g('stock_code', '') or '',
-                    _g('turnover_rate'), _g('current_ratio'),
-                    _g('net_capital_flow'), _g('net_capital_flow_pct'),
-                    _g('net_super_flow'), _g('net_big_flow'),
-                    _g('pledge_ratio'),
-                    _g('momentum_5d'), _g('momentum_10d'), _g('momentum_20d'), _g('momentum_60d'),
-                    _g('event_score'), _g('event_detail'), _g('bond_value'),
+                    _safe_double(_g('premium_ratio'), 0), _safe_double(_g('change_pct'), 0),
+                    _safe_double(_g('stock_price'), 0), _safe_double(_g('conversion_value'), 0),
+                    _safe_double(_g('dual_low'), 0), _safe_double(_g('ytm'), 0),
+                    _safe_double(_g('remaining_years'), 0), _safe_double(_g('roe')), _safe_double(_g('gpm'), reject_neg1=True), _safe_double(_g('cagr')),
+                    _safe_double(_g('debt_ratio')), _safe_double(_g('pe')), _safe_double(_g('pb')), _safe_double(_g('iv')), str(_g('iv_source') or ''),
+                    _safe_double(_g('buyback_amount')), _safe_double(_g('mgmt_buy_price')), _g('industry'), _g('rating'),
+                    _safe_double(_g('outstanding_scale'), 0), _g('stock_code', '') or '',
+                    _safe_double(_g('turnover_rate')), _safe_double(_g('current_ratio')),
+                    _safe_double(_g('net_capital_flow')), _safe_double(_g('net_capital_flow_pct')),
+                    _safe_double(_g('net_super_flow')), _safe_double(_g('net_big_flow')),
+                    _safe_double(_g('pledge_ratio')),
+                    _safe_double(_g('momentum_5d')), _safe_double(_g('momentum_10d')), _safe_double(_g('momentum_20d')), _safe_double(_g('momentum_60d')),
+                    _safe_double(_g('event_score')), _g('event_detail'), _safe_double(_g('bond_value')),
                 )
                 cols = ", ".join(_DS_COLS)
                 phs = ", ".join("?" for _ in _DS_COLS)
@@ -1363,7 +1430,6 @@ class DataStorage:
 
     def save_backtest_result(self, summary: dict, details: list[dict], params: dict) -> int:
         """保存回测结果，返回backtest_id"""
-        import json
         with self._write() as conn:
             conn.execute("""
                 INSERT INTO backtest_results
@@ -1583,7 +1649,6 @@ class DataStorage:
 
     def add_combo_alert(self, alert: dict) -> int:
         """添加组合预警"""
-        import json
         with self._write() as conn:
             conn.execute("""
                 INSERT INTO combo_alerts (name, description, conditions, logic, enabled, created_at)
@@ -1602,7 +1667,6 @@ class DataStorage:
 
     def get_combo_alerts(self, enabled_only: bool = False) -> list[dict]:
         """获取所有组合预警"""
-        import json
         where = "WHERE enabled = TRUE" if enabled_only else ""
         cursor = self.conn.execute(f"SELECT * FROM combo_alerts {where}")
         alerts = self._query_to_dicts(cursor)
