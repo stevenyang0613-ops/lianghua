@@ -21,6 +21,7 @@ class TonghuashunAdapter(DataSourceAdapter):
     def __init__(self, config: DataSourceConfig):
         super().__init__(config)
         self._ths = None
+        self._ths_logout = None
 
     async def connect(self) -> bool:
         """建立iFinD连接"""
@@ -55,7 +56,7 @@ class TonghuashunAdapter(DataSourceAdapter):
 
     async def disconnect(self) -> None:
         """断开连接"""
-        if self._ths_logout:
+        if getattr(self, '_ths_logout', None):
             await asyncio.to_thread(self._ths_logout)
         self._connected = False
         logger.info("[iFinD] Disconnected")

@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 class CNInfoAdapter(DataSourceAdapter):
     """巨潮资讯适配器 - 公告数据源"""
 
-    BASE_URL = "http://www.cninfo.com.cn/new"
-    DISCLOSURE_URL = "http://www.cninfo.com.cn/new/disclosure"
+    BASE_URL = "https://www.cninfo.com.cn/new"
+    DISCLOSURE_URL = "https://www.cninfo.com.cn/new/disclosure"
 
     def __init__(self, config: DataSourceConfig):
         super().__init__(config)

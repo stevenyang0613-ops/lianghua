@@ -22,15 +22,15 @@ class EastmoneyAdapter(DataSourceAdapter):
     """东方财富适配器 - 全数据类型支持"""
 
     # API 端点
-    QUOTE_URL = "http://push2.eastmoney.com/api/qt/ulist.np"
-    CONVERTIBLE_URL = "http://datacenter-web.eastmoney.com/api/data/v1/get"
-    STOCK_QUOTE_URL = "http://push2.eastmoney.com/api/qt/stock/get"
-    KLINE_URL = "http://push2.eastmoney.com/api/qt/stock/kline/get"
-    FINANCIAL_URL = "http://datacenter-web.eastmoney.com/api/data/v1/get"
-    INDUSTRY_URL = "http://push2.eastmoney.com/api/qt/clist/get"
-    ANNOUNCEMENT_URL = "http://np-anotice-stock.eastmoney.com/api/security/ann"
-    FUND_FLOW_URL = "http://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
-    CB_DETAIL_URL = "http://datacenter-web.eastmoney.com/api/data/v1/get"
+    QUOTE_URL = "https://push2.eastmoney.com/api/qt/ulist.np"
+    CONVERTIBLE_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    STOCK_QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+    KLINE_URL = "https://push2.eastmoney.com/api/qt/stock/kline/get"
+    FINANCIAL_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    INDUSTRY_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+    ANNOUNCEMENT_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    FUND_FLOW_URL = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+    CB_DETAIL_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
     # Eastmoney 字段映射 - 全量
     QUOTE_FIELD_MAP = {
@@ -120,7 +120,7 @@ class EastmoneyAdapter(DataSourceAdapter):
                 timeout=aiohttp.ClientTimeout(total=self._config.timeout),
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Referer': 'http://data.eastmoney.com/',
+                    'Referer': 'https://data.eastmoney.com/',
                 }
             )
             self._connected = True
@@ -332,7 +332,7 @@ class EastmoneyAdapter(DataSourceAdapter):
                                 'pre_close': d.get('f47', 0),
                                 'change_pct': d.get('f170', 0),
                                 'change': d.get('f171', 0),
-                                'volume': d.get('f47', 0),
+                                'volume': d.get('f50', 0),
                                 'amount': d.get('f48', 0),
                                 'pe': d.get('f57', 0),
                                 'turnover_rate': d.get('f58', 0),
@@ -535,10 +535,10 @@ class EastmoneyAdapter(DataSourceAdapter):
             # 获取宏观经济指标
             results = []
             urls = [
-                ("CPI", "http://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000001\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
-                ("PMI", "http://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000013\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
-                ("GDP", "http://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000004\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
-                ("M2", "http://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO_GJ&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000041\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
+                ("CPI", "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000001\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
+                ("PMI", "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000013\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
+                ("GDP", "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000004\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
+                ("M2", "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_ECON_MACRO_GJ&columns=ALL&filter=(INDICATOR_ID=\"EMI000000000041\")&pageSize=10&pageNumber=1&sortTypes=-1&sortColumns=REPORT_DATE"),
             ]
 
             for name, url in urls:

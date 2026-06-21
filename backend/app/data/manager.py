@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
@@ -165,6 +166,9 @@ class DataSourceManager:
             if use_cache and not result.empty:
                 self._cache[cache_key] = result
                 self._cache_ttl[cache_key] = datetime.now() + timedelta(seconds=cache_ttl)
+                # 随机采样淘汰：每次 set 有 5% 概率检查过期缓存
+                if len(self._cache) > 100 and random.random() < 0.05:
+                    self._clear_expired()
 
             return result
 
@@ -261,6 +265,15 @@ class DataSourceManager:
         self._cache_ttl.clear()
         return count
 
+    def _clear_expired(self) -> int:
+        """清除已过期缓存条目，防止内存无限增长"""
+        now = datetime.now()
+        expired = [k for k, t in self._cache_ttl.items() if now >= t]
+        for k in expired:
+            self._cache.pop(k, None)
+            self._cache_ttl.pop(k, None)
+        return len(expired)
+
     async def health_check(self) -> Dict[str, Any]:
         """健康检查所有数据源"""
         results = {}
@@ -321,6 +334,19 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
             is_primary=True,
             failover_to='eastmoney',
         )
+
+    # 注册东方财富妙想MX（需要API Key）- 行情/财务/资讯
+    if config.get('mx', {}).get('enabled', True):
+        try:
+            from .adapters.mx_adapter import MXAdapter
+            adapter = MXAdapter()
+            connected = await adapter.connect()
+            if connected:
+                logger.info(f'[DataSource] Registered: mx (priority=80, primary=True, api_key={adapter._api_key[:8]}...)')
+            else:
+                logger.info('[DataSource] MX adapter skipped: MX_APIKEY not set')
+        except Exception as e:
+            logger.warning(f'[DataSource] MX adapter registration failed: {e}')
 
     # 注册Wind（需要授权）
     if config.get('wind', {}).get('enabled', False):
