@@ -56,3 +56,10 @@ builder-debug.yml
 builder-effective-config.yaml
 /build
 /dist/lianghua-backend
+
+# Electron release artifacts
+electron/release-dev/
+electron/release/
+
+# Playwright MCP
+.playwright-mcp/
