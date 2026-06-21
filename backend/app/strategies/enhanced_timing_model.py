@@ -1530,7 +1530,7 @@ class EnhancedTimingModel:
         
         # 8.3 出口增速
         export = data.export_growth
-        export_score = safe_score(export, lambda v: sigmoid_score(v, 5, steepness=1.5))
+        export_score = safe_score(export, lambda v: sigmoid_score(v, 5, steepness=1.5), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="出口增速", score=export_score, weight=0.15,
             category="macro", raw_value=export,
@@ -1550,7 +1550,7 @@ class EnhancedTimingModel:
         
         # 8.5 工业增加值
         io = data.industrial_output
-        io_score = safe_score(io, lambda v: sigmoid_score(v, 5.0, steepness=2))
+        io_score = safe_score(io, lambda v: sigmoid_score(v, 5.0, steepness=2), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="工业增加值", score=io_score, weight=0.15,
             category="macro", raw_value=io,
