@@ -246,6 +246,20 @@ class DataStorage:
             "ALTER TABLE quotes_history ADD COLUMN bond_value DOUBLE",
             "ALTER TABLE quotes_history ADD COLUMN stock_name VARCHAR",
             "ALTER TABLE quotes_history ADD COLUMN concepts JSON",
+            "ALTER TABLE quotes_history ADD COLUMN hv DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN rating_score DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN pure_bond_premium_ratio DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN north_net DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN margin_balance DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN lhb_count INTEGER",
+            "ALTER TABLE quotes_history ADD COLUMN block_trade_amount DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN holder_num_change DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN eps_forecast DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN eps DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN bps DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN revenue_yoy DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN profit_yoy DOUBLE",
+            "ALTER TABLE quotes_history ADD COLUMN restricted_release_amount DOUBLE",
         ]
         for ddl in _NEW_QH_COLS:
             try:
@@ -298,6 +312,20 @@ class DataStorage:
             "ALTER TABLE daily_snapshots ADD COLUMN event_score DOUBLE",
             "ALTER TABLE daily_snapshots ADD COLUMN event_detail VARCHAR",
             "ALTER TABLE daily_snapshots ADD COLUMN bond_value DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN hv DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN rating_score DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN pure_bond_premium_ratio DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN north_net DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN margin_balance DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN lhb_count INTEGER",
+            "ALTER TABLE daily_snapshots ADD COLUMN block_trade_amount DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN holder_num_change DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN eps_forecast DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN eps DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN bps DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN revenue_yoy DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN profit_yoy DOUBLE",
+            "ALTER TABLE daily_snapshots ADD COLUMN restricted_release_amount DOUBLE",
         ):
             try:
                 self._conn.execute(ddl)
@@ -626,6 +654,10 @@ class DataStorage:
         "pledge_ratio",
         "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
         "event_score", "event_detail", "bond_value",
+        "hv", "rating_score", "pure_bond_premium_ratio",
+        "north_net", "margin_balance", "lhb_count", "block_trade_amount",
+        "holder_num_change", "eps_forecast", "eps", "bps",
+        "revenue_yoy", "profit_yoy", "restricted_release_amount",
     ]
     _QH_ALWAYS_OVERWRITE = {"price"}
     _QH_COALESCE_MERGE = {
@@ -638,8 +670,12 @@ class DataStorage:
         "pledge_ratio",
         "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
         "event_score", "event_detail", "bond_value",
+        "hv", "rating_score", "pure_bond_premium_ratio",
+        "north_net", "margin_balance", "lhb_count", "block_trade_amount",
+        "holder_num_change", "eps_forecast", "eps", "bps",
+        "revenue_yoy", "profit_yoy", "restricted_release_amount",
     }
-    _QH_UPSERT_VERSION = "v2"
+    _QH_UPSERT_VERSION = "v3"
 
     def _build_qh_upsert_sql(self) -> str:
         cols = self._QH_INSERT_COLS
@@ -736,6 +772,20 @@ class DataStorage:
             _safe_double(getattr(q, "event_score", None)),
             getattr(q, "event_detail", None),
             _safe_double(getattr(q, "bond_value", None)),
+            _safe_double(getattr(q, "hv", None)),
+            _safe_double(getattr(q, "rating_score", None)),
+            _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
+            _safe_double(getattr(q, "north_net", None)),
+            _safe_double(getattr(q, "margin_balance", None)),
+            getattr(q, "lhb_count", None),
+            _safe_double(getattr(q, "block_trade_amount", None)),
+            _safe_double(getattr(q, "holder_num_change", None)),
+            _safe_double(getattr(q, "eps_forecast", None)),
+            _safe_double(getattr(q, "eps", None)),
+            _safe_double(getattr(q, "bps", None)),
+            _safe_double(getattr(q, "revenue_yoy", None)),
+            _safe_double(getattr(q, "profit_yoy", None)),
+            _safe_double(getattr(q, "restricted_release_amount", None)),
         )
 
     def save_quotes_batch(self, quotes: list[ConvertibleQuote]) -> None:
@@ -840,6 +890,20 @@ class DataStorage:
             "event_score": _safe_double(getattr(q, "event_score", None)),
             "event_detail": getattr(q, "event_detail", None),
             "bond_value": _safe_double(getattr(q, "bond_value", None)),
+            "hv": _safe_double(getattr(q, "hv", None)),
+            "rating_score": _safe_double(getattr(q, "rating_score", None)),
+            "pure_bond_premium_ratio": _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
+            "north_net": _safe_double(getattr(q, "north_net", None)),
+            "margin_balance": _safe_double(getattr(q, "margin_balance", None)),
+            "lhb_count": getattr(q, "lhb_count", None),
+            "block_trade_amount": _safe_double(getattr(q, "block_trade_amount", None)),
+            "holder_num_change": _safe_double(getattr(q, "holder_num_change", None)),
+            "eps_forecast": _safe_double(getattr(q, "eps_forecast", None)),
+            "eps": _safe_double(getattr(q, "eps", None)),
+            "bps": _safe_double(getattr(q, "bps", None)),
+            "revenue_yoy": _safe_double(getattr(q, "revenue_yoy", None)),
+            "profit_yoy": _safe_double(getattr(q, "profit_yoy", None)),
+            "restricted_release_amount": _safe_double(getattr(q, "restricted_release_amount", None)),
         }
         return tuple(row_map.get(c) for c in cols)
 
@@ -855,6 +919,10 @@ class DataStorage:
             "pledge_ratio",
             "momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d",
             "event_score", "event_detail", "bond_value",
+            "hv", "rating_score", "pure_bond_premium_ratio",
+            "north_net", "margin_balance", "lhb_count", "block_trade_amount",
+            "holder_num_change", "eps_forecast", "eps", "bps",
+            "revenue_yoy", "profit_yoy", "restricted_release_amount",
         ]
         with self._write() as conn:
             for quote in quotes:
@@ -876,6 +944,11 @@ class DataStorage:
                     _safe_double(_g('pledge_ratio')),
                     _safe_double(_g('momentum_5d')), _safe_double(_g('momentum_10d')), _safe_double(_g('momentum_20d')), _safe_double(_g('momentum_60d')),
                     _safe_double(_g('event_score')), _g('event_detail'), _safe_double(_g('bond_value')),
+                    _safe_double(_g('hv')), _safe_double(_g('rating_score')), _safe_double(_g('pure_bond_premium_ratio')),
+                    _safe_double(_g('north_net')), _safe_double(_g('margin_balance')), _g('lhb_count'),
+                    _safe_double(_g('block_trade_amount')), _safe_double(_g('holder_num_change')),
+                    _safe_double(_g('eps_forecast')), _safe_double(_g('eps')), _safe_double(_g('bps')),
+                    _safe_double(_g('revenue_yoy')), _safe_double(_g('profit_yoy')), _safe_double(_g('restricted_release_amount')),
                 )
                 cols = ", ".join(_DS_COLS)
                 phs = ", ".join("?" for _ in _DS_COLS)
