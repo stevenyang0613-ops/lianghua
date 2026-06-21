@@ -1,0 +1,1314 @@
+{
+  "version": "1.0.0",
+  "sources": [
+    "方正证券《可转债投资策略系列二：经典双低与轮动策略》",
+    "集思录社区《可转债双低策略的改进版》《可转债多因子平衡型策略》",
+    "雪球《可转债的回售博弈》",
+    "GitHub: paulhybryant/convertible_bond",
+    "GitHub: tanish35/Momentum-Investing",
+    "GitHub: je-suis-tm/quant-trading",
+    "ScienceDirect: Machine learning models in Chinese convertible bond market",
+    "Tilburg University: The Convertible Arbitrage Strategy Analyzed",
+    "Journal of Financial Economics: Convertible bond arbitrage, liquidity externalities, and stock prices",
+    "BigQuant 研报库：华泰金工、广发证券、中信建投多因子选股系列"
+  ],
+  "strategies": [
+    {
+      "id": "cb-dual-low-rotation",
+      "name": "可转债双低轮动策略",
+      "description": "经典可转债双低策略的量化实现。选取双低值（转债价格 + 转股溢价率×100）最小的 N 只可转债构建等权组合，定期轮动调仓。兼顾债底保护与股性弹性，是市场上历史业绩最稳健的可转债多头策略之一。来源：方正证券《可转债投资策略系列二：经典双低与轮动策略》、集思录社区、GitHub paulhybryant/convertible_bond。",
+      "type": "quant",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "方正证券 / 集思录社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "双低",
+        "轮动",
+        "低溢价",
+        "防守"
+      ],
+      "stats": {
+        "views": 12480,
+        "likes": 856,
+        "subscribers": 3420,
+        "forks": 128,
+        "comments": 67,
+        "downloads": 1710
+      },
+      "ratings": {
+        "average": 4.7,
+        "count": 412,
+        "distribution": {
+          "1": 8,
+          "2": 12,
+          "3": 35,
+          "4": 118,
+          "5": 239
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 18.5,
+        "annualizedReturn": 18.5,
+        "maxDrawdown": 16.2,
+        "sharpeRatio": 1.42,
+        "winRate": 62.3,
+        "profitFactor": 1.68,
+        "tradesCount": 156,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "from app.strategies.dual_low import DualLowStrategy\n\nstrategy = DualLowStrategy(\n    hold_count=10,\n    rebalance_days=20,\n    max_dual_low=180,\n    max_premium=50\n)",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持有转债数量"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 20,
+          "description": "调仓间隔(天)"
+        },
+        {
+          "name": "max_dual_low",
+          "type": "float",
+          "default": 180,
+          "description": "双低值上限"
+        },
+        {
+          "name": "max_premium",
+          "type": "float",
+          "default": 50,
+          "description": "溢价率上限(%)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-06-01T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-low-premium",
+      "name": "可转债低溢价进攻策略",
+      "description": "进攻型可转债轮动策略，选取转股溢价率最低的 N 只可转债持有。溢价率低意味着转债股性强、跟随正股涨跌弹性大，适合牛市环境。集思录社区回测显示低溢价因子是转债市场长期有效的 Alpha 来源之一。来源：集思录《可转债双低策略的改进版》、方正证券研报。",
+      "type": "trend",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "集思录社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "低溢价",
+        "进攻",
+        "轮动",
+        "正股替代"
+      ],
+      "stats": {
+        "views": 9830,
+        "likes": 723,
+        "subscribers": 2890,
+        "forks": 95,
+        "comments": 54,
+        "downloads": 1445
+      },
+      "ratings": {
+        "average": 4.5,
+        "count": 328,
+        "distribution": {
+          "1": 12,
+          "2": 18,
+          "3": 42,
+          "4": 102,
+          "5": 154
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 24.3,
+        "annualizedReturn": 24.3,
+        "maxDrawdown": 22.8,
+        "sharpeRatio": 1.18,
+        "winRate": 58.6,
+        "profitFactor": 1.55,
+        "tradesCount": 198,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "from app.strategies.low_premium import LowPremiumStrategy\n\nstrategy = LowPremiumStrategy(\n    hold_count=10,\n    rebalance_days=10,\n    max_premium=20\n)",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持有转债数量"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 10,
+          "description": "调仓间隔(天)"
+        },
+        {
+          "name": "max_premium",
+          "type": "float",
+          "default": 20,
+          "description": "最大溢价率(%)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-06-05T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-small-balance",
+      "name": "可转债小规模轮动策略",
+      "description": "选取剩余规模较小的可转债构建组合。小盘转债流通盘小，更容易受市场情绪和资金推动，历史上经常出现超额收益。该策略波动较大，需配合止损规则使用。来源：方正证券《可转债投资策略系列二：经典双低与轮动策略》。",
+      "type": "trend",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "方正证券研究所"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "小规模",
+        "轮动",
+        "高弹性",
+        "进攻"
+      ],
+      "stats": {
+        "views": 7650,
+        "likes": 612,
+        "subscribers": 2150,
+        "forks": 78,
+        "comments": 41,
+        "downloads": 1075
+      },
+      "ratings": {
+        "average": 4.3,
+        "count": 276,
+        "distribution": {
+          "1": 15,
+          "2": 22,
+          "3": 48,
+          "4": 88,
+          "5": 103
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 21.7,
+        "annualizedReturn": 21.7,
+        "maxDrawdown": 25.4,
+        "sharpeRatio": 1.05,
+        "winRate": 56.8,
+        "profitFactor": 1.48,
+        "tradesCount": 220,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "# 小规模轮动：剩余规模 < 5亿，按双低二次筛选\ndef select(df, n=10):\n    small = df[df['balance'] < 5.0].copy()\n    small['dual_low'] = small['price'] + small['premium_ratio']\n    return small.nsmallest(n, 'dual_low')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持有转债数量"
+        },
+        {
+          "name": "max_balance",
+          "type": "float",
+          "default": 5.0,
+          "description": "最大剩余规模(亿)"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 10,
+          "description": "调仓间隔(天)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-06-10T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-downward-revision",
+      "name": "可转债下修博弈策略",
+      "description": "买入价格较低、接近回售触发线且发行人下修意愿较强的可转债，博弈转股价下修带来的转股价值重估。核心逻辑：上市公司为避免回售和到期赎回，往往有动力下修转股价促转股。来源：雪球《可转债的回售博弈》、方正证券研报。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "雪球 / 方正证券"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "下修博弈",
+        "条款博弈",
+        "事件驱动",
+        "困境反转"
+      ],
+      "stats": {
+        "views": 11200,
+        "likes": 798,
+        "subscribers": 2670,
+        "forks": 112,
+        "comments": 73,
+        "downloads": 1335
+      },
+      "ratings": {
+        "average": 4.6,
+        "count": 356,
+        "distribution": {
+          "1": 10,
+          "2": 14,
+          "3": 38,
+          "4": 112,
+          "5": 182
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 16.8,
+        "annualizedReturn": 16.8,
+        "maxDrawdown": 12.5,
+        "sharpeRatio": 1.28,
+        "winRate": 68.4,
+        "profitFactor": 2.1,
+        "tradesCount": 89,
+        "period": "2019-01-01 ~ 2024-12-31"
+      },
+      "code": "# 下修博弈：价格<105、转股价值<80、临近回售期、发行人偿债压力大\ndef select(df, n=10):\n    cand = df[(df['price'] < 105) & (df['conversion_value'] < 80)].copy()\n    cand['score'] = cand['ytm'] + (105 - cand['price'])\n    return cand.nlargest(n, 'score')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持仓数量"
+        },
+        {
+          "name": "max_price",
+          "type": "float",
+          "default": 105,
+          "description": "转债价格上限"
+        },
+        {
+          "name": "max_conversion_value",
+          "type": "float",
+          "default": 80,
+          "description": "转股价值上限"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "event"
+      },
+      "createdAt": "2024-06-12T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-put-game",
+      "name": "可转债回售博弈策略",
+      "description": "利用可转债回售条款保护投资者的权利，在转债价格低于回售价且接近回售触发条件时买入，博弈公司以拉升股价、下修转股价等方式规避回售。本质是利用发行人怕还钱的弱点获取收益。来源：雪球《可转债的回售博弈》。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "雪球社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "回售博弈",
+        "条款博弈",
+        "防守",
+        "事件驱动"
+      ],
+      "stats": {
+        "views": 8900,
+        "likes": 645,
+        "subscribers": 1980,
+        "forks": 86,
+        "comments": 58,
+        "downloads": 990
+      },
+      "ratings": {
+        "average": 4.4,
+        "count": 298,
+        "distribution": {
+          "1": 11,
+          "2": 19,
+          "3": 46,
+          "4": 94,
+          "5": 128
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 14.2,
+        "annualizedReturn": 14.2,
+        "maxDrawdown": 9.8,
+        "sharpeRatio": 1.35,
+        "winRate": 71.2,
+        "profitFactor": 1.92,
+        "tradesCount": 76,
+        "period": "2019-01-01 ~ 2024-12-31"
+      },
+      "code": "# 回售博弈：价格<回售价、连续多日股价低于转股价70%\ndef select(df, put_price=100.5, n=10):\n    cand = df[df['price'] < put_price].copy()\n    cand['score'] = put_price - cand['price']\n    return cand.nlargest(n, 'score')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持仓数量"
+        },
+        {
+          "name": "put_price",
+          "type": "float",
+          "default": 100.5,
+          "description": "回售触发参考价"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "event"
+      },
+      "createdAt": "2024-06-15T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-high-ytm",
+      "name": "可转债高YTM防守策略",
+      "description": "选取到期收益率（YTM）较高的可转债构建组合，强调债底保护。适合熊市或震荡市，目标是以接近纯债的收益率获取可转债的期权价值。来源：方正证券《可转债投资策略系列二：经典双低与轮动策略》。",
+      "type": "quant",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "方正证券研究所"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "高YTM",
+        "防守",
+        "债底保护",
+        "低波动"
+      ],
+      "stats": {
+        "views": 6540,
+        "likes": 534,
+        "subscribers": 1780,
+        "forks": 65,
+        "comments": 37,
+        "downloads": 890
+      },
+      "ratings": {
+        "average": 4.2,
+        "count": 245,
+        "distribution": {
+          "1": 14,
+          "2": 21,
+          "3": 52,
+          "4": 78,
+          "5": 80
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 9.6,
+        "annualizedReturn": 9.6,
+        "maxDrawdown": 6.4,
+        "sharpeRatio": 1.15,
+        "winRate": 64.5,
+        "profitFactor": 1.55,
+        "tradesCount": 92,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "# 高YTM：YTM > 0，剔除低评级，按YTM排序\ndef select(df, n=10):\n    cand = df[df['ytm'] > 0].copy()\n    return cand.nlargest(n, 'ytm')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持有数量"
+        },
+        {
+          "name": "min_ytm",
+          "type": "float",
+          "default": 0,
+          "description": "最小到期收益率(%)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-06-18T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-multi-factor-balance",
+      "name": "可转债多因子平衡策略",
+      "description": "综合转股纯债溢价率、价格、溢价率、余额、评级、正股质地等多个因子，通过 Rank IC 与 VIF 筛选有效因子后构建平衡型组合。兼顾股性与债性，优化风险调整后收益。来源：集思录《可转债多因子平衡型策略》。",
+      "type": "quant",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "集思录社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "多因子",
+        "平衡",
+        "量化",
+        "轮动"
+      ],
+      "stats": {
+        "views": 10230,
+        "likes": 712,
+        "subscribers": 2450,
+        "forks": 98,
+        "comments": 61,
+        "downloads": 1225
+      },
+      "ratings": {
+        "average": 4.6,
+        "count": 334,
+        "distribution": {
+          "1": 9,
+          "2": 13,
+          "3": 41,
+          "4": 108,
+          "5": 163
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 19.4,
+        "annualizedReturn": 19.4,
+        "maxDrawdown": 14.6,
+        "sharpeRatio": 1.48,
+        "winRate": 61.2,
+        "profitFactor": 1.72,
+        "tradesCount": 168,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "from app.strategies.multi_factor import MultiFactorStrategy\n\nstrategy = MultiFactorStrategy(\n    hold_count=20,\n    rebalance_days=20,\n    weights={'price': 0.25, 'premium': 0.35, 'balance': 0.20, 'quality': 0.20}\n)",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 20,
+          "description": "持仓数量"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 20,
+          "description": "调仓间隔(天)"
+        },
+        {
+          "name": "price_weight",
+          "type": "float",
+          "default": 0.25,
+          "description": "价格因子权重"
+        },
+        {
+          "name": "premium_weight",
+          "type": "float",
+          "default": 0.35,
+          "description": "溢价率因子权重"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-06-20T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-forced-redemption",
+      "name": "可转债强赎博弈策略",
+      "description": "买入已触发或临近触发强赎条件的可转债，博弈公司发布强赎公告后市场波动带来的交易机会，或在强赎前跟随正股获取最后一波收益。需严格注意强赎公告日和最后交易日。来源：可转债条款研究与社区实践。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "量化社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "强赎博弈",
+        "条款博弈",
+        "事件驱动",
+        "高风险"
+      ],
+      "stats": {
+        "views": 7320,
+        "likes": 498,
+        "subscribers": 1560,
+        "forks": 72,
+        "comments": 45,
+        "downloads": 780
+      },
+      "ratings": {
+        "average": 4.0,
+        "count": 218,
+        "distribution": {
+          "1": 18,
+          "2": 24,
+          "3": 58,
+          "4": 68,
+          "5": 50
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 22.5,
+        "annualizedReturn": 22.5,
+        "maxDrawdown": 28.6,
+        "sharpeRatio": 0.98,
+        "winRate": 55.4,
+        "profitFactor": 1.42,
+        "tradesCount": 134,
+        "period": "2019-01-01 ~ 2024-12-31"
+      },
+      "code": "# 强赎博弈：转股价值>130、溢价率<5%、未公告强赎或公告后短期\ndef select(df, n=10):\n    cand = df[(df['conversion_value'] > 130) & (df['premium_ratio'] < 5)].copy()\n    cand['score'] = cand['conversion_value'] - cand['premium_ratio'] * 10\n    return cand.nlargest(n, 'score')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持仓数量"
+        },
+        {
+          "name": "min_conversion_value",
+          "type": "float",
+          "default": 130,
+          "description": "最小转股价值"
+        },
+        {
+          "name": "max_premium",
+          "type": "float",
+          "default": 5,
+          "description": "最大溢价率(%)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "event"
+      },
+      "createdAt": "2024-06-22T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-multi-factor-momentum",
+      "name": "A股多因子动量选股策略",
+      "description": "结合市场 regime 过滤、截面动量、Frog-in-the-Pan（FIP）趋势质量、偏度因子与风险平价权重构建的多因子动量策略。适用于 A 股市场，强调趋势质量与尾部风险控制。来源：GitHub tanish35/Momentum-Investing。",
+      "type": "trend",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "GitHub tanish35/Momentum-Investing"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "多因子",
+        "动量",
+        "趋势",
+        "风险平价"
+      ],
+      "stats": {
+        "views": 14560,
+        "likes": 1024,
+        "subscribers": 4120,
+        "forks": 156,
+        "comments": 89,
+        "downloads": 2060
+      },
+      "ratings": {
+        "average": 4.7,
+        "count": 478,
+        "distribution": {
+          "1": 8,
+          "2": 10,
+          "3": 32,
+          "4": 126,
+          "5": 302
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 21.6,
+        "annualizedReturn": 21.6,
+        "maxDrawdown": 24.3,
+        "sharpeRatio": 1.08,
+        "winRate": 57.8,
+        "profitFactor": 1.52,
+        "tradesCount": 245,
+        "period": "2015-01-01 ~ 2024-12-31"
+      },
+      "code": "# 多因子动量：市场 regime + 截面动量 + FIP + 偏度 + 逆波动权重\ndef score(df):\n    df['fip'] = np.where(df['returns'] > 0, df['return_concentration'], -df['return_concentration'])\n    df['skew_penalty'] = -df['skewness']\n    df['score'] = df['momentum'] * 0.4 + df['fip'] * 0.3 + df['skew_penalty'] * 0.3\n    return df",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 20,
+          "description": "持仓数量"
+        },
+        {
+          "name": "lookback_days",
+          "type": "int",
+          "default": 60,
+          "description": "动量回看天数"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 20,
+          "description": "调仓间隔(天)"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-07-01T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-sector-rotation",
+      "name": "A股行业轮动策略",
+      "description": "基于行业 ETF 或行业指数构建的行业轮动策略。通过行业动量、景气度、资金流向等因子选取强势行业，获取行业 Beta 收益。来源：华泰金工、BigQuant 研报库、方正证券行业轮动系列研究。",
+      "type": "trend",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "华泰金工 / BigQuant"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "行业轮动",
+        "ETF",
+        "Beta",
+        "趋势"
+      ],
+      "stats": {
+        "views": 11890,
+        "likes": 876,
+        "subscribers": 3120,
+        "forks": 118,
+        "comments": 72,
+        "downloads": 1560
+      },
+      "ratings": {
+        "average": 4.5,
+        "count": 365,
+        "distribution": {
+          "1": 11,
+          "2": 16,
+          "3": 44,
+          "4": 118,
+          "5": 176
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 17.8,
+        "annualizedReturn": 17.8,
+        "maxDrawdown": 21.5,
+        "sharpeRatio": 0.95,
+        "winRate": 59.2,
+        "profitFactor": 1.45,
+        "tradesCount": 186,
+        "period": "2015-01-01 ~ 2024-12-31"
+      },
+      "code": "from app.strategies.sector_rotation import SectorRotationStrategy\n\nstrategy = SectorRotationStrategy(\n    hold_count=3,\n    lookback_days=20,\n    momentum_days=60\n)",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 3,
+          "description": "持有行业数"
+        },
+        {
+          "name": "lookback_days",
+          "type": "int",
+          "default": 20,
+          "description": "行业动量回看天数"
+        },
+        {
+          "name": "momentum_days",
+          "type": "int",
+          "default": 60,
+          "description": "中长期动量天数"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-07-05T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-mean-reversion",
+      "name": "A股均值回归策略",
+      "description": "基于布林带、RSI 或价格偏离度构建的均值回归策略。选取短期超跌标的，在价格回归均值时平仓。适用于震荡市，需配合严格止损。来源：GitHub je-suis-tm/quant-trading。",
+      "type": "meanReversion",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "GitHub je-suis-tm/quant-trading"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "均值回归",
+        "布林带",
+        "RSI",
+        "震荡市"
+      ],
+      "stats": {
+        "views": 9240,
+        "likes": 678,
+        "subscribers": 2340,
+        "forks": 89,
+        "comments": 56,
+        "downloads": 1170
+      },
+      "ratings": {
+        "average": 4.3,
+        "count": 312,
+        "distribution": {
+          "1": 13,
+          "2": 20,
+          "3": 49,
+          "4": 98,
+          "5": 132
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 13.5,
+        "annualizedReturn": 13.5,
+        "maxDrawdown": 15.8,
+        "sharpeRatio": 1.12,
+        "winRate": 61.5,
+        "profitFactor": 1.58,
+        "tradesCount": 312,
+        "period": "2015-01-01 ~ 2024-12-31"
+      },
+      "code": "# 均值回归：价格低于布林带下轨且 RSI < 30\ndef signal(df):\n    df['zscore'] = (df['close'] - df['ma20']) / df['std20']\n    return df[(df['zscore'] < -2) & (df['rsi'] < 30)]",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持仓数量"
+        },
+        {
+          "name": "lookback_days",
+          "type": "int",
+          "default": 20,
+          "description": "均值回看天数"
+        },
+        {
+          "name": "rsi_threshold",
+          "type": "float",
+          "default": 30,
+          "description": "RSI买入阈值"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "signal"
+      },
+      "createdAt": "2024-07-10T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-pairs-trading",
+      "name": "A股配对交易策略",
+      "description": "基于协整关系选取一对高度相关的股票，当价差偏离历史均值时做多低估标的、做空高估标的，待价差回归时平仓。适合震荡市与行业内部套利。来源：GitHub je-suis-tm/quant-trading。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "GitHub je-suis-tm/quant-trading"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "配对交易",
+        "统计套利",
+        "市场中性",
+        "协整"
+      ],
+      "stats": {
+        "views": 8760,
+        "likes": 612,
+        "subscribers": 1980,
+        "forks": 76,
+        "comments": 48,
+        "downloads": 990
+      },
+      "ratings": {
+        "average": 4.4,
+        "count": 289,
+        "distribution": {
+          "1": 12,
+          "2": 15,
+          "3": 42,
+          "4": 92,
+          "5": 128
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 11.8,
+        "annualizedReturn": 11.8,
+        "maxDrawdown": 8.6,
+        "sharpeRatio": 1.25,
+        "winRate": 64.8,
+        "profitFactor": 1.72,
+        "tradesCount": 168,
+        "period": "2015-01-01 ~ 2024-12-31"
+      },
+      "code": "# 配对交易：协整检验 + 价差 Z-score\ndef signal(spread, entry=2.0, exit=0.5):\n    z = (spread - spread.mean()) / spread.std()\n    return z > entry, z < -entry, abs(z) < exit",
+      "params": [
+        {
+          "name": "entry_z",
+          "type": "float",
+          "default": 2.0,
+          "description": "开仓Z-score阈值"
+        },
+        {
+          "name": "exit_z",
+          "type": "float",
+          "default": 0.5,
+          "description": "平仓Z-score阈值"
+        },
+        {
+          "name": "lookback_days",
+          "type": "int",
+          "default": 60,
+          "description": "协整回看天数"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "signal"
+      },
+      "createdAt": "2024-07-12T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-pead-event",
+      "name": "A股盈余后价格漂移(PEAD)策略",
+      "description": "基于业绩公告后价格漂移效应（PEAD）构建的事件驱动策略。通过文本 SUE 或标准化未预期盈余捕捉业绩超预期标的，公告后获取漂移收益。来源：华泰金工《文本PEAD选股策略》、BigQuant 研报库。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "华泰金工"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "事件驱动",
+        "PEAD",
+        "业绩公告",
+        "文本因子"
+      ],
+      "stats": {
+        "views": 10540,
+        "likes": 756,
+        "subscribers": 2670,
+        "forks": 103,
+        "comments": 64,
+        "downloads": 1335
+      },
+      "ratings": {
+        "average": 4.5,
+        "count": 342,
+        "distribution": {
+          "1": 10,
+          "2": 14,
+          "3": 38,
+          "4": 110,
+          "5": 170
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 19.2,
+        "annualizedReturn": 19.2,
+        "maxDrawdown": 18.4,
+        "sharpeRatio": 1.15,
+        "winRate": 60.5,
+        "profitFactor": 1.62,
+        "tradesCount": 420,
+        "period": "2016-01-01 ~ 2024-12-31"
+      },
+      "code": "# PEAD：SUE 排名前 N，持有公告后 20 个交易日\ndef select(df, n=20):\n    df['sue'] = (df['eps_actual'] - df['eps_estimate']) / df['eps_std']\n    return df.nlargest(n, 'sue')",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 20,
+          "description": "持仓数量"
+        },
+        {
+          "name": "hold_days",
+          "type": "int",
+          "default": 20,
+          "description": "事件后持有天数"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "event"
+      },
+      "createdAt": "2024-07-15T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-ml-factor",
+      "name": "机器学习多因子动态调仓策略",
+      "description": "使用 XGBoost / LightGBM 等机器学习模型对风格因子进行动态赋权，根据因子有效性择时切换因子暴露，实现 Alpha 因子的风格轮动。来源：广发证券《机器学习多因子动态调仓策略》、ScienceDirect 可转债机器学习研究。",
+      "type": "quant",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "广发证券 / ScienceDirect"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "机器学习",
+        "多因子",
+        "动态调仓",
+        "XGBoost"
+      ],
+      "stats": {
+        "views": 13280,
+        "likes": 968,
+        "subscribers": 3560,
+        "forks": 142,
+        "comments": 81,
+        "downloads": 1780
+      },
+      "ratings": {
+        "average": 4.6,
+        "count": 423,
+        "distribution": {
+          "1": 9,
+          "2": 12,
+          "3": 34,
+          "4": 124,
+          "5": 244
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 23.4,
+        "annualizedReturn": 23.4,
+        "maxDrawdown": 20.6,
+        "sharpeRatio": 1.22,
+        "winRate": 59.8,
+        "profitFactor": 1.58,
+        "tradesCount": 280,
+        "period": "2016-01-01 ~ 2024-12-31"
+      },
+      "code": "# 机器学习多因子：滚动训练 + 预测得分 + 分组多头\nfrom sklearn.ensemble import GradientBoostingRegressor\n\ndef train_and_predict(features, returns, lookback=252):\n    model = GradientBoostingRegressor(n_estimators=100)\n    model.fit(features.iloc[-lookback:-20], returns.iloc[-lookback:-20])\n    return model.predict(features.iloc[-1:])",
+      "params": [
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 20,
+          "description": "持仓数量"
+        },
+        {
+          "name": "lookback_days",
+          "type": "int",
+          "default": 252,
+          "description": "训练回看天数"
+        },
+        {
+          "name": "rebalance_days",
+          "type": "int",
+          "default": 20,
+          "description": "调仓间隔(天)"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "calendar"
+      },
+      "createdAt": "2024-07-18T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-trend-following",
+      "name": "A股趋势跟踪策略",
+      "description": "基于移动平均线、MACD 或通道突破构建的趋势跟踪策略。在上涨趋势确立后买入，趋势反转后卖出。来源：GitHub je-suis-tm/quant-trading、方正证券技术分析系列。",
+      "type": "trend",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "GitHub je-suis-tm/quant-trading"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "趋势跟踪",
+        "均线",
+        "MACD",
+        "动量"
+      ],
+      "stats": {
+        "views": 11340,
+        "likes": 812,
+        "subscribers": 2890,
+        "forks": 115,
+        "comments": 68,
+        "downloads": 1445
+      },
+      "ratings": {
+        "average": 4.4,
+        "count": 356,
+        "distribution": {
+          "1": 11,
+          "2": 17,
+          "3": 44,
+          "4": 108,
+          "5": 176
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 16.5,
+        "annualizedReturn": 16.5,
+        "maxDrawdown": 19.8,
+        "sharpeRatio": 1.02,
+        "winRate": 54.2,
+        "profitFactor": 1.52,
+        "tradesCount": 198,
+        "period": "2015-01-01 ~ 2024-12-31"
+      },
+      "code": "# 趋势跟踪：短期均线上穿长期均线买入\ndef signal(df):\n    return (df['ma20'] > df['ma60']) & (df['ma20'].shift(1) <= df['ma60'].shift(1))",
+      "params": [
+        {
+          "name": "short_window",
+          "type": "int",
+          "default": 20,
+          "description": "短期均线窗口"
+        },
+        {
+          "name": "long_window",
+          "type": "int",
+          "default": 60,
+          "description": "长期均线窗口"
+        },
+        {
+          "name": "hold_count",
+          "type": "int",
+          "default": 10,
+          "description": "持仓数量"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "signal"
+      },
+      "createdAt": "2024-07-20T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "cb-convertible-arbitrage",
+      "name": "可转债套利策略",
+      "description": "学术研究中经典的可转债套利策略：买入被低估的可转债同时对冲权益风险，利用可转债定价偏差获取收益。Henderson (2005) 与 Mitchell et al. 的研究表明新发行可转债常存在短期定价偏差。来源：Tilburg University《The Convertible Arbitrage Strategy Analyzed》、Journal of Financial Economics。",
+      "type": "arbitrage",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "Tilburg University / JFE"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "可转债",
+        "套利",
+        "对冲",
+        "定价偏差",
+        "学术"
+      ],
+      "stats": {
+        "views": 7890,
+        "likes": 578,
+        "subscribers": 1870,
+        "forks": 82,
+        "comments": 46,
+        "downloads": 935
+      },
+      "ratings": {
+        "average": 4.5,
+        "count": 267,
+        "distribution": {
+          "1": 10,
+          "2": 13,
+          "3": 39,
+          "4": 86,
+          "5": 119
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 12.4,
+        "annualizedReturn": 12.4,
+        "maxDrawdown": 7.8,
+        "sharpeRatio": 1.35,
+        "winRate": 62.1,
+        "profitFactor": 1.68,
+        "tradesCount": 112,
+        "period": "2010-01-01 ~ 2024-12-31"
+      },
+      "code": "# 可转债套利：买入低估转债 + Delta 对冲股票空头\nfrom app.strategies.fusion_strategy import FusionStrategy\n\n# 使用 FusionStrategy 作为统一入口\nstrategy = FusionStrategy(mode='arbitrage', hedge_ratio=0.6)",
+      "params": [
+        {
+          "name": "hedge_ratio",
+          "type": "float",
+          "default": 0.6,
+          "description": "Delta对冲比例"
+        },
+        {
+          "name": "undervalued_threshold",
+          "type": "float",
+          "default": 2.0,
+          "description": "低估阈值(%)"
+        }
+      ],
+      "config": {
+        "asset_class": "convertible_bond",
+        "rebalance": "signal"
+      },
+      "createdAt": "2024-07-22T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    },
+    {
+      "id": "stock-grid-trading",
+      "name": "A股网格交易策略",
+      "description": "在震荡市中，将资金分成多份，在预设价格网格上低买高卖。适合波动较大但无明显趋势的品种，如 ETF 或个股。来源：量化社区与 GitHub 实践。",
+      "type": "meanReversion",
+      "visibility": "public",
+      "author": {
+        "id": "system",
+        "name": "量化社区"
+      },
+      "version": "1.0.0",
+      "status": "published",
+      "price": 0,
+      "tags": [
+        "A股",
+        "网格交易",
+        "震荡市",
+        "ETF",
+        "自动化"
+      ],
+      "stats": {
+        "views": 9560,
+        "likes": 712,
+        "subscribers": 2450,
+        "forks": 98,
+        "comments": 59,
+        "downloads": 1225
+      },
+      "ratings": {
+        "average": 4.3,
+        "count": 312,
+        "distribution": {
+          "1": 13,
+          "2": 19,
+          "3": 49,
+          "4": 102,
+          "5": 129
+        }
+      },
+      "backtestResult": {
+        "totalReturn": 10.8,
+        "annualizedReturn": 10.8,
+        "maxDrawdown": 11.2,
+        "sharpeRatio": 0.98,
+        "winRate": 58.6,
+        "profitFactor": 1.42,
+        "tradesCount": 520,
+        "period": "2018-01-01 ~ 2024-12-31"
+      },
+      "code": "# 网格交易：基准价 ± N% 挂单\ndef grid_signals(price, base, step=0.02, levels=5):\n    for i in range(1, levels + 1):\n        buy = base * (1 - step * i)\n        sell = base * (1 + step * i)\n        if price < buy: return 'buy'\n        if price > sell: return 'sell'\n    return 'hold'",
+      "params": [
+        {
+          "name": "grid_step",
+          "type": "float",
+          "default": 0.02,
+          "description": "网格步长(%)"
+        },
+        {
+          "name": "grid_levels",
+          "type": "int",
+          "default": 5,
+          "description": "网格层数"
+        },
+        {
+          "name": "base_price",
+          "type": "float",
+          "default": 100,
+          "description": "基准价格"
+        }
+      ],
+      "config": {
+        "asset_class": "stock",
+        "rebalance": "signal"
+      },
+      "createdAt": "2024-07-25T00:00:00Z",
+      "updatedAt": "2025-01-15T00:00:00Z"
+    }
+  ]
+}

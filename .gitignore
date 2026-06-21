@@ -107,7 +107,9 @@ check_db.py
 check_fin_cols.py
 fix_fin.py
 force_refresh.py
-test_*.py
-test_*.spec
-verify_*.py
+/test_*.py
+/test_*.spec
+/verify_*.py
+!/backend/tests/test_*.py
+backend/app/api/strategy_market_data.json
 _archive/

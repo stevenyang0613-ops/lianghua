@@ -3,14 +3,19 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Card, Row, Col, Typography, Tag, Rate, Button, Space, Input, Select, Modal, Descriptions, Divider, List, Empty, message, Tabs, Popconfirm, Avatar, Statistic } from 'antd'
+import { Card, Row, Col, Typography, Tag, Rate, Button, Space, Input, Select, Modal, Descriptions, Divider, List, Empty, message, Tabs, Popconfirm, Avatar, Statistic, Spin, Pagination } from 'antd'
 import { ShopOutlined, DownloadOutlined, LikeOutlined, UserOutlined, SearchOutlined, DeleteOutlined } from '@ant-design/icons'
 import { getSharedStrategies, getMyStrategies, downloadStrategy, deleteMyStrategy, likeStrategy, hasLikedStrategy, CATEGORY_OPTIONS, SORT_OPTIONS, type SharedStrategy } from '../utils/strategyShare'
 
 const { Title, Text, Paragraph } = Typography
 
+const DEFAULT_PAGE_SIZE = 10
+
 export default function StrategyMarket() {
   const [strategies, setStrategies] = useState<SharedStrategy[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [myStrategies, setMyStrategies] = useState<SharedStrategy[]>([])
   const [category, setCategory] = useState('all')
   const [sortBy, setSortBy] = useState<'rating' | 'downloads' | 'returns' | 'createdAt'>('rating')
@@ -18,25 +23,42 @@ export default function StrategyMarket() {
   const [detailVisible, setDetailVisible] = useState(false)
   const [selectedStrategy, setSelectedStrategy] = useState<SharedStrategy | null>(null)
   const [activeTab, setActiveTab] = useState('market')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     loadStrategies()
     loadMyStrategies()
-  }, [category, sortBy, search])
+  }, [category, sortBy, search, page, pageSize])
 
-  const loadStrategies = () => {
-    const data = getSharedStrategies({ category, sortBy, search })
-    setStrategies(data)
+  const loadStrategies = async () => {
+    setLoading(true)
+    try {
+      const result = await getSharedStrategies({ category, sortBy, search, page, pageSize })
+      setStrategies(result.strategies)
+      setTotal(result.total)
+    } catch (error) {
+      message.error('加载策略市场失败')
+      console.error('[StrategyMarket] load strategies failed:', error)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const loadMyStrategies = () => {
     setMyStrategies(getMyStrategies())
   }
 
-  const handleDownload = (strategy: SharedStrategy) => {
-    downloadStrategy(strategy.id)
-    loadMyStrategies()
-    message.success('策略已下载到本地')
+  const handleDownload = async (strategy: SharedStrategy) => {
+    try {
+      await downloadStrategy(strategy.id)
+      loadMyStrategies()
+      message.success('策略已下载到本地')
+      // 刷新列表以更新下载数
+      loadStrategies()
+    } catch (error) {
+      message.error('下载策略失败')
+      console.error('[StrategyMarket] download failed:', error)
+    }
   }
 
   const handleDelete = (id: string) => {
@@ -45,14 +67,25 @@ export default function StrategyMarket() {
     message.success('策略已删除')
   }
 
-  const handleLike = (id: string) => {
-    likeStrategy(id)
-    message.success('感谢点赞')
+  const handleLike = async (id: string) => {
+    try {
+      await likeStrategy(id)
+      message.success('感谢点赞')
+      loadStrategies()
+    } catch (error) {
+      message.error('点赞失败')
+      console.error('[StrategyMarket] like failed:', error)
+    }
   }
 
   const handleViewDetail = (strategy: SharedStrategy) => {
     setSelectedStrategy(strategy)
     setDetailVisible(true)
+  }
+
+  const handlePageChange = (newPage: number, newPageSize?: number) => {
+    setPage(newPage)
+    if (newPageSize) setPageSize(newPageSize)
   }
 
   const categoryColors: Record<string, string> = {
@@ -171,7 +204,7 @@ export default function StrategyMarket() {
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'market', label: `策略市场 (${strategies.length})` },
+          { key: 'market', label: `策略市场 (${total})` },
           { key: 'my', label: `我的策略 (${myStrategies.length})` },
         ]}
       />
@@ -186,7 +219,7 @@ export default function StrategyMarket() {
                   prefix={<SearchOutlined />}
                   placeholder="搜索策略名称、标签..."
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => { setPage(1); setSearch(e.target.value) }}
                   allowClear
                 />
               </Col>
@@ -194,7 +227,7 @@ export default function StrategyMarket() {
                 <Select
                   style={{ width: '100%' }}
                   value={category}
-                  onChange={setCategory}
+                  onChange={(v) => { setPage(1); setCategory(v) }}
                   options={CATEGORY_OPTIONS}
                 />
               </Col>
@@ -202,7 +235,7 @@ export default function StrategyMarket() {
                 <Select
                   style={{ width: '100%' }}
                   value={sortBy}
-                  onChange={setSortBy}
+                  onChange={(v) => { setPage(1); setSortBy(v) }}
                   options={SORT_OPTIONS}
                 />
               </Col>
@@ -210,10 +243,26 @@ export default function StrategyMarket() {
           </Card>
 
           {/* 策略列表 */}
-          {strategies.length === 0 ? (
-            <Empty description="暂无策略" />
-          ) : (
-            strategies.map(s => renderStrategyCard(s))
+          <Spin spinning={loading} tip="加载策略市场中...">
+            {strategies.length === 0 ? (
+              <Empty description={loading ? '加载中...' : '暂无策略'} />
+            ) : (
+              strategies.map(s => renderStrategyCard(s))
+            )}
+          </Spin>
+
+          {/* 分页 */}
+          {total > 0 && (
+            <Row justify="end" style={{ marginTop: 16 }}>
+              <Pagination
+                current={page}
+                pageSize={pageSize}
+                total={total}
+                showSizeChanger
+                showTotal={(t) => `共 ${t} 条`}
+                onChange={handlePageChange}
+              />
+            </Row>
           )}
         </>
       )}
