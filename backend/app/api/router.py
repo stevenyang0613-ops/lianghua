@@ -24,6 +24,8 @@ from app.api.mx import router as mx_router
 from app.api.fund_flow import router as fund_flow_router
 from app.api.ai import router as ai_router
 from app.api.paper_trade import router as paper_trade_router
+from app.api.metrics import router as metrics_router
+from app.api.strategies import router as strategies_router
 
 router = APIRouter()
 router.include_router(market_router, prefix="/market", tags=["market"], dependencies=[Depends(verify_token)])
@@ -44,8 +46,10 @@ router.include_router(logs_router, prefix="/logs", tags=["logs"], dependencies=[
 router.include_router(mx_router, tags=["mx"], dependencies=[Depends(verify_token)])
 router.include_router(data_source_router, tags=["data"], dependencies=[Depends(verify_token)])
 router.include_router(fund_flow_router, tags=["fund_flow"], dependencies=[Depends(verify_token)])
-router.include_router(ai_router, prefix="/ai", tags=["ai"])
+router.include_router(ai_router, prefix="/ai", tags=["ai"], dependencies=[Depends(verify_token)])
 router.include_router(paper_trade_router, prefix="/paper-trade", tags=["paper-trade"], dependencies=[Depends(verify_token)])
+router.include_router(metrics_router, prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(verify_token)])
+router.include_router(strategies_router, prefix="/strategies-share", tags=["strategies-share"], dependencies=[Depends(verify_token)])
 
 
 # 兼容旧路径的索引端点(测试与外部消费者期望的 /api/v1/<resource> 入口)
@@ -98,4 +102,56 @@ async def data_enrich_metrics():
     return {
         "metrics": metrics,
         "refresh_ts": refresh_ts,
+    }
+
+
+@router.get("/data-enrich/self-check", dependencies=[Depends(verify_token)])
+async def data_enrich_self_check():
+    """返回字段覆盖率自检结果 + 缓存状态摘要。
+
+    前端桌面 GUI 的 EnrichmentDashboard 使用此端点展示：
+    - 各字段覆盖率(%)
+    - 缓存新鲜度（fresh/stale/missing）
+    - 内存缓存行数
+    """
+    from app.engine.data_enrich import (
+        _compute_field_coverage, cache_status,
+        _NORTH_CACHE, _MARGIN_CACHE, _LHB_CACHE, _BLOCK_TRADE_CACHE,
+        _HOLDER_NUM_CACHE, _EARNINGS_FORECAST_CACHE, _EARNINGS_EXPRESS_CACHE,
+        _RESTRICTED_RELEASE_CACHE, _FIN_CACHE, _SPOT_CACHE,
+        _north_map, _margin_map, _lhb_map, _block_trade_map,
+        _holder_num_map, _earnings_forecast_map, _earnings_express_map,
+        _restricted_release_map, _fin_map, _spot_map,
+    )
+    from app.engine.data_enrich import _last_enriched_bonds
+
+    coverage = _compute_field_coverage()
+    bond_count = len(_last_enriched_bonds) if _last_enriched_bonds else 0
+
+    # 缓存状态摘要
+    cache_paths = {
+        "north": (_NORTH_CACHE, 6 * 3600, len(_north_map)),
+        "margin": (_MARGIN_CACHE, 12 * 3600, len(_margin_map)),
+        "lhb": (_LHB_CACHE, 12 * 3600, len(_lhb_map)),
+        "block_trade": (_BLOCK_TRADE_CACHE, 12 * 3600, len(_block_trade_map)),
+        "holder_num": (_HOLDER_NUM_CACHE, 24 * 3600, len(_holder_num_map)),
+        "earnings_forecast": (_EARNINGS_FORECAST_CACHE, 7 * 24 * 3600, len(_earnings_forecast_map)),
+        "earnings_express": (_EARNINGS_EXPRESS_CACHE, 7 * 24 * 3600, len(_earnings_express_map)),
+        "restricted_release": (_RESTRICTED_RELEASE_CACHE, 0, len(_restricted_release_map)),
+        "fin": (_FIN_CACHE, 0, len(_fin_map)),
+        "spot": (_SPOT_CACHE, 0, len(_spot_map)),
+    }
+
+    caches = {}
+    for name, (path, ttl, mem_size) in cache_paths.items():
+        status = cache_status(path, ttl=ttl) if ttl else "unknown"
+        caches[name] = {
+            "status": status,
+            "memory_entries": mem_size,
+        }
+
+    return {
+        "coverage": coverage,
+        "bond_count": bond_count,
+        "caches": caches,
     }
