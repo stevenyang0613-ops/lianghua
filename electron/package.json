@@ -13,8 +13,11 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "build:dev": "tsc && electron-builder --dir --mac -c.directories.output=release-dev",
-    "build:prod": "tsc && electron-builder --mac -c.directories.output=release"
+    "clean:pycache": "node scripts/clean-pycache.js",
+    "sync:dev": "node scripts/sync-backend.js --dev",
+    "sync:prod": "node scripts/sync-backend.js --prod",
+    "build:dev": "npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --dir --mac -c.directories.output=release-dev && npm run sync:dev",
+    "build:prod": "npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --mac -c.directories.output=release && npm run sync:prod"
   },
   "build": {
     "appId": "com.lianghua.quant",
@@ -48,12 +51,13 @@
         "from": "../backend",
         "to": "backend",
         "filter": [
-          "app/**/*.py",
-          "run_app.py",
-          "!.venv/**",
-          "!dist/**",
-          "!__pycache__/**",
-          "!.git/**",
+            "app/**/*.py",
+            "run_app.py",
+            "!.venv/**",
+            "!dist/**",
+            "!**/__pycache__/**",
+            "!**/*.pyc",
+            "!.git/**",
           "!data/**",
           "!build/**",
           "!wheels/**",
