@@ -241,7 +241,6 @@ def _record_refresh_metric(name: str, elapsed_s: float, count: int, status: str 
     """
     if "_inproc" in name:
         return
-    logger.info(f"[DataEnrich][DEBUG] _record_refresh_metric: {name} status={status} count={count}")
     # 同步写入共享 metrics 文件（带文件锁，兼容 runner 子进程）
     record_refresh_metric(_METRICS_FILE, name, elapsed_s, count, status, error, extra)
     # 同时更新内存，保证 get_refresh_metrics 立即返回最新状态
@@ -352,13 +351,11 @@ def _load_metrics_from_file():
         return
     if not runner_metrics:
         return
-    logger.info(f"[DataEnrich][DEBUG] load_metrics_from_file: spot={runner_metrics.get('_refresh_spot_cache',{}).get('status')}, ts={runner_metrics.get('_refresh_spot_cache',{}).get('ts')}")
     with _cache_lock:
         for name, entry in runner_metrics.items():
             mem = _refresh_metrics.get(name)
             # 内存中若是 pending 占位符，直接用文件中的真实结果替换
             if mem and mem.get("status") == "pending" and entry.get("status") != "pending":
-                logger.info(f"[DataEnrich][DEBUG] replacing pending {name} with file entry status={entry.get('status')} ts={entry.get('ts')}")
                 _refresh_metrics[name] = entry
                 continue
             # 否则按时间戳较新为准
@@ -3668,7 +3665,7 @@ async def start_background_refresh():
     # 避免随后补 pending 占位符时把 spot/vol/fund_flow/bond_price 等
     # 实际已完成的指标覆盖成 pending。
     _load_metrics_from_file()
-    _startup_ts_iso = datetime.now().isoformat()
+    _startup_ts_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     with _cache_lock:
         for name in _PRE_REGISTERED_METRICS:
             if name not in _refresh_metrics:
