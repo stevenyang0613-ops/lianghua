@@ -127,6 +127,7 @@ timing_backtest_report*.md
 diag_*.py
 fetch_*.py
 fix_*.sh
+fix_*.py
 patch_*.py
 start_*.sh
 stop_*.sh
