@@ -404,11 +404,16 @@ def _get_bond_or_fallback_codes() -> frozenset:
 
     确保零填充和数据源覆盖率统计始终有可用的股票代码列表，
     即使在启动阶段 AKShare 信号量被争用导致 _ensure_bond_stock_codes 超时。
+
+    三级回退策略：
+    1. _bond_stock_codes（THS 实时获取，最准确但最慢）
+    2. _name_map.keys()（磁盘加载，几乎瞬时）
+    3. 同步触发 _load_stock_name_cache()（如果 _name_map 为空但磁盘有缓存）
     """
     if _bond_stock_codes:
         with _cache_lock:
             return frozenset(_bond_stock_codes)
-    # 回退：使用已从磁盘缓存加载的 _name_map 键
+    # 回退 1：使用已从磁盘缓存加载的 _name_map 键
     if _name_map:
         with _cache_lock:
             codes = frozenset(
@@ -417,6 +422,20 @@ def _get_bond_or_fallback_codes() -> frozenset:
             )
             if codes:
                 return codes
+    # 回退 2：_name_map 为空时，同步触发磁盘加载（disk I/O，< 100ms）
+    # 修复：启动早期 _load_all_caches() 与 extended batch 并发执行时，
+    # _name_map 可能还没被加载到这里。同步触发一次加载可避免返回空 frozenset
+    # 导致零填充循环空跑，count=1/2 误报。
+    try:
+        _load_stock_name_cache()
+    except Exception as e:
+        logger.debug(f"[DataEnrich] Lazy load stock name cache failed: {e}")
+    if _name_map:
+        with _cache_lock:
+            return frozenset(
+                k for k in _name_map.keys()
+                if k and len(k) == 6 and k.isdigit()
+            )
     return frozenset()
 
 
@@ -1027,6 +1046,9 @@ def set_bond_stock_codes(codes: list[str]):
             str(c) for c in codes if c and str(c).isdigit() and len(str(c)) == 6
         )
         logger.info(f"[DataEnrich] Bond stock codes set: {len(_bond_stock_codes)} stocks")
+    # 如果 _bond_codes 为空，触发 THS 加载（避免 bond_count 统计为 0）
+    if not _bond_codes:
+        _ensure_bond_stock_codes()
 
 
 def _ensure_bond_stock_codes():
@@ -1698,10 +1720,13 @@ def _refresh_volatility_cache():
         def _liquidity_proxy(item):
             v = item[1] if isinstance(item[1], dict) else {}
             # Prefer precise circ_mv (f21) from EM, fallback to volume proxy (AGENTS.md #44)
-            circ = v.get("circ_mv", 0) or 0
-            if circ > 0:
+            circ = v.get("circ_mv")
+            if circ is not None and circ > 0:
                 return float(circ)
-            return float(v.get("volume", 0) or 0)
+            vol = v.get("volume")
+            if vol is not None and vol > 0:
+                return float(vol)
+            return 0
 
         # 只处理与可转债正股相关的股票代码，避免在5000+全A股上浪费时间
         _ensure_bond_stock_codes()
@@ -2460,7 +2485,7 @@ def _refresh_bond_price_cache():
                         continue
                     entry = {}
                     price = _sf(r.get("trade", 0))
-                    if price and price > 0 and abs(price - 100.0) > 0.01:
+                    if price and price > 0:
                         entry["price"] = price
                     change_pct = _sf(r.get("changepercent", 0))
                     if change_pct is not None:
@@ -3126,8 +3151,8 @@ def _refresh_bond_outstanding_cache():
         if df is not None:
             for _, r in df.iterrows():
                 code = str(r.get('代码', '')).strip()
-                remaining = float(r.get('剩余规模', 0) or 0)
-                if code and remaining > 0:
+                remaining = float(r.get('剩余规模')) if r.get('剩余规模') is not None else None
+                if code and remaining is not None and remaining > 0:
                     result[code] = remaining
         if result:
             logger.info(f'[DataEnrich] Bond outstanding: {len(result)} bonds from JSL')
@@ -4027,6 +4052,8 @@ async def enrich_quotes(bonds: list) -> list:
                     val = margin.get("margin_balance")
                     if val is not None and val > 0:
                         b.margin_balance = round(val / 1e8, 2) if val > 1e6 else val
+                    elif val == 0:
+                        b.margin_balance = 0
                     else:
                         # Fallback: 估算融资余额 = 融资比例 * 流通市值 / 100
                         rz_ratio = margin.get("rz_ratio")
@@ -4046,6 +4073,8 @@ async def enrich_quotes(bonds: list) -> list:
                                     est_rzye = circ_mv * rz_ratio / 100
                                     if est_rzye > 0:
                                         b.margin_balance = round(est_rzye / 1e8, 2)
+                        # 如果 val 为 None 且 rz_ratio fallback 也失败，保持默认值 None
+                        # 但 zero_fill 的 val=0 已在上面处理为 0
                 else:
                     b.margin_balance = margin
             else:
@@ -4102,7 +4131,8 @@ async def enrich_quotes(bonds: list) -> list:
 
         # Earnings express enrichment (业绩快报: 实际报告数据,补全 eps/bps/roe/revenue_yoy)
         # AGENTS.md 要求所有 loaded cache 必须在 enrich_quotes 中消费
-        if earnings_express_ref:
+        # 使用 is not None 判断，避免空 dict 时跳过（空 dict 表示缓存已加载但无数据）
+        if earnings_express_ref is not None:
             _ee = earnings_express_ref.get(stock_code)
             if isinstance(_ee, dict):
                 # eps: 优先快报数据，已有值不覆盖
@@ -4127,7 +4157,7 @@ async def enrich_quotes(bonds: list) -> list:
         # Restricted release enrichment
         # 无限售解禁的股票不在 cache 中，restricted_release_amount = 0
         # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
-        if restricted_release_ref:
+        if restricted_release_ref is not None:
             rr = restricted_release_ref.get(stock_code)
             if rr is not None:
                 if isinstance(rr, dict):
@@ -4610,11 +4640,14 @@ async def start_background_refresh():
                 except Exception:
                     pass
                 # 只刷新容易变 stale 的扩展缓存（spot/vol/fund_flow/bond_price 由 runner 子进程负责）
+                # 补全：加入 main_biz/analyst-rank/macro-* 确保所有数据源定期刷新
                 cmd = [_sys.executable, runner_script,
                        "--north", "--margin", "--lhb", "--block-trade",
                        "--holder-num", "--restricted-release",
                        "--fund-flow", "--vol", "--mgmt", "--earnings-forecast",
-                       "--earnings-express", "--spot", "--bond-price"]
+                       "--earnings-express", "--spot", "--bond-price",
+                       "--main-biz", "--analyst-rank",
+                       "--macro-cpi", "--macro-ppi", "--macro-m2", "--macro-lpr"]
                 proc = None
                 try:
                     proc = subprocess.Popen(
@@ -5059,24 +5092,11 @@ def _refresh_north_cache():
             logger.warning("[DataEnrich] North: summary empty")
 
         # 个股北向持仓：对可转债正股逐股查询（单股接口稳定）
-        #  always fetch all A-share codes for broad coverage (AGENTS.md #46)
+        # 限制为债券正股，避免全 A 股 5000+ 导致超时覆盖率不足 (AGENTS.md #46)
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
-        bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
-        all_codes = bond_codes[:]
-        # Extend to full A-share universe regardless of bond stock availability
-        # 用 _run_with_timeout 包装避免测试/启动阻塞（默认 30s 超时）
-        try:
-            df_all = _run_with_timeout(
-                ak.stock_info_a_code_name,
-                timeout=_TIMEOUT_MEDIUM, default=None,
-                op_name="stock_info_a_code_name",
-            )
-            if df_all is not None and not df_all.empty:
-                a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
-                all_codes = list(dict.fromkeys(bond_codes + a_codes))  # preserve order, dedup
-        except Exception as e:
-            logger.debug(f"[DataEnrich] North: failed to get all A-share codes: {e}")
+        all_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
+        # 不再扩展为全 A 股，专注债券正股以提高覆盖率
         if not all_codes:
             logger.debug("[DataEnrich] North: no codes available, skipping per-stock query")
 
@@ -5198,6 +5218,9 @@ def _refresh_margin_cache():
             if not code_col:
                 logger.warning(f"[DataEnrich] Margin: {exchange.upper()} missing code column")
                 continue
+            if not balance_col:
+                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} missing balance column")
+                continue
 
             filled = 0
             for _, r in df.iterrows():
@@ -5220,7 +5243,7 @@ def _refresh_margin_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "margin_balance": None,  # 用 None 区分"无融资余额"和"0 元"
+                    "margin_balance": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
                     "_data_source": "zero_fill",
                 }
 
@@ -5290,7 +5313,7 @@ def _refresh_lhb_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "lhb_count": None,  # 用 None 区分"未上榜"和"上榜 0 次"
+                    "lhb_count": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
                     "_prev_count": 0,
                     "_delta": 0,
                     "_data_source": "zero_fill",
@@ -5372,14 +5395,16 @@ def _refresh_holder_num_cache():
         if not callable(getattr(ak, "stock_main_stock_holder", None)):
             logger.warning("[DataEnrich] HolderNum: akshare 接口 stock_main_stock_holder 不可用")
             return 0
-        if not _bond_stock_codes:
-            _ensure_bond_stock_codes()
-        bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
-        all_codes = bond_codes[:]
+        # 三级回退获取待处理代码：bond_codes > name_map > ak.stock_info_a_code_name
+        # 使用统一的 _get_bond_or_fallback_codes()，避免每次都重新调用 akshare
+        all_codes = list(_get_bond_or_fallback_codes())
         # 限制到 300 只股票（top 300 个按代码排序），避免单股 API 慢导致 5+ 分钟
         # periodic runner 后续会补全剩余 854 只
         MAX_HOLDER_CODES = 300
-        if len(all_codes) < MAX_HOLDER_CODES:
+        if len(all_codes) > MAX_HOLDER_CODES:
+            all_codes = all_codes[:MAX_HOLDER_CODES]
+        elif len(all_codes) < MAX_HOLDER_CODES:
+            # 仍不足 300 只才调用 akshare（避免重复 IO）
             try:
                 df_all = _run_with_timeout(
                     ak.stock_info_a_code_name,
@@ -5397,6 +5422,14 @@ def _refresh_holder_num_cache():
                 pass
         if not all_codes:
             logger.debug("[DataEnrich] HolderNum: no codes available, skipping")
+            # 即使没有可处理的代码，磁盘缓存可能仍然有数据。
+            # 返回磁盘缓存的 size 以避免监控面板显示 empty 误报。
+            if _holder_num_map:
+                logger.info(
+                    f"[DataEnrich] HolderNum: no fresh codes, keeping existing cache "
+                    f"({len(_holder_num_map)} stocks)"
+                )
+                return len(_holder_num_map)
             return 0
 
         result = {}
@@ -5462,7 +5495,7 @@ def _refresh_holder_num_cache():
                 for fut in futures:
                     fut.cancel()
 
-        # 若 result 为空（API 全部失败），回退到磁盘缓存
+        # 若 result 为空（API 全部失败），回退到内存或磁盘缓存
         # holder_num=0 在物理上不可能（任何公司都有股东），
         # 所以 zero_fill 没有意义，但缓存中的旧数据仍可作为 "上次成功值" 使用
         if not result and _holder_num_map:
@@ -5471,6 +5504,18 @@ def _refresh_holder_num_cache():
                 f"({len(_holder_num_map)} stocks)"
             )
             return len(_holder_num_map)
+        # 双重保险：若内存缓存也没了，再尝试一次磁盘加载
+        if not result:
+            try:
+                _load_holder_num_cache()
+            except Exception as e:
+                logger.debug(f"[DataEnrich] HolderNum disk reload failed: {e}")
+            if _holder_num_map:
+                logger.info(
+                    f"[DataEnrich] HolderNum: API returned empty, reloaded disk cache "
+                    f"({len(_holder_num_map)} stocks)"
+                )
+                return len(_holder_num_map)
         if result:
             _set_global_map("_holder_num_map", result, replace=True)
             _save_cache(_HOLDER_NUM_CACHE, result)
@@ -5557,7 +5602,7 @@ def _refresh_earnings_forecast_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "yoy_change_pct": None,
+                    "yoy_change_pct": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
                     "_date": "",
                     "_data_source": "zero_fill",
                 }
@@ -5611,7 +5656,7 @@ def _refresh_restricted_release_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "restricted_release_amount": None,  # 用 None 区分"无解禁"和"解禁 0 股"
+                    "restricted_release_amount": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
                     "_data_source": "zero_fill",
                 }
         if result:

@@ -258,19 +258,25 @@ class TestExtendedCacheRefresh:
 
     def test_holder_num_cache_handles_missing_interface(self):
         # 强制 _bond_stock_codes 为空，模拟 API 缺失且无可转债代码的场景，
-        # 此时 zero_fill 不应添加任何条目，count 应为 0。
+        # 此时会触发 disk cache 兜底（如果磁盘有缓存），
+        # 否则返回 0。
         saved_codes = de._bond_stock_codes
+        saved_map = de._holder_num_map
         de._bond_stock_codes = set()
+        de._holder_num_map = {}  # 强制内存缓存为空，模拟首次启动
         try:
             with patch.object(de.ak, "stock_main_stock_holder", create=True):
                 with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
-                    count = de._refresh_holder_num_cache()
-            # Without zero_fill, count should be 0 when API fails
+                    # Mock disk load 也失败以确保返回 0
+                    with patch.object(de, "_load_holder_num_cache", side_effect=Exception("no disk cache")):
+                        count = de._refresh_holder_num_cache()
+            # API + 内存 + 磁盘缓存都没有时，count 应为 0
             assert count == 0
             metrics = de.get_refresh_metrics()
             assert metrics["_refresh_holder_num_cache"]["status"] == "empty"
         finally:
             de._bond_stock_codes = saved_codes
+            de._holder_num_map = saved_map
 
     def test_earnings_forecast_cache_refresh_ok(self):
         df = pd.DataFrame({"股票代码": ["000001"], "业绩变动幅度": [50.0]})
@@ -285,6 +291,53 @@ class TestExtendedCacheRefresh:
             count = de._refresh_restricted_release_cache()
         assert count >= 1
         assert de._restricted_release_map.get("000001", {}).get("restricted_release_amount") == 1000000.0
+
+
+class TestBondOrFallbackCodes:
+    """Verify _get_bond_or_fallback_codes() with the new lazy-load fallback."""
+
+    def teardown_method(self):
+        # Reset all caches
+        for attr in ("_bond_stock_codes", "_name_map"):
+            v = getattr(de, attr, None)
+            if isinstance(v, (set, dict)):
+                v.clear()
+        # Force _name_loaded to False to allow re-loading
+        if hasattr(de, "_name_loaded"):
+            de._name_loaded = False
+
+    def test_lazy_loads_name_map_when_empty(self):
+        """When _name_map is empty but disk has data, should trigger lazy load."""
+        # First, save some test data to disk
+        test_data = {"000001": "Test Stock 1", "000002": "Test Stock 2", "600000": "Test Stock 3"}
+        with patch.object(de, "_load_stock_name_cache") as mock_load:
+            # Simulate _load_stock_name_cache populating _name_map
+            def fake_load():
+                de._name_map.update(test_data)
+            mock_load.side_effect = fake_load
+
+            # _bond_stock_codes is empty, _name_map is empty
+            assert de._bond_stock_codes == set()
+            assert de._name_map == {}
+
+            # Call the function - should trigger lazy load
+            codes = de._get_bond_or_fallback_codes()
+            assert codes == frozenset(test_data.keys())
+            mock_load.assert_called_once()
+
+    def test_returns_bond_codes_when_available(self):
+        """When _bond_stock_codes is populated, should return it without touching _name_map."""
+        de._bond_stock_codes = {"000001", "000002"}
+        with patch.object(de, "_load_stock_name_cache") as mock_load:
+            codes = de._get_bond_or_fallback_codes()
+            assert codes == frozenset({"000001", "000002"})
+            mock_load.assert_not_called()
+
+    def test_returns_empty_when_nothing_available(self):
+        """When nothing is available and lazy load also fails, return empty frozenset."""
+        with patch.object(de, "_load_stock_name_cache", side_effect=Exception("disk fail")):
+            codes = de._get_bond_or_fallback_codes()
+            assert codes == frozenset()
 
 
 class TestDataSourceApiCalls:
@@ -547,13 +600,14 @@ class TestBondOrFallbackCodes:
             de._name_map = saved_names
 
     def test_returns_empty_when_neither_populated(self):
-        """两者都为空时，返回空 frozenset。"""
+        """两者都为空时，返回空 frozenset（mock 掉磁盘回退）。"""
         saved_codes = de._bond_stock_codes
         saved_names = de._name_map
         de._bond_stock_codes = set()
         de._name_map = {}
         try:
-            codes = de._get_bond_or_fallback_codes()
+            with patch.object(de, '_load_stock_name_cache', lambda: None):
+                codes = de._get_bond_or_fallback_codes()
             assert codes == frozenset()
         finally:
             de._bond_stock_codes = saved_codes
