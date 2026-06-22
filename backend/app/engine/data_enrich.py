@@ -1337,7 +1337,12 @@ def _refresh_fund_flow_cache():
     for attempt in range(max_attempts):
         try:
             logger.info(f"[DataEnrich] Refreshing fund flow rank attempt {attempt+1}/{max_attempts}...")
-            df = ak.stock_individual_fund_flow_rank(indicator="今日")
+            # 用 _run_with_timeout 加超时保护（默认 30s），避免 EM API 挂死
+            df = _run_with_timeout(
+                lambda: ak.stock_individual_fund_flow_rank(indicator="今日"),
+                timeout=_TIMEOUT_MEDIUM, default=None,
+                op_name="fund_flow_rank",
+            )
             if df is None or len(df) == 0:
                 raise ValueError("stock_individual_fund_flow_rank returned empty")
             result = {}
@@ -1725,23 +1730,22 @@ def _refresh_volatility_cache():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
             futures = [ex.submit(_fetch_one_vol, item) for item in sorted_stocks]
             # AGENTS.md fix: as_completed 无 timeout 时，如果 AKShare 接口 hang 住，
-            # 线程池会无限等待。添加 180s 总超时，超时的 future 直接丢弃。
+            # 线程池会无限等待。添加 60s 总超时（让 metrics 在合理时间内完成），
+            # 60s 后保留已完成的结果，periodic runner 后续补充剩余股票。
             done, pending = concurrent.futures.wait(
-                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                futures, timeout=60, return_when=concurrent.futures.FIRST_COMPLETED
             )
-            if pending:
-                logger.warning(f"[DataEnrich] Volatility: {len(pending)} (of {len(futures)}) futures unfinished after 180s, keeping {len(done)}")
-                for fut in pending:
-                    fut.cancel()
-            for i, future in enumerate(done):
+            # 处理已完成的部分
+            for future in done:
                 code, vol, em_failed = future.result()
                 if vol is not None:
                     result[code] = round(vol, 2)
                 if em_failed:
                     em_fail_count += 1
-                if (i + 1) % 50 == 0:
-                    logger.info(f"[DataEnrich] Volatility: {i + 1}/{len(sorted_stocks)} (EM fails={em_fail_count})")
-                    time.sleep(1)  # 节流，无中间保存（避免崩溃后磁盘残留部分数据）
+            if pending:
+                logger.warning(f"[DataEnrich] Volatility: {len(pending)} (of {len(futures)}) futures unfinished after 60s, keeping {len(done)}")
+                for fut in pending:
+                    fut.cancel()
 
         # [TDX] fallback: 补充 EM/TX 均未覆盖的波动率（先于最终 save）
         if _bond_stock_codes:
