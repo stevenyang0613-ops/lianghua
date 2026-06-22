@@ -19,10 +19,41 @@ export interface ErrorLog {
 const ERROR_LOG_KEY = 'error_logs'
 const MAX_LOGS = 200
 
+// In-memory buffer + debounced flush to avoid localStorage hammering
+let _pendingLogs: ErrorLog[] = []
+let _flushTimer: ReturnType<typeof setTimeout> | null = null
+const FLUSH_DELAY = 500
+
+function _flushLogs(): void {
+  if (_flushTimer) {
+    clearTimeout(_flushTimer)
+    _flushTimer = null
+  }
+  if (_pendingLogs.length === 0) return
+  const stored = getErrorLogs()
+  const merged = stored.concat(_pendingLogs)
+  if (merged.length > MAX_LOGS) {
+    merged.splice(0, merged.length - MAX_LOGS)
+  }
+  try {
+    localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(merged))
+  } catch (e) {
+    // QuotaExceeded or other localStorage error — best-effort
+    console.warn('[ErrorLogger] localStorage write failed:', e)
+  }
+  _pendingLogs = []
+}
+
+function _scheduleFlush(): void {
+  if (_flushTimer) return
+  _flushTimer = setTimeout(_flushLogs, FLUSH_DELAY)
+}
+
+// Ensure logs are flushed on page unload
+window.addEventListener('beforeunload', _flushLogs)
+
 // 记录错误
 export function logError(error: Partial<ErrorLog>): void {
-  const logs = getErrorLogs()
-
   const fullError: ErrorLog = {
     type: error.type || 'unknown',
     message: error.message || 'Unknown error',
@@ -34,14 +65,14 @@ export function logError(error: Partial<ErrorLog>): void {
     metadata: error.metadata,
   }
 
-  logs.push(fullError)
+  _pendingLogs.push(fullError)
 
-  // 限制数量
-  if (logs.length > MAX_LOGS) {
-    logs.splice(0, logs.length - MAX_LOGS)
+  // 限制内存缓冲区数量
+  if (_pendingLogs.length > MAX_LOGS) {
+    _pendingLogs.splice(0, _pendingLogs.length - MAX_LOGS)
   }
 
-  localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(logs))
+  _scheduleFlush()
 
   // 同时输出到控制台
   console.error('[ErrorLogger]', fullError)

@@ -433,24 +433,8 @@ export class LogCollector {
   }
 
   private setupGlobalHandlers(): void {
-    // 捕获未处理的错误
-    window.addEventListener('error', (event) => {
-      this.error('global', 'Uncaught error', {
-        message: event.message,
-        filename: event.filename,
-        lineno: event.lineno,
-        colno: event.colno,
-      })
-    })
-
-    // 捕获未处理的 Promise rejection
-    window.addEventListener('unhandledrejection', (event) => {
-      this.error('global', 'Unhandled promise rejection', {
-        reason: String(event.reason),
-      })
-    })
-
-    // 页面卸载前刷新日志
+    // Note: global error/unhandledrejection listeners are managed by errorLogger.ts
+    // to avoid duplicate registration. We only handle beforeunload here.
     window.addEventListener('beforeunload', () => {
       this.flush()
     })

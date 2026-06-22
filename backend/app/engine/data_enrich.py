@@ -1081,7 +1081,7 @@ def _refresh_spot_cache():
                     r = _run_with_timeout(
                         lambda: _req.get(
                             'https://push2.eastmoney.com/api/qt/stock/get',
-                            params={'fields': 'f57,f162,f167,f168', 'secid': secid},
+                            params={'fields': 'f57,f162,f167,f168,f20,f21', 'secid': secid},
                             headers=_headers, timeout=8,
                         ),
                         timeout=12, default=None, op_name="spot_single",
@@ -1095,6 +1095,8 @@ def _refresh_spot_cache():
                             'pe': d.get('f162', 0),
                             'pb': d.get('f167', 0),
                             'tr': d.get('f168', 0),
+                            'total_mv': d.get('f20', 0),
+                            'circ_mv': d.get('f21', 0),
                         }}
                 except Exception:
                     pass
@@ -1118,6 +1120,10 @@ def _refresh_spot_cache():
                                 pb_map[c] = round(vals['pb'], 2)
                             if vals.get('tr') is not None and vals['tr'] >= 0:
                                 tr_map[c] = round(vals['tr'], 2)
+                            if vals.get('total_mv') and vals['total_mv'] > 0:
+                                sina_map.setdefault(c, {})['total_mv'] = round(vals['total_mv'], 2)
+                            if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                                sina_map.setdefault(c, {})['circ_mv'] = round(vals['circ_mv'], 2)
                 # If sample fails completely, skip individual fallback to avoid wasting 20+ min
                 if sample_ok == 0:
                     logger.warning("[DataEnrich] EM stock/get sample all failed, skipping individual fallback")
@@ -1140,6 +1146,10 @@ def _refresh_spot_cache():
                                         pb_map[code] = round(vals['pb'], 2)
                                     if vals.get('tr') is not None and vals['tr'] >= 0 and code not in tr_map:
                                         tr_map[code] = round(vals['tr'], 2)
+                                    if vals.get('total_mv') and vals['total_mv'] > 0:
+                                        sina_map.setdefault(code, {})['total_mv'] = round(vals['total_mv'], 2)
+                                    if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                                        sina_map.setdefault(code, {})['circ_mv'] = round(vals['circ_mv'], 2)
 
         if _bond_stock_codes:
             bond_missing = [c for c in _bond_stock_codes if c not in pe_map or c not in pb_map]
@@ -1191,6 +1201,8 @@ def _refresh_spot_cache():
                 "price": sina.get("price"),
                 "volume": sina.get("volume"),
                 "turnover_rate": tr_map.get(code),
+                "total_mv": sina.get("total_mv"),
+                "circ_mv": sina.get("circ_mv"),
             }
             result[code] = entry
 
@@ -1215,6 +1227,8 @@ def _refresh_spot_cache():
                     "price": new.get("price") if new.get("price") is not None else old.get("price"),
                     "volume": new.get("volume") if new.get("volume") is not None else old.get("volume"),
                     "turnover_rate": new.get("turnover_rate") if new.get("turnover_rate") is not None else old.get("turnover_rate"),
+                    "total_mv": new.get("total_mv") if new.get("total_mv") is not None else old.get("total_mv"),
+                    "circ_mv": new.get("circ_mv") if new.get("circ_mv") is not None else old.get("circ_mv"),
                 }
             _set_global_map("_spot_map", merged, replace=True)
             _save_cache(_SPOT_CACHE, merged)
@@ -1560,13 +1574,15 @@ def _refresh_volatility_cache():
         if not source:
             logger.warning("[DataEnrich] No spot data for volatility calc, skipping")
             return
-        # _spot_map entries are {pe, pb, change_pct, price, volume, turnover_rate}
-        # NOTE: circ_mv (流通市值) is NOT available from Sina stock_zh_a_spot in akshare 1.18.x.
-        # We use volume (成交额) as the liquidity proxy instead (AGENTS.md #44).
+        # _spot_map entries are {pe, pb, change_pct, price, volume, turnover_rate, total_mv, circ_mv}
+        # circ_mv is now fetched from EM ulist.np/get (f21) for precise liquidity ranking.
         def _liquidity_proxy(item):
             v = item[1] if isinstance(item[1], dict) else {}
-            vol = v.get("volume", 0) or 0
-            return float(vol)
+            # Prefer precise circ_mv (f21) from EM, fallback to volume proxy (AGENTS.md #44)
+            circ = v.get("circ_mv", 0) or 0
+            if circ > 0:
+                return float(circ)
+            return float(v.get("volume", 0) or 0)
 
         # 只处理与可转债正股相关的股票代码，避免在5000+全A股上浪费时间
         _ensure_bond_stock_codes()
@@ -3500,12 +3516,17 @@ async def enrich_quotes(bonds: list) -> list:
                     rz_ratio = margin.get("rz_ratio")
                     if rz_ratio is not None and rz_ratio > 0:
                         sp = spot_ref.get(stock_code, {})
-                        if isinstance(sp, dict) and sp.get("volume") and sp.get("turnover_rate"):
-                            turnover_rate = sp["turnover_rate"]
-                            if turnover_rate and turnover_rate > 0:
-                                # 流通市值 ≈ 成交额 / (换手率/100)
-                                vol_val = sp["volume"]
-                                circ_mv = vol_val / (turnover_rate / 100)
+                        if isinstance(sp, dict):
+                            # Prefer precise circ_mv from EM (f21), fallback to volume/turnover estimate
+                            circ_mv = sp.get("circ_mv")
+                            if not circ_mv:
+                                if sp.get("volume") and sp.get("turnover_rate"):
+                                    turnover_rate = sp["turnover_rate"]
+                                    if turnover_rate and turnover_rate > 0:
+                                        # 流通市值 ≈ 成交额 / (换手率/100)
+                                        vol_val = sp["volume"]
+                                        circ_mv = vol_val / (turnover_rate / 100)
+                            if circ_mv and circ_mv > 0:
                                 est_rzye = circ_mv * rz_ratio / 100
                                 if est_rzye > 0:
                                     b.margin_balance = round(est_rzye / 1e8, 2)
@@ -3797,7 +3818,10 @@ async def start_background_refresh():
             _extended_executor.submit(fn)
             for fn in (_refresh_north_cache, _refresh_margin_cache, _refresh_lhb_cache,
                        _refresh_block_trade_cache, _refresh_holder_num_cache,
-                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache)
+                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache,
+                       # bond_price 在 runner 子进程里是最后一步（要等 spot→vol→fund_flow
+                       # 全部完成），单独加到扩展执行器里并行执行，可让 bond_price 提前 ~5 分钟可用
+                       _refresh_bond_price_cache)
         ]
         for f in concurrent.futures.as_completed(futures, timeout=300):
             try:
@@ -4457,13 +4481,26 @@ def _refresh_north_cache():
             processed = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=15) as pool:
                 futures = {pool.submit(_fetch_one, c): c for c in all_codes}
-                for fut in concurrent.futures.as_completed(futures, timeout=180):
-                    r = fut.result()
-                    if r:
-                        result[r[0]] = r[1]
-                        processed += 1
-                        if processed % 200 == 0:
-                            _save_cache(_NORTH_CACHE, result)
+                # AGENTS.md fix: use wait() instead of as_completed(timeout) to handle
+                # partial completion gracefully. as_completed(timeout=180) throws
+                # TimeoutError when not all 854 futures finish in time, losing all
+                # completed results. wait() returns done/pending sets; we process
+                # done and ignore pending (cancelled on pool shutdown).
+                done, pending = concurrent.futures.wait(
+                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending:
+                    logger.warning(f"[DataEnrich] North: {len(pending)} (of {len(futures)}) futures unfinished after 300s, keeping {len(done)} completed")
+                for fut in done:
+                    try:
+                        r = fut.result()
+                        if r:
+                            result[r[0]] = r[1]
+                            processed += 1
+                    except Exception:
+                        pass
+                    if processed % 200 == 0:
+                        _save_cache(_NORTH_CACHE, result)
 
         # Zero-fill: 无论 API 是否成功，都对所有已知股票代码填充默认值
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
@@ -4747,24 +4784,34 @@ def _refresh_holder_num_cache():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, c): c for c in all_codes}
             processed = 0
-            for fut in concurrent.futures.as_completed(futures, timeout=300):
-                r = fut.result()
-                if r:
-                    code, holders = r
-                    if holders and holders > 0:
-                        # 用上一次缓存的 holder_num 计算真实 change（None 表示无基线）
-                        prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                        prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                        if isinstance(prev_count, (int, float)) and prev_count > 0:
-                            holder_num_change = holders - prev_count
-                        else:
-                            holder_num_change = None  # 三态：未测量 vs 真的无变化
-                        result[code] = {
-                            "holder_num": holders,
-                            "holder_num_change": holder_num_change,
-                            "_data_source": "estimated",
-                        }
-                processed += 1
+            # AGENTS.md fix: use wait() instead of as_completed(timeout) to handle
+            # partial completion gracefully.
+            done, pending = concurrent.futures.wait(
+                futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] HolderNum: {len(pending)} (of {len(futures)}) futures unfinished after 300s, keeping {len(done)} completed")
+            for fut in done:
+                try:
+                    r = fut.result()
+                    if r:
+                        code, holders = r
+                        if holders and holders > 0:
+                            # 用上一次缓存的 holder_num 计算真实 change（None 表示无基线）
+                            prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
+                            prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
+                            if isinstance(prev_count, (int, float)) and prev_count > 0:
+                                holder_num_change = holders - prev_count
+                            else:
+                                holder_num_change = None  # 三态：未测量 vs 真的无变化
+                            result[code] = {
+                                "holder_num": holders,
+                                "holder_num_change": holder_num_change,
+                                "_data_source": "estimated",
+                            }
+                        processed += 1
+                except Exception:
+                    pass
                 if processed % 200 == 0:
                     _save_cache(_HOLDER_NUM_CACHE, result)
 

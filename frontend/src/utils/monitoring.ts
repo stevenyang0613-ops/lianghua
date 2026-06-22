@@ -55,29 +55,6 @@ class MonitoringService {
     window.addEventListener('beforeunload', () => {
       this.flush()
     })
-
-    // 全局错误捕获
-    window.addEventListener('error', (event) => {
-      this.captureError({
-        type: 'error',
-        message: event.message,
-        stack: event.error?.stack,
-        url: window.location.href,
-        userAgent: navigator.userAgent,
-        timestamp: Date.now(),
-      })
-    })
-
-    // Promise 未捕获错误
-    window.addEventListener('unhandledrejection', (event) => {
-      this.captureError({
-        type: 'error',
-        message: `Unhandled Promise Rejection: ${event.reason}`,
-        url: window.location.href,
-        userAgent: navigator.userAgent,
-        timestamp: Date.now(),
-      })
-    })
   }
 
   /**
