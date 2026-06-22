@@ -581,7 +581,9 @@ async def lifespan(app: FastAPI):
                 runner_script = str(Path(__file__).parent / "engine" / "data_enrich_runner.py")
                 _enrich_log_dir = Path.home() / ".lianghua" / "logs"
                 _enrich_log_dir.mkdir(parents=True, exist_ok=True)
-                cmd = [sys.executable, runner_script, "--spot", "--vol", "--fund-flow", "--bond-price"]
+                # bond-price 由主进程扩展执行器负责（避免双重执行）
+                # 只把最高 segfault 风险的 spot/vol/fund-flow 留给 runner 子进程
+                cmd = [sys.executable, runner_script, "--spot", "--vol", "--fund-flow"]
                 _enrich_log = open(_enrich_log_dir / "enrich_runner.log", "w")
                 p = subprocess.Popen(
                     cmd,
