@@ -1552,7 +1552,7 @@ def _refresh_volatility_cache():
         source = _spot_map if _spot_map else {}
         if not source:
             logger.warning("[DataEnrich] No spot data for volatility calc, skipping")
-            return
+            return 0
         # _spot_map entries are {pe, pb, change_pct, price, volume, turnover_rate, total_mv, circ_mv}
         # circ_mv is now fetched from EM ulist.np/get (f21) for precise liquidity ranking.
         def _liquidity_proxy(item):
@@ -1645,10 +1645,12 @@ def _refresh_volatility_cache():
         _set_global_map("_vol_map", result, replace=True)
         _save_cache(_VOL_CACHE, result)
         logger.info(f"[DataEnrich] Volatility: {len(result)} stocks")
+        return len(result)
     except Exception as e:
         logger.warning(f"[DataEnrich] Volatility refresh failed: {e}")
         if not _vol_map:
             _load_vol_cache()
+        return len(_vol_map) if _vol_map else 0
 
 
 @_with_metrics
@@ -1692,10 +1694,12 @@ def _refresh_buyback_cache():
         _set_global_map("_buyback_map", result, replace=True)
         _save_cache(_BUYBACK_CACHE, result)
         logger.info(f"[DataEnrich] Buyback: {len(result)} stocks")
+        return len(result)
     except Exception as e:
         logger.warning(f"[DataEnrich] Buyback refresh failed: {e}")
         if not _buyback_map:
             _load_buyback_cache()
+        return len(_buyback_map) if _buyback_map else 0
 
 
 @_with_metrics
@@ -1804,15 +1808,18 @@ def _refresh_mgmt_cache():
             _set_global_map("_mgmt_map", result, replace=True)
             _save_cache(_MGMT_CACHE, result)
             logger.info(f"[DataEnrich] Mgmt buy price: {len(result)} stocks (final)")
+            return len(result)
         else:
             logger.warning("[DataEnrich] Mgmt: no data from any source")
             if not _mgmt_map:
                 _load_mgmt_cache()
+            return len(_mgmt_map) if _mgmt_map else 0
 
     except Exception as e:
         logger.warning(f"[DataEnrich] Mgmt buy price refresh failed: {e}")
         if not _mgmt_map:
             _load_mgmt_cache()
+        return len(_mgmt_map) if _mgmt_map else 0
 
 
 # ==================== TDX 数据源统一 fallback 辅助函数 ====================
@@ -1996,7 +2003,7 @@ def _refresh_coupon_rate_cache():
         import akshare as ak
     except ImportError:
         logger.warning("[DataEnrich][CouponRate] akshare not installed, skip")
-        return
+        return 0
 
     result = dict(_coupon_rate_map)  # 保留已有值
 
@@ -2049,6 +2056,7 @@ def _refresh_coupon_rate_cache():
         _save_cache(_COUPON_RATE_CACHE, result)
         _set_global_map("_coupon_rate_map", result, replace=True)
         logger.info(f"[DataEnrich][CouponRate] Final: {len(result)} codes")
+    return len(result)
 
 
 def _load_coupon_rate_cache():
@@ -2263,10 +2271,12 @@ def _refresh_bond_price_cache():
         _bond_price_loaded = True
         total_count = len(result)
         logger.info(f"[DataEnrich][BondPrice] Total: {total_count} bonds")
+        return total_count
     except Exception as e:
         logger.warning(f"[DataEnrich][BondPrice] Bond price refresh failed: {e}")
         if not _bond_price_map:
             _load_bond_price_cache()
+        return len(_bond_price_map) if _bond_price_map else 0
 
 
 def _load_concept_cache():
@@ -2585,8 +2595,10 @@ def _build_concept_cache():
             # 统计
             concepts_with_tdx = sum(1 for s in source_map.values() if s.get('tdx'))
             logger.info(f'[DataEnrich] Concept total: {len(result)} stocks, {len(source_map)} concepts ({concepts_with_tdx} TDX-expanded)')
+            return len(result)
     except Exception as e:
         logger.warning(f'[DataEnrich] Concept build failed: {e}')
+    return len(_concept_map) if _concept_map else 0
 
 
 def _compute_momentum_from_kline(stock_code: str, kline_dir: Path) -> Optional[dict]:
@@ -2697,13 +2709,16 @@ def _refresh_momentum_cache():
             _set_global_map('_momentum_map', merged)
             _save_cache(_MOMENTUM_CACHE, merged)
             logger.info(f'[DataEnrich][TDX] Momentum: {len(result)} new + {len(existing)} existing = {len(merged)} stocks (kline+tx+tdx)')
+            return len(merged)
         else:
             logger.warning(f'[DataEnrich] Momentum: no new data, kept existing')
             _load_momentum_cache()
+            return len(_momentum_map) if _momentum_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Momentum refresh failed: {e}')
         if not _momentum_map:
             _load_momentum_cache()
+        return len(_momentum_map) if _momentum_map else 0
 
 
 @_with_metrics
@@ -2779,11 +2794,14 @@ def _refresh_event_cache():
             _set_global_map('_event_map', result, replace=True)
             _save_cache(_EVENT_CACHE, result)  # 始终持久化，避免 TDX 补充数据丢失
             logger.info(f'[DataEnrich] Event: {len(result)} bonds published')
+            return len(result)
         else:
             _load_event_cache()
+            return len(_event_map) if _event_map else 0
     except Exception as outer_e:
         logger.warning(f'[DataEnrich] Event refresh outer error: {outer_e}')
         _load_event_cache()
+        return len(_event_map) if _event_map else 0
 
 
 
@@ -2833,7 +2851,7 @@ def _refresh_pledge_cache():
                 _set_global_map('_pledge_map', merged)
                 _save_cache(_PLEDGE_CACHE, merged)
                 logger.info(f'[DataEnrich] Pledge: {len(merged)} stocks (EM={len(result)}, CNINFO={len(result2)})')
-                return
+                return len(merged)
         except Exception as e2:
             logger.warning(f'[DataEnrich] Pledge CNINFO failed: {e2}')
     else:
@@ -2848,6 +2866,7 @@ def _refresh_pledge_cache():
 
     if not _pledge_map:
         _load_pledge_cache()
+    return len(_pledge_map) if _pledge_map else 0
 
 
 @_with_metrics
@@ -2908,14 +2927,17 @@ def _refresh_bond_outstanding_cache():
             _set_global_map('_bond_outstanding_map', result, replace=True)
             _save_cache(_BOND_OUTSTANDING_CACHE, result)
             logger.info(f'[DataEnrich] Bond outstanding: total {len(result)} bonds')
+            return len(result)
         else:
             logger.warning('[DataEnrich] Bond outstanding: all sources empty')
             if not _bond_outstanding_map:
                 _load_bond_outstanding_cache()
+            return len(_bond_outstanding_map) if _bond_outstanding_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Bond outstanding refresh failed: {e}')
         if not _bond_outstanding_map:
             _load_bond_outstanding_cache()
+        return len(_bond_outstanding_map) if _bond_outstanding_map else 0
 
 
 @_with_metrics
@@ -2979,13 +3001,16 @@ def _refresh_call_status_cache():
             _set_global_map('_call_status_map', result, replace=True)
             _save_cache(_CALL_STATUS_CACHE, result)
             logger.info(f'[DataEnrich] Call status: {len(result)} bonds (JSL={jsl_count}, default=未触发={len(result)-jsl_count})')
+            return len(result)
         else:
             if not _call_status_map:
                 _load_call_status_cache()
+            return len(_call_status_map) if _call_status_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Call status refresh failed: {e}')
         if not _call_status_map:
             _load_call_status_cache()
+        return len(_call_status_map) if _call_status_map else 0
 
 
 @_with_metrics
@@ -3021,12 +3046,17 @@ def _refresh_stock_name_cache():
             _set_global_map('_name_map', result, replace=True)
             _save_cache(_STOCK_NAME_CACHE, result)
             logger.info(f'[DataEnrich][TDX] Stock names: {len(result)} stocks')
+            return len(result)
         else:
-            raise ValueError(f'Only {len(result)} names')
+            logger.warning(f'[DataEnrich] Names: only {len(result)} names fetched, keeping existing cache')
+            if not _name_map:
+                _load_stock_name_cache()
+            return len(_name_map) if _name_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Stock name refresh failed: {e}')
         if not _name_map:
             _load_stock_name_cache()
+        return len(_name_map) if _name_map else 0
 
 
 # ==================== 全局状态 ====================
@@ -4349,7 +4379,7 @@ def _refresh_earnings_express_cache():
 
 def _load_restricted_release_cache():
     global _restricted_release_map
-    status, new_map = _load_ext_cache_with_status(_RESTRICTED_RELEASE_CACHE, ttl=0)
+    status, new_map = _load_ext_cache_with_status(_RESTRICTED_RELEASE_CACHE, ttl=86400 * 3)
     if status == "fresh":
         file_ts = new_map.get("_ts", 0)
         with _cache_lock:
@@ -4969,8 +4999,8 @@ def _refresh_restricted_release_cache():
 # by the runner subprocess, not refreshed from main process.
 def get_concept_sources() -> dict[str, dict[str, bool]]:
     """概念数据源归属：concept_name -> {"em": bool, "ths": bool}"""
-    if not _concept_source_map:
-        status, raw = _load_ext_cache_with_status(_CONCEPT_SOURCE_CACHE)
+    status, raw = _load_ext_cache_with_status(_CONCEPT_SOURCE_CACHE)
+    if status in ("fresh", "stale"):
         _concept_source_map.update(raw)
     return _concept_source_map
 
