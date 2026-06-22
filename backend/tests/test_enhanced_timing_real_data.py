@@ -47,6 +47,7 @@ def _make_real_macro_data():
     m.stock_index_change = 0.6
     m.stock_index_change_20d = 3.2    # 近20日累计涨跌幅
     m.stock_index_change_60d = -1.8   # 近60日累计涨跌幅
+    m.max_dd_20d = -4.5               # 近20日最大回撤
     m.stock_index_ma20 = 3480.0
     m.stock_index_ma60 = 3450.0
     m.stock_pe_median = 22.5

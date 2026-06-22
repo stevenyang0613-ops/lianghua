@@ -495,7 +495,13 @@ async function httpRequestHandler(
     })
 
     if (body && method.toUpperCase() !== 'GET') {
-      req.write(JSON.stringify(body))
+      try {
+        req.write(JSON.stringify(body))
+      } catch (e: any) {
+        console.error('[Electron] JSON serialization failed:', e.message)
+        resolve({ ok: false, status: 0, data: null, error: 'Request body serialization failed: ' + e.message })
+        return
+      }
     }
     req.end()
   })
@@ -1001,7 +1007,8 @@ function killStaleInstances(): void {
       for (const pid of pids) {
         try { process.kill(pid, 'SIGKILL') } catch {}
       }
-      require('child_process').execFileSync('sleep', ['0.5'])
+      // Cross-platform sleep (busy-wait 500ms; avoids Unix-only 'sleep' command)
+      const start = Date.now(); while (Date.now() - start < 500) {}
     }
   } catch {}
 }
@@ -1012,7 +1019,7 @@ function getBackendDir(): string {
   if (!isDev) {
     return path.join(process.resourcesPath, 'backend')
   }
-  return path.join(__dirname, '..', 'backend')
+  return path.join(__dirname, '..', '..', 'backend')
 }
 
 function getPythonCmd(backendDir: string): { cmd: string; envPath?: string } {
@@ -1025,13 +1032,17 @@ function getPythonCmd(backendDir: string): { cmd: string; envPath?: string } {
     if (fs.existsSync(venvPython)) return { cmd: venvPython }
   }
   // Resolve python3 absolute path (macOS sandbox restricts PATH-based lookup)
+  // Prioritize newer Python versions (3.12+) over system Python (3.9) which may
+  // lack required packages.  PyInstaller 打包的 lianghua-backend 不存在时，
+  // 使用 Frameworks 中安装的 Python 3.12 是最可靠的后备。
   const candidates = [
+    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.13/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.10/bin/python3',
     '/usr/local/bin/python3',
     '/opt/homebrew/bin/python3',
     '/usr/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.10/bin/python3',
   ]
   for (const c of candidates) {
     if (fs.existsSync(c)) return { cmd: c }
@@ -1171,6 +1182,7 @@ function startPythonBackend() {
   pythonProcess.on('error', (err: Error) => {
     console.error('[Electron] Failed to start Python:', err.message)
     recordCrash('backend', `Failed to start Python: ${err.message}`)
+    _backendStarting = false  // AGENTS.md fix: reset flag so restartBackend can retry
     // Notify the renderer immediately so the user is not staring at a loading
     // screen for the full 60s waitForBackend timeout.
     mainWindow?.webContents.send('backend-error', {
@@ -1388,7 +1400,7 @@ async function createWindow() {
       nodeIntegration: false,
       // 开发模式通过 file:// 协议加载时需要禁用 webSecurity 以允许跨域请求
       // 生产环境使用 http://127.0.0.1:8766 加载，保持 webSecurity 启用
-      webSecurity: isDev ? false : true,
+      webSecurity: true,
     },
   })
 
@@ -2183,11 +2195,16 @@ ipcMain.handle('check-for-updates', async () => {
   if (isDev || !autoUpdater) {
     return { available: false, error: isDev ? 'Dev mode' : 'Updater not available' }
   }
+  // 与 setupAutoUpdater 一致：LH_DISABLE_UPDATER=0 强制启用，否则默认禁用。
+  // 防止生产环境用户在 UI 上点"检查更新"绕过环境变量开关。
+  if (process.env.LH_DISABLE_UPDATER !== '0') {
+    return { available: false, error: 'Auto-update disabled (LH_DISABLE_UPDATER)' }
+  }
   try {
     const result = await autoUpdater.checkForUpdates()
     return {
       available: !!(result?.updateInfo && result.updateInfo.version !== app.getVersion()),
-      version: result.updateInfo?.version,
+      version: result?.updateInfo?.version,
     }
   } catch (err: any) {
     return { available: false, error: err.message }
@@ -2344,9 +2361,9 @@ if (!gotTheLock) {
     }
     // Stop dead connection scanner
     if (deadConnectionScanner) clearInterval(deadConnectionScanner)
-    // Clear all heartbeat timers (use clearInterval since created via setInterval)
+    // Clear all heartbeat timers (created via setTimeout)
     for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
-      clearInterval(timer)
+      clearTimeout(timer)
     }
     wsHeartbeatTimers.clear()
     if (tray) {
@@ -2363,6 +2380,10 @@ if (!gotTheLock) {
 
   app.on('before-quit', () => {
     isQuitting = true
+    if (frontendServer) {
+      frontendServer.close()
+      frontendServer = null
+    }
     stopHealthMonitor()
     if (pythonRestartTimer) {
       clearTimeout(pythonRestartTimer)

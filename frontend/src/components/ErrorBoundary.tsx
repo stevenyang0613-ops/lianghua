@@ -70,6 +70,10 @@ if (typeof setInterval !== 'undefined') {
     }
   }, 120000)
 }
+// DEPRECATED: This global singleton guard is no longer used.
+// Each ErrorBoundary instance now installs its own per-instance handler in
+// componentDidMount / componentWillUnmount. Kept for backward-compatibility
+// in case external code references it, but not called internally.
 function setupRejectionGuard() {
   if (globalRejectionHandler) return
   globalRejectionHandler = (event: PromiseRejectionEvent) => {
@@ -79,6 +83,9 @@ function setupRejectionGuard() {
   }
   window.addEventListener('unhandledrejection', globalRejectionHandler)
 }
+
+/** @deprecated Use per-instance ErrorBoundary handlers instead. */
+export { setupRejectionGuard }
 
 export default class ErrorBoundary extends Component<Props, State> {
   private rejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null

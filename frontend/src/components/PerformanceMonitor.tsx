@@ -90,6 +90,9 @@ interface NetworkLog {
   size?: number
 }
 
+// Module-level override counter to handle concurrent fetch overrides safely
+let _fetchOverrideDepth = 0
+
 export default function PerformanceMonitor() {
   const { enabled } = usePerformanceStore()
   const [metrics, setMetrics] = useState<PerformanceMetrics>({
@@ -102,6 +105,10 @@ export default function PerformanceMonitor() {
   const [visible, setVisible] = useState(false)
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([])
   const [fpsHistory, setFpsHistory] = useState<number[]>(new Array(60).fill(60))
+
+  // Refs to track fetch override state for safe cleanup on unmount / crash
+  const originalFetchRef = useRef<typeof window.fetch | null>(null)
+  const overrideActiveRef = useRef(false)
 
   // Electron 特有功能状态
   const [crashReports, setCrashReports] = useState<CrashReport[]>([])
@@ -173,16 +180,22 @@ export default function PerformanceMonitor() {
   useEffect(() => {
     if (!enabled) return
 
-    const originalFetch = window.fetch
+    // Only capture the original fetch once; restore via ref on cleanup
+    if (!originalFetchRef.current) {
+      originalFetchRef.current = window.fetch
+    }
     let requestCount = 0
     let failureCount = 0
 
-    window.fetch = async (...args) => {
+    _fetchOverrideDepth++
+    overrideActiveRef.current = true
+
+    const wrappedFetch = async (...args: Parameters<typeof window.fetch>) => {
       const startTime = performance.now()
       requestCount++
 
       try {
-        const response = await originalFetch(...args)
+        const response = await originalFetchRef.current!(...args)
         const duration = performance.now() - startTime
 
         const log: NetworkLog = {
@@ -216,10 +229,28 @@ export default function PerformanceMonitor() {
       }
     }
 
+    window.fetch = wrappedFetch as typeof window.fetch
+
     return () => {
-      window.fetch = originalFetch
+      _fetchOverrideDepth--
+      if (_fetchOverrideDepth <= 0 && originalFetchRef.current) {
+        window.fetch = originalFetchRef.current
+        overrideActiveRef.current = false
+        _fetchOverrideDepth = 0
+      }
     }
   }, [enabled])
+
+  // Safety net: always restore original fetch on unmount, even if the component crashed
+  useEffect(() => {
+    return () => {
+      if (overrideActiveRef.current && originalFetchRef.current) {
+        window.fetch = originalFetchRef.current
+        overrideActiveRef.current = false
+        _fetchOverrideDepth = 0
+      }
+    }
+  }, [])
 
   // Electron 性能监控
   useEffect(() => {

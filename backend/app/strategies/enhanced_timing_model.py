@@ -184,6 +184,7 @@ class EnhancedMarketData:
     stock_index_current: float = float('nan')              # 沪深300当前值
     stock_index_ma20: float = float('nan')                 # 沪深300 20日均线
     stock_index_ma60: float = float('nan')                 # 沪深300 60日均线
+    max_dd_20d: float = float('nan')                       # 沪深300近20日最大回撤(%)
     stock_pe_median: float = float('nan')                  # 全市场PE中位数
     stock_pb_median: float = float('nan')                  # 全市场PB中位数
     stock_pe_percentile: float = float('nan')              # PE历史分位数(%)
@@ -547,7 +548,7 @@ class EnhancedTimingModel:
             elif cb_panic > 8: oversold_signals += 1
         
         # 7. 20日最大回撤
-        max_dd = data.max_dd_20d if hasattr(data, 'max_dd_20d') else 0
+        max_dd = data.max_dd_20d
         if not math.isnan(max_dd) and max_dd < -10: oversold_signals += 1
         
         # 综合判断（降低阈值让更多天数被识别为非range）
@@ -2430,6 +2431,9 @@ def convert_from_legacy_data(
         data.stock_index_change_60d = getattr(macro_data, 'stock_index_change_60d', 0) or 0
         data.stock_index_ma20 = getattr(macro_data, 'stock_index_ma20', 0) or 0
         data.stock_index_ma60 = getattr(macro_data, 'stock_index_ma60', 0) or 0
+        val = getattr(macro_data, 'max_dd_20d', 0)
+        if val != 0:
+            data.max_dd_20d = val
         # === 新增：从 MacroData V2.1 填充所有先前硬编码的字段 ===
         # PE/PB
         val = getattr(macro_data, 'stock_pe_median', 0)

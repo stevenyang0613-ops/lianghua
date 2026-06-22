@@ -1523,7 +1523,7 @@ async def get_north_capital(request: Request):
     except Exception as e:
         return {"summary": [], "stocks": [], "total": 0, "error": str(e)}
 
-    summary = [v for k, v in raw.items() if isinstance(v, dict) and v.get("_summary")]
+    summary = [v for k, v in raw.items() if k == "_summary"]
     stocks = [
         {**v, "code": k}
         for k, v in raw.items()
@@ -1543,7 +1543,7 @@ async def get_margin_stocks(request: Request):
     except Exception as e:
         return {"stocks": [], "summary": [], "total": 0, "error": str(e)}
 
-    summary = [v for k, v in raw.items() if isinstance(v, dict) and v.get("_summary")]
+    summary = [v for k, v in raw.items() if k == "_summary"]
     stocks = [
         {**v, "code": k}
         for k, v in raw.items()
@@ -1568,7 +1568,7 @@ async def get_lhb(request: Request):
         for k, v in raw.items()
         if isinstance(v, dict) and len(k) == 6
     ]
-    stocks = sorted(stocks, key=lambda s: abs(s.get("net_buy_amt") or 0), reverse=True)[:300]
+    stocks = sorted(stocks, key=lambda s: abs(s.get("lhb_count") or 0), reverse=True)[:300]
     return {"stocks": stocks, "total": len(stocks)}
 
 
@@ -1587,7 +1587,7 @@ async def get_block_trade(request: Request):
         for k, v in raw.items()
         if isinstance(v, dict) and len(k) == 6
     ]
-    stocks = sorted(stocks, key=lambda s: s.get("total_amt") or 0, reverse=True)[:300]
+    stocks = sorted(stocks, key=lambda s: s.get("block_trade_amount") or 0, reverse=True)[:300]
     return {"stocks": stocks, "total": len(stocks)}
 
 
@@ -1670,7 +1670,7 @@ async def get_restricted_release(request: Request):
     events = list(raw.values()) if isinstance(raw, dict) else []
     events = sorted(
         [e for e in events if isinstance(e, dict)],
-        key=lambda e: e.get("release_market_cap") or 0,
+        key=lambda e: e.get("restricted_release_amount") or 0,
         reverse=True,
     )[:300]
     return {"events": events, "total": len(events)}
@@ -1686,8 +1686,7 @@ async def get_data_sources_status(request: Request):
             _DEBT_CACHE, _VOL_CACHE, _BUYBACK_CACHE, _MGMT_CACHE,
             _PLEDGE_CACHE, _MOMENTUM_CACHE, _EVENT_CACHE, _CONCEPT_CACHE,
             _BOND_OUTSTANDING_CACHE, _CALL_STATUS_CACHE, _STOCK_NAME_CACHE,
-            _BOND_PRICE_CACHE, _COUPON_RATE_CACHE, _MAIN_BIZ_CACHE, _ANALYST_RANK_CACHE,
-            _MACRO_CPI_CACHE, _MACRO_PPI_CACHE, _MACRO_M2_CACHE, _MACRO_LPR_CACHE,
+            _BOND_PRICE_CACHE, _COUPON_RATE_CACHE,
             _NORTH_CACHE, _MARGIN_CACHE, _LHB_CACHE, _BLOCK_TRADE_CACHE,
             _HOLDER_NUM_CACHE, _EARNINGS_FORECAST_CACHE, _EARNINGS_EXPRESS_CACHE,
             _RESTRICTED_RELEASE_CACHE,

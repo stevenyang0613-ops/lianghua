@@ -28,7 +28,7 @@ import logging
 import math
 import time
 from datetime import datetime, date, timedelta
-from typing import Optional, List, Tuple
+from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -82,6 +82,7 @@ class MacroData:
     stock_index_change: float = 0.0
     stock_index_change_20d: float = 0.0     # 近20日累计涨跌幅(%)
     stock_index_change_60d: float = 0.0     # 近60日累计涨跌幅(%)
+    max_dd_20d: float = 0.0                 # 近20日最大回撤(%)
     stock_index_ma20: float = 0.0
     stock_index_ma60: float = 0.0
     stock_pe_median: float = 0.0
@@ -213,6 +214,7 @@ class MacroDataService:
             (data.stock_index_current, data.stock_index_change,
              data.stock_index_change_20d, data.stock_index_change_60d,
              data.stock_index_ma20, data.stock_index_ma60,
+             data.max_dd_20d,
              data.stock_index_df) = self._fetch_stock_index()
 
         def _task_cb_stats():
@@ -324,8 +326,10 @@ class MacroDataService:
             ("north_bound", not math.isnan(data.north_bound_net_flow), 0.02),
             ("margin", data.margin_balance > 0, 0.05),
             ("market_turnover", data.market_turnover > 0, 0.03),
-            ("main_force", True, 0.02),
-            ("industry_flow", True, 0.02),
+            # main_force / industry_flow: fetcher 返回 NaN 表示数据源失败，
+            # 0 表示真实净流入为 0（合法值）。用 isnan 检查区分这两种情况。
+            ("main_force", not math.isnan(data.main_force_net_flow), 0.02),
+            ("industry_flow", not math.isnan(data.industry_net_inflow), 0.02),
             ("pe_pb", data.stock_pe_median > 0 and data.stock_pb_median > 0, 0.06),
             ("industrial", data.industrial_output != 0, 0.04),
             ("retail", data.retail_sales != 0, 0.04),
@@ -588,13 +592,13 @@ class MacroDataService:
             logger.warning(f"[MacroData] CB index fetch failed: {e}")
             return 0.0, 0.0, 0.0, 0.0, None
 
-    def _fetch_stock_index(self) -> Tuple[float, float, float, float, float, float, Optional[pd.DataFrame]]:
+    def _fetch_stock_index(self) -> Tuple[float, float, float, float, float, float, float, Optional[pd.DataFrame]]:
         try:
             if ak is None:
-                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
             df = ak.stock_zh_index_daily_tx(symbol='sz399300')
             if df is None or df.empty:
-                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
             df = df.sort_values('date', ascending=True).reset_index(drop=True)
             closes = df['close']
             latest_close = float(closes.iloc[-1])
@@ -608,12 +612,18 @@ class MacroDataService:
             change_60d = (latest_close - close_60d_ago) / close_60d_ago * 100 if close_60d_ago > 0 else 0.0
             ma20 = float(closes.tail(20).mean()) if len(df) >= 20 else latest_close
             ma60 = float(closes.tail(60).mean()) if len(df) >= 60 else latest_close
+            # 20日最大回撤：从 20 日窗口峰值到当前最低点的最大跌幅(%)
+            # 若窗口不足 20 天则用全部可用数据计算
+            window = closes.tail(20) if len(df) >= 20 else closes
+            peak = float(window.cummax().iloc[-1])
+            max_dd_20d = (latest_close - peak) / peak * 100 if peak > 0 else 0.0
             return (round(latest_close, 2), round(change, 2),
                     round(change_20d, 2), round(change_60d, 2),
-                    round(ma20, 2), round(ma60, 2), df)
+                    round(ma20, 2), round(ma60, 2),
+                    round(max_dd_20d, 2), df)
         except Exception as e:
             logger.warning(f"[MacroData] HS300 index fetch failed: {e}")
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
 
     def _fill_cb_stats_from_jsl(self, data: MacroData) -> None:
         """从集思录转债指数获取真实的中位数溢价、价格、成交额、破面数"""
@@ -631,30 +641,6 @@ class MacroDataService:
             data.cb_below_par_count = int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0))
         except Exception as e:
             logger.warning(f"[MacroData] CB stats from JSL failed: {e}")
-
-    def _calc_cb_stats(self, data: MacroData, bonds) -> None:
-        """保留旧接口：若 bonds 含有效溢价数据则作为备用补充"""
-        if data.cb_median_premium > 0 and data.cb_count > 0:
-            return
-        premiums, volumes, prices = [], [], []
-        for b in bonds or []:
-            pr = getattr(b, 'premium_ratio', 0) or 0
-            vol = getattr(b, 'volume', 0) or 0
-            price = getattr(b, 'price', 0) or 0
-            if price > 0:
-                premiums.append(pr)
-                volumes.append(vol)
-                prices.append(price)
-        if premiums:
-            data.cb_median_premium = round(float(np.median(premiums)), 2)
-        if prices:
-            p_arr = np.array(prices)
-            data.cb_below_par_count = int((p_arr < 100).sum())
-            data.cb_median_price = round(float(np.median(p_arr)), 2)
-            data.cb_count = len(prices)
-        if volumes:
-            total_vol = sum(volumes)
-            data.cb_avg_daily_amount = round(total_vol / len(volumes), 2)
 
     def _fetch_north_bound_flow(self) -> float:
         """北向资金净流入（亿元）"""

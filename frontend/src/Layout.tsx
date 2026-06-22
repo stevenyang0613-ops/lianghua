@@ -93,8 +93,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
             {!isMobile && (
               <div style={{ position: 'absolute', top: 8, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
+              <ErrorBoundary fallback={<SilentFallback />}>
                 <ThemeToggle />
-              </div>
+              </ErrorBoundary>
+            </div>
             )}
             {children}
           </div>
@@ -114,7 +116,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </ErrorBoundary>
 
       {isMobile && (
-        <AlertPanel visible={alertVisible} onClose={() => setAlertVisible(false)} />
+        <ErrorBoundary fallback={<SilentFallback />}>
+          <AlertPanel visible={alertVisible} onClose={() => setAlertVisible(false)} />
+        </ErrorBoundary>
       )}
 
       {/* 性能监控面板 - 仅在开发环境或设置启用时显示 */}

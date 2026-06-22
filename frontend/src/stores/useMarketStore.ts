@@ -27,6 +27,7 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
     if (!Array.isArray(quotes) || quotes.length === 0) return
     let changed = false
     for (const q of quotes) {
+      if (!q || !q.code) continue
       const existing = bondsCache.get(q.code)
       // 增量数据合并：如果缺少 name 字段说明是增量 tick，从 cache 合并
       const merged = (existing && !('name' in q && q.name))

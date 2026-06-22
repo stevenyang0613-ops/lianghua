@@ -78,10 +78,14 @@ export function setupSmartPreload(): () => void {
 
   document.addEventListener('mouseover', handleMouseOver)
   if (document.readyState === 'complete') observeElements()
-  else window.addEventListener('load', observeElements)
+  else {
+    const _observeElements = observeElements
+    window.addEventListener('load', _observeElements)
+  }
 
   return () => {
     document.removeEventListener('mouseover', handleMouseOver)
+    window.removeEventListener('load', observeElements)
     observer.disconnect()
   }
 }

@@ -280,7 +280,11 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     return () => {
       cancelled = true
       if (stepInterval) clearInterval(stepInterval)
-      probeAbortController.abort()
+      try {
+        probeAbortController?.abort()
+      } catch {
+        // abort may throw if already consumed; ignore
+      }
     }
     // 注意：step 不应在依赖数组中，否则会导致无限循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
