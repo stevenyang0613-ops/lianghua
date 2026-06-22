@@ -105,7 +105,14 @@ const NAME_MAP: Record<string, string> = {
 }
 
 function formatName(n: string): string {
-  return NAME_MAP[n] || n.replace(/^_refresh_|^_build_/, '').replace(/_/g, ' ')
+  if (NAME_MAP[n]) return NAME_MAP[n]
+  // 自动生成可读名：去掉前缀，转换为 Title Case
+  // 例: _refresh_macro_cpi_cache → "Macro Cpi Cache"
+  const stripped = n.replace(/^_refresh_|^_build_/, '').replace(/_cache$/, '')
+  return stripped
+    .split('_')
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
 }
 
 function formatElapsed(s: number): string {
