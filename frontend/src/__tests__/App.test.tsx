@@ -94,7 +94,7 @@ import App from '../App'
 
 describe('App', () => {
   it('should render without crashing', () => {
-    const { container } = render(<MemoryRouter><App /></MemoryRouter>)
+    const { container } = render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><App /></MemoryRouter>)
     // The app renders StartupLoading which should be present
     expect(container.querySelector('[style*="z-index: 9999"]')).toBeDefined()
   })

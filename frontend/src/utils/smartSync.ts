@@ -129,7 +129,7 @@ export function initNetworkMonitor(): void {
       console.log('[SmartSync] Connection changed:', connection.effectiveType)
       updateSyncStrategy()
     }
-    connection.addEventListener('change', connectionChangeHandler)
+    connection.addEventListener?.('change', connectionChangeHandler)
   }
 
   // 初始计算
@@ -149,7 +149,7 @@ export function cleanupNetworkMonitor(): void {
   if (connectionChangeHandler) {
     const connection = navigator.connection
     if (connection) {
-      connection.removeEventListener('change', connectionChangeHandler)
+      connection.removeEventListener?.('change', connectionChangeHandler)
     }
     connectionChangeHandler = null
   }

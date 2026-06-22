@@ -159,8 +159,8 @@ export default function XibuScore() {
     if (items.length === 0) return items
     const dir = sortDir === 'asc' ? 1 : -1
     return [...items].sort((a, b) => {
-      const av = (a as any)[sortKey]
-      const bv = (b as any)[sortKey]
+      const av = a[sortKey]
+      const bv = b[sortKey]
       // null/undefined 排到末尾
       if (av == null && bv == null) return 0
       if (av == null) return 1

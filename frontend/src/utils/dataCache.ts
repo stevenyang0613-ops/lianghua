@@ -106,7 +106,7 @@ export function isOfflineMode(): boolean {
 
 // 检查网络状态
 export function checkNetworkStatus(): { online: boolean; effectiveType?: string } {
-  const connection = (navigator as any).connection
+  const connection = navigator.connection
   return {
     online: navigator.onLine,
     effectiveType: connection?.effectiveType,
@@ -321,9 +321,10 @@ export async function saveToCache(key: string, data: unknown, ttlMs: number = 24
 
     store.put(entry)
 
-    // 同时保存到 localStorage 作为备份
+    // 仅将 cache_time 写入 localStorage（轻量），
+    // 避免每支债券都写 cache_${key} 造成高频同步 I/O 压力。
+    // IndexedDB 已作为持久层，无需 localStorage 冗余备份。
     try {
-      localStorage.setItem(`cache_${key}`, JSON.stringify(entry))
       localStorage.setItem('cache_time', new Date().toLocaleString('zh-CN'))
     } catch {
       // localStorage 可能满了

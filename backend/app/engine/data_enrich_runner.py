@@ -488,16 +488,23 @@ def _refresh_spot_cache():
 
         with ThreadPoolExecutor(max_workers=8) as ex:
             futures = {ex.submit(_fetch_tx, b): b for b in batches}
-            done = 0
-            for fut in as_completed(futures):
+            done_count = 0
+            done, pending = concurrent.futures.wait(
+                futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[Spot] Tencent: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+                for fut in pending:
+                    fut.cancel()
+            for fut in done:
                 try:
                     batch_out = fut.result(timeout=20)
                     result.update(batch_out)
                 except Exception:
                     pass
-                done += 1
-                if done % 50 == 0:
-                    logger.info(f"[Spot] Tencent: {done}/{len(batches)} batches, {len(result)} stocks")
+                done_count += 1
+                if done_count % 50 == 0:
+                    logger.info(f"[Spot] Tencent: {done_count}/{len(batches)} batches, {len(result)} stocks")
                 time.sleep(0.02)
 
         logger.info(f"[Spot] Tencent: {len(result)} stocks")
@@ -540,7 +547,14 @@ def _refresh_spot_cache():
             em_done = 0
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futures = {ex.submit(_fetch_em, b): b for b in em_batches}
-                for fut in as_completed(futures):
+                done, pending = concurrent.futures.wait(
+                    futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending:
+                    logger.warning(f"[Spot] EM ulist: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                    for fut in pending:
+                        fut.cancel()
+                for fut in done:
                     try:
                         batch_out = fut.result(timeout=20)
                         for code, vals in batch_out.items():
@@ -1474,7 +1488,14 @@ def _refresh_momentum_cache():
             tdx_found = 0
             with ThreadPoolExecutor(max_workers=8) as ex:
                 futures = {ex.submit(_fetch_tdx_kline, c): c for c in all_codes}
-                for i, fut in enumerate(as_completed(futures)):
+                done, pending = concurrent.futures.wait(
+                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending:
+                    logger.warning(f"[Momentum][TDX] {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+                    for fut in pending:
+                        fut.cancel()
+                for i, fut in enumerate(done):
                     try:
                         code, mom = fut.result(timeout=10)
                         if mom:
@@ -1535,7 +1556,14 @@ def _refresh_momentum_cache():
             sina_found = 0
             with ThreadPoolExecutor(max_workers=6) as ex:
                 futures = {ex.submit(_fetch_sina, c): c for c in missing_mom}
-                for i, fut in enumerate(as_completed(futures)):
+                done, pending = concurrent.futures.wait(
+                    futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending:
+                    logger.warning(f"[Momentum][Sina] {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                    for fut in pending:
+                        fut.cancel()
+                for i, fut in enumerate(done):
                     try:
                         code, mom = fut.result(timeout=15)
                         if mom and code not in result:
@@ -2747,7 +2775,14 @@ def _refresh_north_cache():
                 with ThreadPoolExecutor(max_workers=5) as pool:
                     futures = {pool.submit(_fetch_one, c): c for c in missing_codes}
                     done_count = 0
-                    for f in as_completed(futures):
+                    done, pending = concurrent.futures.wait(
+                        futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                    )
+                    if pending:
+                        logger.warning(f"[North] individual_detail_em: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+                        for fut in pending:
+                            fut.cancel()
+                    for f in done:
                         done_count += 1
                         try:
                             r = f.result()

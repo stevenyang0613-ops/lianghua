@@ -322,14 +322,14 @@ export default function SectorRotation() {
   const sortedIndustries=useMemo(()=>{
     if(!indData?.industries) return[]
     const list=[...indData.industries]
-    list.sort((a,b)=>((b as any)[indSort]??0)-((a as any)[indSort]??0))
+    list.sort((a,b)=>((b[indSort as keyof typeof b] as number)??0)-((a[indSort as keyof typeof a] as number)??0))
     return list.slice(0,indTopK)
   },[indData,indSort,indTopK])
 
   const sortedConcepts=useMemo(()=>{
     if(!conceptData?.concepts) return[]
     const list=[...conceptData.concepts]
-    list.sort((a,b)=>((b as any)[conceptSort]??0)-((a as any)[conceptSort]??0))
+    list.sort((a,b)=>((b[conceptSort as keyof typeof b] as number)??0)-((a[conceptSort as keyof typeof a] as number)??0))
     return list.slice(0,conceptTopK)
   },[conceptData,conceptSort,conceptTopK])
 

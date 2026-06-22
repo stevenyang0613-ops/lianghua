@@ -327,7 +327,7 @@ export default function PerformanceMonitor() {
   // 强制 GC（如果可用）
   const forceGC = useCallback(() => {
     if ('gc' in window) {
-      (window as any).gc()
+      window.gc?.()
     }
     memoryMonitor.clear()
   }, [])

@@ -68,12 +68,43 @@ const ALERT_CONDITIONS: Record<string, AlertCondition> = {
 
 const ALERTS_KEY = 'price_alerts'
 
+// In-memory buffer + debounced flush to avoid localStorage hammering
+let _pendingAlerts: PriceAlert[] | null = null
+let _flushTimer: ReturnType<typeof setTimeout> | null = null
+const FLUSH_DELAY = 500
+
+function _flushAlerts(): void {
+  if (_flushTimer) {
+    clearTimeout(_flushTimer)
+    _flushTimer = null
+  }
+  if (_pendingAlerts === null) return
+  try {
+    localStorage.setItem(ALERTS_KEY, JSON.stringify(_pendingAlerts))
+  } catch (e) {
+    console.warn('[PriceAlert] localStorage write failed:', e)
+  }
+  _pendingAlerts = null
+}
+
+function _scheduleFlush(): void {
+  if (_flushTimer) return
+  _flushTimer = setTimeout(_flushAlerts, FLUSH_DELAY)
+}
+
+// Ensure alerts are flushed on page unload
+window.addEventListener('beforeunload', _flushAlerts)
+
 // 生成唯一ID
 function generateId(): string {
   return `alert_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
 }
 
 export function getAlerts(): PriceAlert[] {
+  // If we have a pending buffer, return it (reads are consistent with writes)
+  if (_pendingAlerts !== null) {
+    return _pendingAlerts.slice()
+  }
   const saved = localStorage.getItem(ALERTS_KEY)
   const alerts = safeJsonParse<PriceAlert[]>(saved, [])
   if (alerts.length === 0) {
@@ -112,8 +143,9 @@ export function getAlerts(): PriceAlert[] {
         message: '涨幅大于 5% 时预警',
       },
     ]
-    localStorage.setItem(ALERTS_KEY, JSON.stringify(defaults))
-    return defaults
+    _pendingAlerts = defaults
+    _scheduleFlush()
+    return defaults.slice()
   }
   return alerts
 }
@@ -136,7 +168,8 @@ export function addAlert(alert: Omit<PriceAlert, 'id' | 'triggered' | 'triggered
   }
 
   alerts.push(newAlert)
-  localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts))
+  _pendingAlerts = alerts
+  _scheduleFlush()
 
   return newAlert
 }
@@ -149,7 +182,8 @@ export function updateAlert(id: string, updates: Partial<PriceAlert>): PriceAler
   if (index === -1) return null
 
   alerts[index] = { ...alerts[index], ...updates }
-  localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts))
+  _pendingAlerts = alerts
+  _scheduleFlush()
 
   return alerts[index]
 }
@@ -161,13 +195,16 @@ export function deleteAlert(id: string): boolean {
 
   if (filtered.length === alerts.length) return false
 
-  localStorage.setItem(ALERTS_KEY, JSON.stringify(filtered))
+  _pendingAlerts = filtered
+  _scheduleFlush()
   return true
 }
 
 // 清除所有预警
 export function clearAlerts(): void {
-  localStorage.removeItem(ALERTS_KEY)
+  _flushAlerts()
+  _pendingAlerts = []
+  _scheduleFlush()
 }
 
 // 清除已触发的预警
@@ -176,7 +213,8 @@ export function clearTriggeredAlerts(): number {
   const active = alerts.filter((a) => !a.triggered)
   const removed = alerts.length - active.length
 
-  localStorage.setItem(ALERTS_KEY, JSON.stringify(active))
+  _pendingAlerts = active
+  _scheduleFlush()
   return removed
 }
 

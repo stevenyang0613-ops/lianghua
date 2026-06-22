@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import Market from '../Market'
 
 const mockStore: { allBonds: any[]; [k: string]: any } = {
@@ -62,23 +62,25 @@ describe('Market page', () => {
     mockStore.total = 0
   })
 
-  it('should render without crashing', () => {
+  it('should render without crashing', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Market />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
-  it('should show skeleton loading when loading', () => {
+  it('should show skeleton loading when loading', async () => {
     mockStore.loading = true
 
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Market />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.querySelector('.ant-skeleton')).toBeDefined()
   })
 
@@ -88,9 +90,9 @@ describe('Market page', () => {
       { code: '113001', name: 'A', price: 100, change_pct: 1.0, premium_ratio: 10, dual_low: 110, volume: 1, remaining_years: 2, is_called: false, call_status: '', last_trade_date: null, maturity_date: null, redemption_price: null, forced_call_days: 5 } as any,
     ]
     const { container, findByTestId } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Market />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     // 等待 fetchAllQuotes 完成后,loading 变为 false,virtual table 渲染
     const priceHeader = await findByTestId('vt-sort-price', undefined, { timeout: 3000 })

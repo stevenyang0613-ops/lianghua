@@ -114,7 +114,7 @@ class ScoreAlertNotificationService {
   private playAlertSound() {
     try {
       // 使用Web Audio API播放简单提示音
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const audioContext = new (window.AudioContext || window.webkitAudioContext!)()
       const oscillator = audioContext.createOscillator()
       const gainNode = audioContext.createGain()
 

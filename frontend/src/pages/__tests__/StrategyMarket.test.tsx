@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, screen, waitFor, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import StrategyMarket from '../StrategyMarket'
 import * as strategyShare from '../../utils/strategyShare'
 
@@ -70,22 +70,24 @@ describe('StrategyMarket', () => {
     })
   })
 
-  it('renders strategy market title', () => {
+  it('renders strategy market title', async () => {
     render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <StrategyMarket />
-      </BrowserRouter>,
+      </MemoryRouter>,
     )
+    await act(async () => {})
     expect(screen.getByText('策略市场')).toBeInTheDocument()
   })
 
   it('loads and displays strategies from backend', async () => {
     render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <StrategyMarket />
-      </BrowserRouter>,
+      </MemoryRouter>,
     )
 
+    await act(async () => {})
     await waitFor(() => {
       expect(screen.getByText('可转债双低轮动策略')).toBeInTheDocument()
     })
@@ -98,11 +100,12 @@ describe('StrategyMarket', () => {
     ;(global.fetch as any).mockRejectedValue(new Error('network error'))
 
     render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <StrategyMarket />
-      </BrowserRouter>,
+      </MemoryRouter>,
     )
 
+    await act(async () => {})
     await waitFor(() => {
       expect(screen.getByText('暂无策略')).toBeInTheDocument()
     })

@@ -179,7 +179,7 @@ export class ComputationTracker {
    */
   private getMemoryUsage(): number | undefined {
     if ('memory' in performance) {
-      return (performance as any).memory.usedJSHeapSize
+      return performance.memory!.usedJSHeapSize
     }
     return undefined
   }

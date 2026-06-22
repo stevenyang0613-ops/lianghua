@@ -24,6 +24,38 @@ export interface TradeLog {
 const TRADE_LOG_KEY = 'trade_logs'
 const MAX_LOGS = 1000
 
+// In-memory buffer + debounced flush to avoid localStorage hammering
+let _pendingLogs: TradeLog[] = []
+let _flushTimer: ReturnType<typeof setTimeout> | null = null
+const FLUSH_DELAY = 500
+
+function _flushLogs(): void {
+  if (_flushTimer) {
+    clearTimeout(_flushTimer)
+    _flushTimer = null
+  }
+  if (_pendingLogs.length === 0) return
+  const stored = getTradeLogs()
+  const merged = stored.concat(_pendingLogs)
+  if (merged.length > MAX_LOGS) {
+    merged.splice(0, merged.length - MAX_LOGS)
+  }
+  try {
+    localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(merged))
+  } catch (e) {
+    console.warn('[TradeLogger] localStorage write failed:', e)
+  }
+  _pendingLogs = []
+}
+
+function _scheduleFlush(): void {
+  if (_flushTimer) return
+  _flushTimer = setTimeout(_flushLogs, FLUSH_DELAY)
+}
+
+// Ensure logs are flushed on page unload
+window.addEventListener('beforeunload', _flushLogs)
+
 // 生成唯一ID
 function generateId(): string {
   return `trade_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
@@ -31,22 +63,20 @@ function generateId(): string {
 
 // 记录交易
 export function logTrade(log: Omit<TradeLog, 'id' | 'timestamp'>): TradeLog {
-  const logs = getTradeLogs()
-
   const fullLog: TradeLog = {
     id: generateId(),
     timestamp: Date.now(),
     ...log,
   }
 
-  logs.push(fullLog)
+  _pendingLogs.push(fullLog)
 
-  // 限制数量
-  if (logs.length > MAX_LOGS) {
-    logs.splice(0, logs.length - MAX_LOGS)
+  // 限制内存缓冲区数量
+  if (_pendingLogs.length > MAX_LOGS) {
+    _pendingLogs.splice(0, _pendingLogs.length - MAX_LOGS)
   }
 
-  localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(logs))
+  _scheduleFlush()
 
   return fullLog
 }
@@ -61,7 +91,9 @@ export function getTradeLogs(options?: {
   limit?: number
 }): TradeLog[] {
   const saved = localStorage.getItem(TRADE_LOG_KEY)
-  let logs: TradeLog[] = safeJsonParse<TradeLog[]>(saved, [])
+  const stored: TradeLog[] = safeJsonParse<TradeLog[]>(saved, [])
+  // Merge pending logs so reads are consistent
+  let logs = stored.concat(_pendingLogs)
 
   if (options) {
     if (options.code) {
@@ -95,6 +127,7 @@ export function getTradeLog(id: string): TradeLog | null {
 
 // 更新日志状态
 export function updateTradeLogStatus(id: string, status: TradeLog['status'], notes?: string): TradeLog | null {
+  _flushLogs() // ensure pending logs are persisted before mutating
   const logs = getTradeLogs()
   const index = logs.findIndex(l => l.id === id)
 
@@ -105,24 +138,34 @@ export function updateTradeLogStatus(id: string, status: TradeLog['status'], not
 
   // 重新排序保存
   const allLogs = [...logs].sort((a, b) => a.timestamp - b.timestamp)
-  localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(allLogs))
+  try {
+    localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(allLogs))
+  } catch (e) {
+    console.warn('[TradeLogger] localStorage write failed:', e)
+  }
 
   return logs[index]
 }
 
 // 删除日志
 export function deleteTradeLog(id: string): boolean {
+  _flushLogs()
   const logs = getTradeLogs()
   const filtered = logs.filter(l => l.id !== id)
 
   if (filtered.length === logs.length) return false
 
-  localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(filtered.sort((a, b) => a.timestamp - b.timestamp)))
+  try {
+    localStorage.setItem(TRADE_LOG_KEY, JSON.stringify(filtered.sort((a, b) => a.timestamp - b.timestamp)))
+  } catch (e) {
+    console.warn('[TradeLogger] localStorage write failed:', e)
+  }
   return true
 }
 
 // 清除所有日志
 export function clearTradeLogs(): void {
+  _flushLogs()
   localStorage.removeItem(TRADE_LOG_KEY)
 }
 

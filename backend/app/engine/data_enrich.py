@@ -756,7 +756,14 @@ def _fill_pe_pb_from_baidu(codes: list[str], pe_map: dict, pb_map: dict):
         filled = 0
         with ThreadPoolExecutor(max_workers=3) as ex:
             futures = [ex.submit(_baidu_one, c) for c in missing]
-            for i, future in enumerate(as_completed(futures)):
+            done, pending = concurrent.futures.wait(
+                futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] Baidu PE/PB: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+                for fut in pending:
+                    fut.cancel()
+            for i, future in enumerate(done):
                 code, pe_val, pb_val = future.result()
                 if pe_val is not None and code not in pe_map:
                     pe_map[code] = pe_val
@@ -1033,7 +1040,7 @@ def _refresh_spot_cache():
                                 'secids': secids, 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
                         headers=_headers, timeout=15,
                     ),
-                    timeout=20, default=None, op_name="spot_batch",
+                    timeout=30, default=None, op_name="spot_batch",
                     quiet_errors=True,
                 )
                 if r is None:
@@ -1060,9 +1067,16 @@ def _refresh_spot_cache():
 
         batch_size = 50
         batches = [all_codes[i:i + batch_size] for i in range(0, len(all_codes), batch_size)]
-        total_filled = 0
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for i, future in enumerate(as_completed([ex.submit(_fetch_batch, b) for b in batches])):
+            futures = [ex.submit(_fetch_batch, b) for b in batches]
+            done, pending = concurrent.futures.wait(
+                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] Spot batch: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                for fut in pending:
+                    fut.cancel()
+            for i, future in enumerate(done):
                 batch_result = future.result()
                 for code, vals in batch_result.items():
                     if vals.get('pe') and vals['pe'] > 0:
@@ -1089,12 +1103,19 @@ def _refresh_spot_cache():
                             params={'fields': 'f57,f162,f167,f168,f20,f21', 'secid': secid},
                             headers=_headers, timeout=8,
                         ),
-                        timeout=12, default=None, op_name="spot_single",
+                        timeout=25, default=None, op_name="spot_single",
                         quiet_errors=True,
                     )
                     if r is None:
                         return {}
-                    d = r.json().get('data') or {}
+                    # 防御性：r.json() 可能返回 None 或抛出 JSONDecodeError
+                    try:
+                        json_data = r.json()
+                        if not isinstance(json_data, dict):
+                            return {}
+                        d = json_data.get('data') or {}
+                    except Exception:
+                        return {}
                     if d:
                         return {code: {
                             'pe': d.get('f162', 0),
@@ -1142,7 +1163,14 @@ def _refresh_spot_cache():
                                 futures.append(ex.submit(_fetch_single, code))
                                 if (i + 1) % 30 == 0:
                                     _time.sleep(0.5)
-                            for future in as_completed(futures):
+                            done, pending = concurrent.futures.wait(
+                                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                            )
+                            if pending:
+                                logger.warning(f"[DataEnrich] Spot single fallback: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                                for fut in pending:
+                                    fut.cancel()
+                            for future in done:
                                 res = future.result()
                                 for code, vals in res.items():
                                     if vals.get('pe') and vals['pe'] > 0 and code not in pe_map:
@@ -1382,7 +1410,14 @@ def _refresh_fund_flow_individual(codes: list[str]) -> dict:
         result = {}
         with ThreadPoolExecutor(max_workers=5) as ex:
             futures = [ex.submit(_fetch_one, c) for c in codes]
-            for i, future in enumerate(as_completed(futures)):
+            done, pending = concurrent.futures.wait(
+                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] Fund flow individual: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                for fut in pending:
+                    fut.cancel()
+            for i, future in enumerate(done):
                 code, entry = future.result()
                 if entry:
                     result[code] = entry
@@ -1969,7 +2004,14 @@ def _try_ths_fin_fallback(codes: list[str], fin_map: dict):
         missing = missing[200:]
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {pool.submit(_fetch_one, code): code for code in batch}
-            for future in as_completed(futures):
+            done, pending = concurrent.futures.wait(
+                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] THS fin fallback: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                for fut in pending:
+                    fut.cancel()
+            for future in done:
                 code = futures[future]
                 try:
                     result = future.result()
@@ -2540,10 +2582,17 @@ def _build_concept_cache():
                 except Exception:
                     return bname, []
             
-            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=8) as pool:
                 futures = {pool.submit(_fetch_concept_cons, (bcode, bname)): (bcode, bname) for bcode, bname in valid_boards}
-                for fut in as_completed(futures):
+                done, pending = concurrent.futures.wait(
+                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending:
+                    logger.warning(f"[DataEnrich] Concept EM: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+                    for fut in pending:
+                        fut.cancel()
+                for fut in done:
                     bname, scodes = fut.result()
                     if scodes:
                         for scode in scodes:
@@ -3802,43 +3851,42 @@ async def start_background_refresh():
 
     # 1. 并行加载所有磁盘缓存文件到内存（~300ms total vs 时序加载）
     def _load_all_caches():
-        _load_industry_cache()
-        _load_fin_cache()
-        _load_fund_flow_cache()
-        _load_debt_cache()
-        _load_vol_cache()
-        _load_buyback_cache()
-        _load_mgmt_cache()
-        _load_pledge_cache()
-        _load_momentum_cache()
-        _load_event_cache()
-        _load_bond_outstanding_cache()
-        _load_call_status_cache()
-        _load_stock_name_cache()
-        _load_concept_cache()
-        _load_spot_cache()
-        _load_bond_price_cache()
-        _load_coupon_rate_cache()
-        _load_north_cache()
-        _load_margin_cache()
-        _load_lhb_cache()
-        _load_block_trade_cache()
-        _load_holder_num_cache()
-        _load_earnings_forecast_cache()
-        _load_earnings_express_cache()
-        _load_restricted_release_cache()
+        # 每个 _load 独立 try/except，避免一个失败导致后续全部跳过
+        for _loader_name in (
+            "_load_industry_cache", "_load_fin_cache", "_load_fund_flow_cache",
+            "_load_debt_cache", "_load_vol_cache", "_load_buyback_cache",
+            "_load_mgmt_cache", "_load_pledge_cache", "_load_momentum_cache",
+            "_load_event_cache", "_load_bond_outstanding_cache",
+            "_load_call_status_cache", "_load_stock_name_cache",
+            "_load_concept_cache", "_load_spot_cache", "_load_bond_price_cache",
+            "_load_coupon_rate_cache", "_load_north_cache", "_load_margin_cache",
+            "_load_lhb_cache", "_load_block_trade_cache", "_load_holder_num_cache",
+            "_load_earnings_forecast_cache", "_load_earnings_express_cache",
+            "_load_restricted_release_cache",
+        ):
+            try:
+                globals()[_loader_name]()
+            except Exception as e:
+                logger.warning(f"[DataEnrich] {_loader_name} failed: {e}")
+
     await loop.run_in_executor(None, _load_all_caches)
 
     # 第一批：核心缓存刷新（主进程负责）
     # 注意：spot / vol / fund_flow / bond_price / coupon_rate 由 data_enrich_runner.py
     # 子进程负责（AKShare C 扩展 segfault 高风险），主进程只加载其输出的缓存文件。
     # 以下仅包含 enrich_quotes 所需、且可在主进程安全运行的核心数据源。
+    _core_futures = []
     for fn in (_build_industry_cache, _build_concept_cache, _refresh_fin_cache,
                _refresh_debt_cache, _refresh_buyback_cache, _refresh_mgmt_cache,
                _refresh_pledge_cache, _refresh_momentum_cache, _refresh_event_cache,
                _refresh_bond_outstanding_cache, _refresh_call_status_cache, _refresh_stock_name_cache,
                _refresh_coupon_rate_cache, _refresh_earnings_express_cache):
-        loop.run_in_executor(None, fn)
+        _core_futures.append(loop.run_in_executor(None, fn))
+    # 并行等待所有核心缓存刷新，捕获异常避免一个失败影响整体启动
+    _core_results = await asyncio.gather(*_core_futures, return_exceptions=True)
+    for _idx, _res in enumerate(_core_results):
+        if isinstance(_res, Exception):
+            logger.warning(f"[DataEnrich] Core cache refresh #{_idx} failed: {_res}")
 
     # 第二批：扩展缓存刷新（7 个，原 data_enrich_runner 子进程，现已移入主进程）
     # 延迟 5 秒执行，避开第一批的 semaphore 拥堵
@@ -3890,7 +3938,15 @@ async def start_background_refresh():
                        # 全部完成），单独加到扩展执行器里并行执行，可让 bond_price 提前 ~5 分钟可用
                        _refresh_bond_price_cache)
         ]
-        for f in concurrent.futures.as_completed(futures, timeout=300):
+        # 使用 wait() 替代 as_completed(timeout)，避免 TimeoutError 丢失已完成结果
+        done, pending = concurrent.futures.wait(
+            futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+        )
+        if pending:
+            logger.warning(f"[DataEnrich] Extended batch: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
+            for fut in pending:
+                fut.cancel()
+        for f in done:
             try:
                 f.result()
             except Exception as e:
@@ -3902,12 +3958,13 @@ async def start_background_refresh():
     # spot / vol / fund_flow / bond_price 使用 AKShare C 扩展，segfault 风险高，
     # 正常情况下由 data_enrich_runner.py 子进程刷新并写入磁盘；主进程只加载。
     def _load_runner_caches_with_fallback():
-        # 1) 先尝试加载磁盘缓存
-        _load_spot_cache()
-        _load_vol_cache()
-        _load_fund_flow_cache()
-        _load_bond_price_cache()
-        _load_coupon_rate_cache()
+        # 1) 先尝试加载磁盘缓存（每个独立 try/except，避免一个失败影响后续）
+        for _loader in (_load_spot_cache, _load_vol_cache, _load_fund_flow_cache,
+                        _load_bond_price_cache, _load_coupon_rate_cache):
+            try:
+                _loader()
+            except Exception as e:
+                logger.warning(f"[DataEnrich] {_loader.__name__} failed: {e}")
 
         # 2) 检查是否有效；无效则主进程兜底刷新
         def _spot_ok():

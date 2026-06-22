@@ -168,14 +168,14 @@ class EnhancedMarketData:
     cb_avg_premium: float = float('nan')          # 转股溢价率均值(%)
     cb_median_price: float = float('nan')                  # 转债价格中位数
     cb_avg_daily_amount: float = float('nan')              # 转债日均成交额(亿)
-    cb_count: int = 0                    # 转债数量
+    cb_count: float = float('nan')                  # 转债数量
     cb_ytm_median: float = float('nan')                    # 纯债YTM中位数(%)
     cb_ytm_available: Optional[bool] = None  # YTM 数据可用性: True=确认有, False=确认无, None=未知(按旧逻辑)
     cb_index_change: float = float('nan')                  # 转债指数涨跌幅(%)
     cb_index_current: float = float('nan')                 # 转债指数当前值
     cb_index_ma20: float = float('nan')                    # 转债指数20日均线
     cb_index_ma60: float = float('nan')                    # 转债指数60日均线
-    cb_below_par_count: int = 0          # 低于面值的转债数
+    cb_below_par_count: float = float('nan')          # 低于面值的转债数
 
     # === 正股市场 ===
     stock_index_change: float = float('nan')               # 沪深300日涨跌幅(%)
@@ -619,8 +619,8 @@ class EnhancedTimingModel:
         
         # 1.2 纯债YTM中位数评分
         ytm = data.cb_ytm_median
-        # cb_ytm_available 三态: True=确认有数据(0视为有效), False=确认无数据, None=未知(0视为缺失)
-        _ytm_has_data = data.cb_ytm_available if data.cb_ytm_available is not None else (ytm != 0)
+        # cb_ytm_available 三态: True=确认有数据(0视为有效), False=确认无数据, None=未知(按nan判断)
+        _ytm_has_data = data.cb_ytm_available if data.cb_ytm_available is not None else not math.isnan(ytm)
         ytm_score = safe_score(ytm, lambda v: linear_score(v, -2, 5, invert=False),
                                 has_data=_ytm_has_data, treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
@@ -1328,13 +1328,13 @@ class EnhancedTimingModel:
         
         # 6.3 新高新低比（均值回归：新高多=超买=风险，新低多=超卖=机会）
         # A股常态新高多于新低，ratio常在2-5之间，center=3使常态下中性
-        if data.new_high_count >= 0 or data.new_low_count >= 0:
-            nh = max(data.new_high_count, 1)
-            nl = max(data.new_low_count, 1)
+        if not math.isnan(data.new_high_count) or not math.isnan(data.new_low_count):
+            nh = max(int(data.new_high_count) if not math.isnan(data.new_high_count) else 0, 1)
+            nl = max(int(data.new_low_count) if not math.isnan(data.new_low_count) else 0, 1)
             hl_ratio = nh / nl
             hl_score = safe_score(hl_ratio, lambda v: sigmoid_score(v, 1, steepness=2, invert=True), treat_zero_as_missing=False)
             hl_signal = "bearish" if hl_ratio > 5 else "bullish" if hl_ratio < 1.5 else "neutral"
-            hl_desc = f"60日新高{data.new_high_count} vs 新低{data.new_low_count}，{'过热=风险' if hl_ratio>5 else '恐慌=机会' if hl_ratio<1.5 else '正常'}"
+            hl_desc = f"60日新高{int(data.new_high_count) if not math.isnan(data.new_high_count) else 0} vs 新低{int(data.new_low_count) if not math.isnan(data.new_low_count) else 0}，{'过热=风险' if hl_ratio>5 else '恐慌=机会' if hl_ratio<1.5 else '正常'}"
         else:
             hl_score = 50.0
             hl_signal = "neutral"
@@ -1427,7 +1427,7 @@ class EnhancedTimingModel:
             # 不使用 invert：高恐慌 = 高分（ bullish ），与均值回归一致
             cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=False)
             cb_panic_signal = "bullish" if cb_below_ratio > 8 else "bearish" if cb_below_ratio < 2 else "neutral"
-            cb_panic_desc = f"{data.cb_below_par_count}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌=机会' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
+            cb_panic_desc = f"{int(data.cb_below_par_count)}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌=机会' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
         else:
             cb_panic_score = 50.0
             cb_panic_signal = "neutral"
@@ -1688,7 +1688,7 @@ class EnhancedTimingModel:
             ))
         
         # C4: 利率-股市联动验证
-        if data.treasury_10y_yield > 0 and data.stock_index_change != 0:
+        if data.treasury_10y_yield > 0 and not math.isnan(data.stock_index_change):
             yield_down = data.treasury_10y_yield < 2.5
             stock_up = data.stock_index_change > 0
             if yield_down and stock_up:
@@ -1710,7 +1710,7 @@ class EnhancedTimingModel:
             if below_ratio > 0.15:
                 validations.append(CrossValidationSignal(
                     name="转债破面恐慌", signal='bullish', strength=0.6,
-                    description=f"{data.cb_below_par_count}只转债低于面值({below_ratio*100:.0f}%)，极端恐慌可能见底",
+                    description=f"{int(data.cb_below_par_count)}只转债低于面值({below_ratio*100:.0f}%)，极端恐慌可能见底",
                     confirming_factors=["valuation"],
                 ))
         
@@ -2226,7 +2226,7 @@ class EnhancedTimingModel:
 
         # 估算当前市场波动率（基于涨跌比和指数变化）
         vol_proxy = 0.0
-        if data.stock_index_change != 0:
+        if not math.isnan(data.stock_index_change):
             vol_proxy = abs(data.stock_index_change)
         if data.advance_decline_ratio > 0:
             ad_vol = abs(data.advance_decline_ratio - 1) * 10
@@ -2352,7 +2352,7 @@ def convert_from_legacy_data(
         val = getattr(legacy_data, 'cb_avg_daily_amount', 0)
         data.cb_avg_daily_amount = val if val > 0 else float('nan')
         val = getattr(legacy_data, 'cb_index_change', 0)
-        data.cb_index_change = val if val != 0 else float('nan')
+        data.cb_index_change = val if not (isinstance(val, float) and math.isnan(val)) else float('nan')
         val = getattr(legacy_data, 'cb_index_current', 0)
         data.cb_index_current = val if val > 0 else float('nan')
         val = getattr(legacy_data, 'cb_index_ma20', 0)
@@ -2382,7 +2382,8 @@ def convert_from_legacy_data(
         ):
             if (isinstance(getattr(data, attr, 0), float) and math.isnan(getattr(data, attr, 0))) or getattr(data, attr, 0) == 0:
                 val = getattr(macro_data, attr, 0)
-                if val:
+                # 修复：不能仅用 if val: 判断，因为 0 是合法值，且 float('nan') != 0
+                if not (isinstance(val, float) and math.isnan(val)):
                     setattr(data, attr, val)
         if math.isnan(data.pmi) or data.pmi <= 0:
             val = getattr(macro_data, 'pmi_current', 0)
@@ -2553,8 +2554,8 @@ def convert_from_legacy_data(
             if len(prices) > 0:
                 if math.isnan(data.cb_median_price) or data.cb_median_price <= 0:
                     data.cb_median_price = float(prices.median())
-                data.cb_below_par_count = int((prices < 100).sum())
-            data.cb_count = len(bonds_df)
+                data.cb_below_par_count = float((prices < 100).sum())
+            data.cb_count = float(len(bonds_df))
 
         if 'ytm' in bonds_df.columns:
             ytms = bonds_df['ytm'].dropna()
@@ -2572,19 +2573,19 @@ def convert_from_legacy_data(
     
     data.data_completeness = min(1.0, sum([
         0.05 if data.cb_median_premium > 0 else 0,
-        0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and not math.isnan(data.cb_ytm_median) and data.cb_ytm_median != 0)) else 0,  # 三态: True/推断/False
+        0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and not math.isnan(data.cb_ytm_median))) else 0,  # 三态: True/推断/False
         0.05 if data.treasury_10y_yield > 0 else 0,
         0.04 if 0 < data.pmi < 100 else 0,
         0.04 if data.cb_avg_daily_amount > 0 else 0,
         0.04 if data.cb_index_current > 0 else 0,
         0.04 if data.stock_index_current > 0 else 0,
-        0.02 if not math.isnan(data.stock_index_change_20d) and data.stock_index_change_20d != 0 else 0,
-        0.02 if not math.isnan(data.stock_index_change_60d) and data.stock_index_change_60d != 0 else 0,
+        0.02 if not math.isnan(data.stock_index_change_20d) else 0,
+        0.02 if not math.isnan(data.stock_index_change_60d) else 0,
         0.04 if data.cb_median_price > 0 else 0,
         0.03 if data.cb_count > 0 else 0,
         0.04 if data.shibor_overnight > 0 else 0,
         0.04 if data.m2_growth > 0 else 0,
-        0.04 if (not math.isnan(data.cpi) and data.cpi > 0) or (not math.isnan(data.ppi) and data.ppi != 0) else 0,
+        0.04 if (not math.isnan(data.cpi) and data.cpi > 0) or not math.isnan(data.ppi) else 0,
         0.03 if not math.isnan(data.social_financing_growth) else 0,
         0.03 if not math.isnan(data.gdp_growth) else 0,
         0.04 if data.credit_spread > 0 else 0,

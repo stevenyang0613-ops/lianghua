@@ -1187,7 +1187,7 @@ export default function SectorRotationStock() {
                 extra={<Button size='small' icon={<DownloadOutlined/>} onClick={()=>{
                   const {field:sF,order:sO}=momentumSorter
                   const momData=[...(data?.industries??[])].sort((a,b)=>{
-                    const va=(a as any)[sF]??0, vb=(b as any)[sF]??0
+                    const va=(a[sF as keyof typeof a] as number)??0, vb=(b[sF as keyof typeof b] as number)??0
                     return sO==='ascend'?va-vb:vb-va
                   })
                   exportCSV(momData,'stock-momentum-ranking-'+dayjs().format('YYYYMMDD')+'.csv')

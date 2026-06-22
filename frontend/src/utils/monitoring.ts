@@ -253,9 +253,11 @@ export function trackWebVitals(): void {
     const fidObserver = new PerformanceObserver((list) => {
       const entries = list.getEntries()
       entries.forEach((entry) => {
+        const eventTiming = entry as unknown as { processingStart?: number }
+        const start = eventTiming.processingStart ?? 0
         monitoring.capturePerformance({
           name: 'FID',
-          duration: (entry as any).processingStart - entry.startTime,
+          duration: start - entry.startTime,
           timestamp: Date.now(),
         })
       })
@@ -270,8 +272,9 @@ export function trackWebVitals(): void {
     let clsValue = 0
     const clsObserver = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
-        if (!(entry as any).hadRecentInput) {
-          clsValue += (entry as any).value
+        const lsEntry = entry as unknown as { hadRecentInput?: boolean; value?: number }
+        if (!lsEntry.hadRecentInput) {
+          clsValue += lsEntry.value ?? 0
         }
       }
       monitoring.capturePerformance({

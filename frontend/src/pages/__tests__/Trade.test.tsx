@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, waitFor, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import Trade from '../Trade'
 
 const mockTradeStore = vi.hoisted(() => ({
@@ -81,29 +81,31 @@ describe('Trade page', () => {
     mockTradeStore.loading = false
   })
 
-  it('should render without crashing', () => {
+  it('should render without crashing', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Trade />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
-  it('should show the title', () => {
+  it('should show the title', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Trade />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.textContent).toContain('交易')
   })
 
   it('should show account stats', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Trade />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('总资产')

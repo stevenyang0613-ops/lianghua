@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, waitFor, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import Signals from '../Signals'
 
 const mockSignalStore = {
@@ -86,20 +86,21 @@ describe('Signals page', () => {
     mockSignalStore.loading = false
   })
 
-  it('should render without crashing', () => {
+  it('should render without crashing', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Signals />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
   it('should render title', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Signals />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('交易信号')
@@ -113,9 +114,9 @@ describe('Signals page', () => {
     mockSignalStore.total = 1
 
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Signals />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('Test Bond')
@@ -124,9 +125,9 @@ describe('Signals page', () => {
 
   it('should show empty state when no signals', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Signals />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('交易信号')

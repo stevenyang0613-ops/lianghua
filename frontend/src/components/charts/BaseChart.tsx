@@ -72,9 +72,9 @@ export function BaseChart({
     if (!containerRef.current) return
 
     const chart = echarts.init(containerRef.current, theme)
-    chartRef.current = chart as any
+    chartRef.current = chart as unknown as ECharts
     setIsReady(true)
-    onChartReady?.(chart as any)
+    onChartReady?.(chart as unknown as ECharts)
 
     return () => {
       chart.dispose()

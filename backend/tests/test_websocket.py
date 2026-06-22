@@ -2,6 +2,7 @@
 import pytest
 import asyncio
 import json
+import math
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from app.api.websocket import (

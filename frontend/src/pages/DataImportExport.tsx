@@ -26,6 +26,7 @@ import {
 } from '../utils/dataImportExport'
 import { useWatchlistStore } from '../stores/useWatchlistStore'
 import { useAnalyticsStore } from '../stores/useAnalyticsStore'
+import type { ConvertibleQuote } from '../types'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -71,15 +72,32 @@ export default function DataImportExportPage() {
     setExporting(true)
     try {
       switch (format) {
-        case 'json':
-          await exportToJson({ watchlist: watchlist as any }, 'watchlist')
+        case 'json': {
+          // WatchItem 是简化数据（{code, name, addedAt}），导出时缺少转债行情字段，
+          // 用 Partial<ConvertibleQuote> 兼容方式存储（已知字段缺失）
+          const watchlistAsQuotes: ConvertibleQuote[] = watchlist.map((w) => ({
+            code: w.code,
+            name: w.name,
+          } as ConvertibleQuote))
+          await exportToJson({ watchlist: watchlistAsQuotes }, 'watchlist')
           break
-        case 'csv':
-          await exportToCsv(watchlist as any, 'watchlist')
+        }
+        case 'csv': {
+          const watchlistAsQuotes: ConvertibleQuote[] = watchlist.map((w) => ({
+            code: w.code,
+            name: w.name,
+          } as ConvertibleQuote))
+          await exportToCsv(watchlistAsQuotes, 'watchlist')
           break
-        case 'excel':
-          await exportToExcel(watchlist as any, 'watchlist')
+        }
+        case 'excel': {
+          const watchlistAsQuotes: ConvertibleQuote[] = watchlist.map((w) => ({
+            code: w.code,
+            name: w.name,
+          } as ConvertibleQuote))
+          await exportToExcel(watchlistAsQuotes, 'watchlist')
           break
+        }
       }
       message.success(`已导出 ${watchlist.length} 条自选股数据`)
     } catch (error) {
@@ -170,7 +188,7 @@ export default function DataImportExportPage() {
         const codes = importPreview.data as string[]
         // 导入自选股代码
         for (const code of codes) {
-          addWatch({ code, name: '' } as any)
+          addWatch({ code, name: '', addedAt: Date.now() })
         }
         message.success(`已导入 ${codes.length} 个自选股代码`)
       }

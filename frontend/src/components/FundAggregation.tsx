@@ -87,22 +87,23 @@ export default function FundAggregation({ onTransfer }: Props) {
     // 获取每个账户的资金状态
     const fundStatuses = allAccounts.map(account => {
       const balance = multiAccountManager.getBalance(account.id)
-      const utilization = balance ? (balance.totalAsset > 0 ? (balance.marketValue / balance.totalAsset) * 100 : 0) : 0
-      const efficiency = calculateEfficiency(balance ?? null)
+      const safeBalance: AccountBalance | null = balance ?? null
+      const utilization = safeBalance ? (safeBalance.totalAsset > 0 ? (safeBalance.marketValue / safeBalance.totalAsset) * 100 : 0) : 0
+      const efficiency = calculateEfficiency(safeBalance)
 
       return {
         account,
-        balance,
+        balance: safeBalance,
         utilization,
         efficiency,
         suggestion: generateSuggestion(utilization, efficiency),
       }
     })
 
-    setAccounts(fundStatuses as any)
+    setAccounts(fundStatuses)
 
     // 生成归集建议
-    generateAggregationPlans(fundStatuses as any)
+    generateAggregationPlans(fundStatuses)
 
     setLoading(false)
   }, [])

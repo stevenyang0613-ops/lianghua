@@ -78,20 +78,27 @@ function deepMerge<T>(local: T, remote: T): T {
   if (typeof local !== 'object' || local === null) return remote
   if (typeof remote !== 'object' || remote === null) return local
 
-  const result = { ...remote } as T
+  const result: Record<string, unknown> = { ...(remote as Record<string, unknown>) }
 
   for (const key of Object.keys(local as object)) {
-    const localValue = (local as any)[key]
-    const remoteValue = (remote as any)[key]
+    const localValue = (local as Record<string, unknown>)[key]
+    const remoteValue = (remote as Record<string, unknown>)[key]
 
     if (localValue !== undefined && remoteValue === undefined) {
-      (result as any)[key] = localValue
-    } else if (typeof localValue === 'object' && typeof remoteValue === 'object') {
-      (result as any)[key] = deepMerge(localValue, remoteValue)
+      result[key] = localValue
+    } else if (
+      localValue !== null &&
+      remoteValue !== null &&
+      typeof localValue === 'object' &&
+      typeof remoteValue === 'object' &&
+      !Array.isArray(localValue) &&
+      !Array.isArray(remoteValue)
+    ) {
+      result[key] = deepMerge(localValue, remoteValue)
     }
   }
 
-  return result
+  return result as T
 }
 
 // 批量解决冲突

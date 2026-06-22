@@ -14,7 +14,7 @@ if (!rootEl) throw new Error('#root element not found in DOM')
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
     <ThemeProvider>
-      <HashRouter>
+      <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </HashRouter>
     </ThemeProvider>

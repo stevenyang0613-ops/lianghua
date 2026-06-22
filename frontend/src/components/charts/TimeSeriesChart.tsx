@@ -137,18 +137,20 @@ const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
 
     // 构建Y轴
     const yAxisConfig = yAxis.length > 0 ? yAxis : [{ name: '' }]
+    // ECharts YAXisOption is a complex discriminated union; cast at the boundary
+    // where we build it from our simpler domain model.
     const chartYAxis = yAxisConfig.map((axis, index) => ({
       type: 'value' as const,
       name: axis.name,
       nameTextStyle: { color: textColor },
-      min: axis.min ?? 'dataMin',
-      max: axis.max ?? 'dataMax',
+      min: axis.min ?? 'dataMin' as const,
+      max: axis.max ?? 'dataMax' as const,
       axisLine: { lineStyle: { color: axisLineColor } },
       axisLabel: { color: textColor },
       splitLine: {
-        lineStyle: { color: axisLineColor, type: 'dashed' },
+        lineStyle: { color: axisLineColor, type: 'dashed' as const },
       },
-      position: index === 0 ? 'left' : 'right',
+      position: index === 0 ? 'left' as const : 'right' as const,
     }))
 
     const baseOption: EChartsOption = {
@@ -199,32 +201,32 @@ const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
         axisLabel: { color: textColor, rotate: 45 },
         splitLine: { show: false },
       },
-      yAxis: chartYAxis as any[],
+      yAxis: chartYAxis as any,
       series: chartSeries,
     }
 
     // 添加数据缩放
-    if (showDataZoom) {
-      (baseOption as any).dataZoom = [
-        {
-          type: 'inside',
-          start: 80,
-          end: 100,
-        },
-        {
-          type: 'slider',
-          start: 80,
-          end: 100,
-          bottom: showLegend ? '12%' : '3%',
-          textStyle: { color: textColor },
-          borderColor: axisLineColor,
-          fillerColor: isDark ? 'rgba(64, 158, 255, 0.2)' : 'rgba(64, 158, 255, 0.1)',
-          handleStyle: { color: '#409eff' },
-        },
-      ]
-    }
+    const dataZoomConfig = showDataZoom
+      ? [
+          {
+            type: 'inside' as const,
+            start: 80,
+            end: 100,
+          },
+          {
+            type: 'slider' as const,
+            start: 80,
+            end: 100,
+            bottom: showLegend ? '12%' : '3%',
+            textStyle: { color: textColor },
+            borderColor: axisLineColor,
+            fillerColor: isDark ? 'rgba(64, 158, 255, 0.2)' : 'rgba(64, 158, 255, 0.1)',
+            handleStyle: { color: '#409eff' },
+          },
+        ]
+      : undefined
 
-    return baseOption
+    return { ...baseOption, dataZoom: dataZoomConfig }
   }, [series, title, theme, showLegend, showDataZoom, yAxis, markPoints, markLines, allTimes, formatTime])
 
   // 初始化图表

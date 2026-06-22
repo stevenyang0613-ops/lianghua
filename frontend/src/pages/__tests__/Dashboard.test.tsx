@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import Dashboard from '../Dashboard'
 
 const mockLayouts = vi.hoisted(() => [
@@ -55,18 +55,18 @@ describe('Dashboard page', () => {
 
   it('should render without crashing', () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
   it('should render layout title', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('数据看板')
@@ -75,9 +75,9 @@ describe('Dashboard page', () => {
 
   it('should render widget cards', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     await waitFor(() => {
       expect(container.textContent).toContain('信号数')

@@ -261,7 +261,7 @@ class IndexedDBStorage {
 
       // 强制 GC（如果可用）
       if ('gc' in window) {
-        (window as any).gc()
+        window.gc?.()
       }
 
       console.log(`[IndexedDB] Cleanup completed: expired=${expired}, overflow=${overflow}`)

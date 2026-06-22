@@ -248,10 +248,11 @@ export default function KlineChart({ data, loading, height = 500 }: KlineChartPr
   }, [])
 
   const handleZoomIn = () => {
-    const option = chartInstance.current?.getOption() as any
-    if (option?.dataZoom?.[0]) {
-      const start = Math.max(0, (option.dataZoom[0].start || 70) - 10)
-      const end = Math.min(100, (option.dataZoom[0].end || 100) - 5)
+    const option = chartInstance.current?.getOption()
+    const dataZoom = option?.dataZoom as Array<{ start?: number; end?: number }> | undefined
+    if (dataZoom?.[0]) {
+      const start = Math.max(0, (dataZoom[0].start || 70) - 10)
+      const end = Math.min(100, (dataZoom[0].end || 100) - 5)
       chartInstance.current?.dispatchAction({
         type: 'dataZoom',
         start,
@@ -261,10 +262,11 @@ export default function KlineChart({ data, loading, height = 500 }: KlineChartPr
   }
 
   const handleZoomOut = () => {
-    const option = chartInstance.current?.getOption() as any
-    if (option?.dataZoom?.[0]) {
-      const start = Math.max(0, (option.dataZoom[0].start || 70) + 5)
-      const end = Math.min(100, (option.dataZoom[0].end || 100) + 10)
+    const option = chartInstance.current?.getOption()
+    const dataZoom = option?.dataZoom as Array<{ start?: number; end?: number }> | undefined
+    if (dataZoom?.[0]) {
+      const start = Math.max(0, (dataZoom[0].start || 70) + 5)
+      const end = Math.min(100, (dataZoom[0].end || 100) + 10)
       chartInstance.current?.dispatchAction({
         type: 'dataZoom',
         start,

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { render, waitFor, act } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import Backtest from '../Backtest'
 
 const mockStrategies = vi.hoisted(() => [
@@ -79,51 +79,56 @@ describe('Backtest page', () => {
     vi.clearAllMocks()
   })
 
-  it('should render without crashing', () => {
+  it('should render without crashing', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Backtest />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
-  it('should show loading state initially', () => {
+  it('should show loading state initially', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Backtest />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.textContent).toContain('策略配置')
   })
 
   it('should render strategy configuration section', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Backtest />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.textContent).toContain('策略配置')
     await waitFor(() => {
       expect(container.textContent).toContain('回测区间')
     })
   })
 
-  it('should render backtest center title', () => {
+  it('should render backtest center title', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Backtest />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     expect(container.textContent).toContain('回测中心')
   })
 
   it('should show empty state prompt', async () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Backtest />
-      </BrowserRouter>
+      </MemoryRouter>
     )
+    await act(async () => {})
     await waitFor(() => {
       expect(container.textContent).toContain('选择策略和参数')
       expect(container.textContent).toContain('开始测试')

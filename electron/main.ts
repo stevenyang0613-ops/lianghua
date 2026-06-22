@@ -360,7 +360,14 @@ function readTokenFile(p: string): string {
   return ''
 }
 
-function fetchTokenFromBackend(): Promise<string> {
+interface FetchTokenResult {
+  token: string
+  /** true 表示成功连上后端（即使后端没返回 token）；false 表示后端不可达 */
+  ok: boolean
+  error?: string
+}
+
+function fetchTokenFromBackend(): Promise<FetchTokenResult> {
   return new Promise((resolve) => {
     try {
       const req = http.get(`${BACKEND_URL}/health`, { timeout: 3000 }, (res) => {
@@ -370,16 +377,27 @@ function fetchTokenFromBackend(): Promise<string> {
           try {
             const parsed = JSON.parse(data)
             const t = parsed?.ws_auth_token
-            resolve(typeof t === 'string' ? t.trim() : '')
-          } catch {
-            resolve('')
+            resolve({
+              token: typeof t === 'string' ? t.trim() : '',
+              ok: true,
+            })
+          } catch (e) {
+            // 成功连上后端但响应解析失败
+            resolve({ token: '', ok: true, error: `parse error: ${(e as Error).message}` })
           }
         })
       })
-      req.on('error', () => resolve(''))
-      req.on('timeout', () => { req.destroy(); resolve('') })
-    } catch {
-      resolve('')
+      req.on('error', (err: Error) => {
+        // 后端不可达（ECONNREFUSED / ENOTFOUND 等）
+        resolve({ token: '', ok: false, error: err.message })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        resolve({ token: '', ok: false, error: 'timeout' })
+      })
+    } catch (e) {
+      // 同步错误（极少见，例如 BACKEND_URL 格式无效）
+      resolve({ token: '', ok: false, error: (e as Error).message })
     }
   })
 }
@@ -410,13 +428,27 @@ function getDesktopAuthToken(): string {
 async function ensureDesktopAuthToken(): Promise<string> {
   const t = getDesktopAuthToken()
   if (t) return t
-  const fetched = await fetchTokenFromBackend()
-  if (fetched) {
-    cachedAuthToken = { value: fetched, expiresAt: Date.now() + 60_000 }
-    return fetched
+  const result = await fetchTokenFromBackend()
+  if (result.ok) {
+    if (result.error) {
+      // 后端可访问但响应异常 — 记日志但不阻断请求链路
+      console.warn('[Electron] fetchTokenFromBackend:', result.error)
+    }
+    if (result.token) {
+      cachedAuthToken = { value: result.token, expiresAt: Date.now() + 60_000 }
+      return result.token
+    }
+    return ''
+  }
+  // 后端不可达 — 不打 error 级别（启动期后端还没起来很常见），
+  // 仅在第一次失败时记一次 warning，避免日志刷屏
+  if (!ensureDesktopAuthToken._warned) {
+    console.warn('[Electron] Backend unreachable for token fetch:', result.error)
+    ensureDesktopAuthToken._warned = true
   }
   return ''
 }
+ensureDesktopAuthToken._warned = false
 
 // Loopback hostnames permitted for IPC-driven http requests. Anything else
 // is rejected to prevent the renderer (or a compromised renderer) from using

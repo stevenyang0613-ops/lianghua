@@ -236,8 +236,8 @@ export class MemoryMonitor {
    * 记录内存快照
    */
   record(): { used: number; total: number } | null {
-    if ('memory' in performance && (performance as any).memory) {
-      const memory = (performance as any).memory
+    if ('memory' in performance && performance.memory) {
+      const memory = performance.memory
       const sample = {
         timestamp: Date.now(),
         used: memory.usedJSHeapSize,

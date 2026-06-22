@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import AlertManager from '../AlertManager'
 
 const mockAlerts: any[] = []
@@ -55,27 +55,27 @@ describe('AlertManager page', () => {
 
   it('should render without crashing', () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AlertManager />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(container.querySelector('.ant-typography')).toBeDefined()
   })
 
   it('should show empty state when no alerts', () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AlertManager />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(container.textContent).toContain('暂无预警')
   })
 
   it('should render statistics cards', () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AlertManager />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(container.textContent).toContain('预警总数')
     expect(container.textContent).toContain('监控中')
@@ -85,9 +85,9 @@ describe('AlertManager page', () => {
 
   it('should render action buttons', () => {
     const { container } = render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AlertManager />
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(container.textContent).toContain('清除已触发')
     expect(container.textContent).toContain('清除全部')

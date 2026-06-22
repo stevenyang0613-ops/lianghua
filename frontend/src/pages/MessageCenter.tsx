@@ -37,7 +37,7 @@ const levelColors: Record<string, string> = {
 export default function MessageCenter() {
   const [messages, setMessages] = useState<Message[]>([])
   const [categories, setCategories] = useState<MessageCategory[]>([])
-  const [activeCategory, setActiveCategory] = useState('all')
+  const [activeCategory, setActiveCategory] = useState<'all' | Message['type']>('all')
   const [searchText, setSearchText] = useState('')
   const [filter, setFilter] = useState<'all' | 'unread' | 'starred'>('all')
 
@@ -79,7 +79,7 @@ export default function MessageCenter() {
   }
 
   const handleMarkAllAsRead = () => {
-    const count = markAllAsRead(activeCategory === 'all' ? undefined : activeCategory as any)
+    const count = markAllAsRead(activeCategory === 'all' ? undefined : activeCategory)
     loadData()
     antMessage.success(`已标记 ${count} 条消息为已读`)
   }
@@ -96,7 +96,7 @@ export default function MessageCenter() {
   }
 
   const handleClearAll = () => {
-    const count = clearMessages(activeCategory === 'all' ? undefined : activeCategory as any)
+    const count = clearMessages(activeCategory === 'all' ? undefined : activeCategory)
     loadData()
     antMessage.success(`已清除 ${count} 条消息`)
   }
@@ -129,7 +129,7 @@ export default function MessageCenter() {
               key={cat.key}
               color={activeCategory === cat.key ? 'blue' : 'default'}
               style={{ cursor: 'pointer', padding: '4px 12px' }}
-              onClick={() => setActiveCategory(cat.key)}
+              onClick={() => setActiveCategory(cat.key as 'all' | Message['type'])}
             >
               {getIcon(cat.key)}
               <span style={{ marginLeft: 4 }}>{cat.label}</span>

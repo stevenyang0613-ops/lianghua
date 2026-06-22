@@ -124,9 +124,9 @@ export function getSupportedLocales(): Array<{ code: Locale; name: string }> {
  * 检测浏览器语言
  */
 export function detectBrowserLocale(): Locale {
-  const browserLang = navigator.language || (navigator as any).userLanguage
+  const browserLang: string | undefined = navigator.language || navigator.userLanguage
 
-  if (browserLang.startsWith('zh')) {
+  if (browserLang && browserLang.startsWith('zh')) {
     return 'zh-CN'
   }
 

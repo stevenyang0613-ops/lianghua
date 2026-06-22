@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../components/Sidebar', () => ({
   default: () => null,
@@ -39,9 +39,9 @@ import Layout from '../Layout'
 describe('Layout', () => {
   it('should render children content', () => {
     render(
-      <BrowserRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Layout><div data-testid="child">child content</div></Layout>
-      </BrowserRouter>
+      </MemoryRouter>
     )
     expect(screen.getByTestId('child')).toBeDefined()
   })

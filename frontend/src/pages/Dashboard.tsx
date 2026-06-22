@@ -263,14 +263,14 @@ export default function Dashboard() {
   }
 
   const handleAddWidget = () => {
-    if (!currentLayout || !newWidget.title) {
-      message.warning('请填写组件标题')
+    if (!currentLayout || !newWidget.title || !newWidget.type || !newWidget.size) {
+      message.warning('请填写组件标题/类型/尺寸')
       return
     }
     addWidget(currentLayout.id, {
-      type: newWidget.type as any,
+      type: newWidget.type,
       title: newWidget.title || '',
-      size: newWidget.size as any,
+      size: newWidget.size,
       x: 0,
       y: currentLayout.widgets.length,
       w: newWidget.w || 3,
@@ -321,7 +321,7 @@ export default function Dashboard() {
                   currentLayout && !currentLayout.isDefault ? { key: 'export', icon: <DownloadOutlined />, label: '导出布局', onClick: () => handleExportLayout(currentLayout.id) } : null,
                   currentLayout && !currentLayout.isDefault ? { key: 'duplicate', icon: <CopyOutlined />, label: '复制布局', onClick: () => handleDuplicateLayout(currentLayout.id) } : null,
                   currentLayout && !currentLayout.isDefault ? { key: 'delete', icon: <DeleteOutlined />, label: '删除布局', onClick: () => handleDeleteLayout(currentLayout.id), danger: true } : null,
-                ].filter(Boolean) as any[],
+                ].filter((item): item is NonNullable<typeof item> => item !== null),
               }}
             >
               <Button>布局管理</Button>

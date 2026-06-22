@@ -73,9 +73,9 @@ class MacroData:
     cb_index_current: float = 0.0
     cb_index_ma20: float = 0.0
     cb_index_ma60: float = 0.0
-    cb_below_par_count: int = 0
+    cb_below_par_count: float = float('nan')
     cb_median_price: float = 0.0
-    cb_count: int = 0
+    cb_count: float = float('nan')
 
     # === 正股市场 ===
     stock_index_current: float = 0.0
@@ -313,13 +313,13 @@ class MacroDataService:
         checks = [
             ("treasury_10y", data.treasury_10y_yield > 0, 0.06),
             ("pmi", 0 < data.pmi_current < 100, 0.06),
-            ("cpi_ppi", (not math.isnan(data.cpi) and data.cpi > 0) or (not math.isnan(data.ppi) and data.ppi != 0.0), 0.04),
-            ("m2", data.m2_growth > 0, 0.05),
+            ("cpi_ppi", (not math.isnan(data.cpi) and data.cpi > 0) or not math.isnan(data.ppi), 0.04),
+            ("m2", not math.isnan(data.m2_growth), 0.05),
             ("social_fin", not math.isnan(data.social_financing_growth), 0.04),
-            ("gdp", data.gdp_growth > 0, 0.04),
+            ("gdp", not math.isnan(data.gdp_growth), 0.04),
             ("shibor", data.shibor_overnight > 0, 0.04),
             ("credit_spread", data.credit_spread_aa > 0, 0.04),
-            ("market_stats", data.advance_count > 0 or data.decline_count > 0, 0.04),
+            ("market_stats", not math.isnan(data.advance_count) or not math.isnan(data.decline_count), 0.04),
             ("cb_index", data.cb_index_current > 0, 0.05),
             ("stock_index", data.stock_index_current > 0, 0.05),
             ("cb_stats", data.cb_median_premium > 0, 0.04),
@@ -525,7 +525,7 @@ class MacroDataService:
             advance = int((valid > 0).sum())
             decline = int((valid < 0).sum())
             # 60日新高/新低
-            new_high, new_low = 0, 0
+            new_high, new_low = float('nan'), float('nan')
             try:
                 hl_df = ak.stock_a_high_low_statistics()
                 if hl_df is not None and not hl_df.empty:
@@ -533,7 +533,7 @@ class MacroDataService:
                     new_high = int(latest.get('high60', 0)) if not pd.isna(latest.get('high60', 0)) else 0
                     new_low = int(latest.get('low60', 0)) if not pd.isna(latest.get('low60', 0)) else 0
             except Exception:
-                logger.warning("[MacroData] stock_a_high_low_statistics failed, using 0 for new_high/new_low")
+                logger.warning("[MacroData] stock_a_high_low_statistics failed, using nan for new_high/new_low")
                 pass
             return float(limit_up), float(limit_down), float(advance), float(decline), float(new_high), float(new_low)
         except Exception as e:
@@ -637,8 +637,8 @@ class MacroDataService:
             data.cb_median_premium = round(float(latest.get('mid_premium_rt', 0)), 2)
             data.cb_median_price = round(float(latest.get('mid_price', 0)), 2)
             data.cb_avg_daily_amount = round(float(latest.get('amount', 0)), 2)
-            data.cb_count = int(latest.get('count', 0))
-            data.cb_below_par_count = int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0))
+            data.cb_count = float(int(latest.get('count', 0)))
+            data.cb_below_par_count = float(int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0)))
         except Exception as e:
             logger.warning(f"[MacroData] CB stats from JSL failed: {e}")
 
@@ -1164,7 +1164,7 @@ class MacroDataService:
             score += 3
         elif data.export_growth < 0:
             score -= 8
-        cpi_ppi_gap = data.cpi - data.ppi if data.cpi != 2.0 or data.ppi != 0.0 else 0
+        cpi_ppi_gap = data.cpi - data.ppi if not math.isnan(data.cpi) and not math.isnan(data.ppi) else 0
         if cpi_ppi_gap > 2:
             score += 5
         elif cpi_ppi_gap < -2:

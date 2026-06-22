@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import type { InputRef } from 'antd'
 import { Table, Input, Select, Button, Space, Dropdown, Tag, Popconfirm } from 'antd'
 import {
   EditOutlined,
@@ -79,7 +80,7 @@ export function AdvancedTable<T extends Record<string, unknown>>({
   const [editingValue, setEditingValue] = useState<unknown>(null)
   const [filters, setFilters] = useState<Record<string, FilterValue | null>>({})
   const [sorter, setSorter] = useState<{ field?: string; order?: 'ascend' | 'descend' }>({})
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<InputRef>(null)
 
   // 处理筛选后的数据
   const filteredData = useMemo(() => {
@@ -205,7 +206,7 @@ export function AdvancedTable<T extends Record<string, unknown>>({
 
             return (
               <Input
-                ref={inputRef as any}
+                ref={inputRef}
                 value={editingValue as string}
                 onChange={e => setEditingValue(e.target.value)}
                 onPressEnter={saveEdit}
