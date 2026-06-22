@@ -40,6 +40,14 @@ export class OffscreenRenderer {
   }
 
   /**
+   * Safe ctx accessor — throws if canvas context is not initialized.
+   */
+  private getCtx(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+    if (!this.ctx) throw new Error('Canvas context not initialized')
+    return this.ctx
+  }
+
+  /**
    * 初始化画布
    */
   private initCanvas(): void {
@@ -75,8 +83,8 @@ export class OffscreenRenderer {
     const chartHeight = this.config.height - padding.top - padding.bottom
 
     // 清除画布
-    this.ctx!.fillStyle = this.config.backgroundColor || '#1a1a2e'
-    this.ctx!.fillRect(0, 0, this.config.width, this.config.height)
+    this.getCtx().fillStyle = this.config.backgroundColor || '#1a1a2e'
+    this.getCtx().fillRect(0, 0, this.config.width, this.config.height)
 
     // 计算数据范围
     let minVal = Infinity
@@ -102,10 +110,10 @@ export class OffscreenRenderer {
 
     // 绘制标题
     if (options?.title) {
-      this.ctx!.font = '14px sans-serif'
-      this.ctx!.fillStyle = '#ffffff'
-      this.ctx!.textAlign = 'center'
-      this.ctx!.fillText(options.title, this.config.width / 2, 20)
+      this.getCtx().font = '14px sans-serif'
+      this.getCtx().fillStyle = '#ffffff'
+      this.getCtx().textAlign = 'center'
+      this.getCtx().fillText(options.title, this.config.width / 2, 20)
     }
 
     // 绘制每条线
@@ -130,27 +138,27 @@ export class OffscreenRenderer {
     minVal: number,
     maxVal: number
   ): void {
-    this.ctx!.strokeStyle = '#2a2a4a'
-    this.ctx!.lineWidth = 1
+    this.getCtx().strokeStyle = '#2a2a4a'
+    this.getCtx().lineWidth = 1
 
     // 水平网格线
     const hLines = 5
     for (let i = 0; i <= hLines; i++) {
       const y = padding.top + (chartHeight / hLines) * i
-      this.ctx!.beginPath()
-      this.ctx!.moveTo(padding.left, y)
-      this.ctx!.lineTo(padding.left + chartWidth, y)
-      this.ctx!.stroke()
+      this.getCtx().beginPath()
+      this.getCtx().moveTo(padding.left, y)
+      this.getCtx().lineTo(padding.left + chartWidth, y)
+      this.getCtx().stroke()
     }
 
     // 垂直网格线
     const vLines = 6
     for (let i = 0; i <= vLines; i++) {
       const x = padding.left + (chartWidth / vLines) * i
-      this.ctx!.beginPath()
-      this.ctx!.moveTo(x, padding.top)
-      this.ctx!.lineTo(x, padding.top + chartHeight)
-      this.ctx!.stroke()
+      this.getCtx().beginPath()
+      this.getCtx().moveTo(x, padding.top)
+      this.getCtx().lineTo(x, padding.top + chartHeight)
+      this.getCtx().stroke()
     }
   }
 
@@ -164,24 +172,24 @@ export class OffscreenRenderer {
     minVal: number,
     maxVal: number
   ): void {
-    this.ctx!.font = '10px sans-serif'
-    this.ctx!.fillStyle = '#888888'
-    this.ctx!.textAlign = 'right'
+    this.getCtx().font = '10px sans-serif'
+    this.getCtx().fillStyle = '#888888'
+    this.getCtx().textAlign = 'right'
 
     // Y 轴标签
     const yLabels = 5
     for (let i = 0; i <= yLabels; i++) {
       const value = maxVal - (maxVal - minVal) * (i / yLabels)
       const y = padding.top + (chartHeight / yLabels) * i
-      this.ctx!.fillText(value.toFixed(2), padding.left - 5, y + 3)
+      this.getCtx().fillText(value.toFixed(2), padding.left - 5, y + 3)
     }
 
     // X 轴标签（时间）
-    this.ctx!.textAlign = 'center'
+    this.getCtx().textAlign = 'center'
     const xLabels = 6
     for (let i = 0; i <= xLabels; i++) {
       const x = padding.left + (chartWidth / xLabels) * i
-      this.ctx!.fillText(`${i}`, x, padding.top + chartHeight + 15)
+      this.getCtx().fillText(`${i}`, x, padding.top + chartHeight + 15)
     }
   }
 
@@ -199,22 +207,22 @@ export class OffscreenRenderer {
     const data = series.data.filter(v => !isNaN(v))
     const xStep = chartWidth / (data.length - 1 || 1)
 
-    this.ctx!.beginPath()
-    this.ctx!.strokeStyle = series.color
-    this.ctx!.lineWidth = series.lineWidth || 1.5
+    this.getCtx().beginPath()
+    this.getCtx().strokeStyle = series.color
+    this.getCtx().lineWidth = series.lineWidth || 1.5
 
     for (let i = 0; i < data.length; i++) {
       const x = padding.left + i * xStep
       const y = padding.top + chartHeight - ((data[i] - minVal) / range) * chartHeight
 
       if (i === 0) {
-        this.ctx!.moveTo(x, y)
+        this.getCtx().moveTo(x, y)
       } else {
-        this.ctx!.lineTo(x, y)
+        this.getCtx().lineTo(x, y)
       }
     }
 
-    this.ctx!.stroke()
+    this.getCtx().stroke()
   }
 
   /**
@@ -235,8 +243,8 @@ export class OffscreenRenderer {
     const chartWidth = this.config.width - padding.left - padding.right
 
     // 清除画布
-    this.ctx!.fillStyle = this.config.backgroundColor || '#1a1a2e'
-    this.ctx!.fillRect(0, 0, this.config.width, this.config.height)
+    this.getCtx().fillStyle = this.config.backgroundColor || '#1a1a2e'
+    this.getCtx().fillRect(0, 0, this.config.width, this.config.height)
 
     // 计算价格范围
     let minPrice = Infinity
@@ -273,27 +281,27 @@ export class OffscreenRenderer {
       const openY = padding.top + chartHeight - ((candle.open - minPrice) / priceRange) * chartHeight
       const closeY = padding.top + chartHeight - ((candle.close - minPrice) / priceRange) * chartHeight
 
-      this.ctx!.strokeStyle = color
-      this.ctx!.lineWidth = 1
-      this.ctx!.beginPath()
-      this.ctx!.moveTo(x, highY)
-      this.ctx!.lineTo(x, lowY)
-      this.ctx!.stroke()
+      this.getCtx().strokeStyle = color
+      this.getCtx().lineWidth = 1
+      this.getCtx().beginPath()
+      this.getCtx().moveTo(x, highY)
+      this.getCtx().lineTo(x, lowY)
+      this.getCtx().stroke()
 
       // 绘制实体
       const bodyTop = Math.min(openY, closeY)
       const bodyHeight = Math.abs(closeY - openY) || 1
 
-      this.ctx!.fillStyle = color
-      this.ctx!.fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight)
+      this.getCtx().fillStyle = color
+      this.getCtx().fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight)
 
       // 绘制成交量
       if (options?.showVolume !== false && candle.volume && maxVolume > 0) {
         const volY = padding.top + chartHeight + volumeHeight
         const volBarHeight = (candle.volume / maxVolume) * (volumeHeight - 10)
 
-        this.ctx!.fillStyle = isUp ? 'rgba(239, 83, 80, 0.5)' : 'rgba(38, 166, 154, 0.5)'
-        this.ctx!.fillRect(x - candleWidth / 2, volY - volBarHeight, candleWidth, volBarHeight)
+        this.getCtx().fillStyle = isUp ? 'rgba(239, 83, 80, 0.5)' : 'rgba(38, 166, 154, 0.5)'
+        this.getCtx().fillRect(x - candleWidth / 2, volY - volBarHeight, candleWidth, volBarHeight)
       }
     }
 
@@ -348,15 +356,15 @@ export class OffscreenRenderer {
     })
 
     // 清除画布
-    this.ctx!.fillStyle = this.config.backgroundColor || '#1a1a2e'
-    this.ctx!.fillRect(0, 0, this.config.width, this.config.height)
+    this.getCtx().fillStyle = this.config.backgroundColor || '#1a1a2e'
+    this.getCtx().fillRect(0, 0, this.config.width, this.config.height)
 
     // 绘制每个单元格
     for (let i = 0; i < rows; i++) {
       for (let j = 0; j < cols; j++) {
         const value = data[i][j]
-        this.ctx!.fillStyle = colorScale(value)
-        this.ctx!.fillRect(j * cellWidth, i * cellHeight, cellWidth, cellHeight)
+        this.getCtx().fillStyle = colorScale(value)
+        this.getCtx().fillRect(j * cellWidth, i * cellHeight, cellWidth, cellHeight)
       }
     }
 
@@ -389,9 +397,9 @@ export class OffscreenRenderer {
    */
   getImageData(): ImageData {
     if (this.canvas instanceof OffscreenCanvas) {
-      return this.ctx!.getImageData(0, 0, this.config.width, this.config.height)
+      return this.getCtx().getImageData(0, 0, this.config.width, this.config.height)
     }
-    return this.ctx!.getImageData(0, 0, this.config.width, this.config.height)
+    return this.getCtx().getImageData(0, 0, this.config.width, this.config.height)
   }
 
   /**

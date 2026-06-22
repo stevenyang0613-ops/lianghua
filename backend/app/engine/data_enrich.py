@@ -648,6 +648,9 @@ def _build_industry_cache():
     try:
         logger.info("[DataEnrich] Building industry cache (may take minutes)...")
         df = ak.stock_board_industry_name_em()
+        if df is None or len(df) == 0:
+            logger.warning("[DataEnrich] Industry: stock_board_industry_name_em returned empty")
+            return 0
         result = {}
         count = 0
         total = len(df)
@@ -1162,6 +1165,8 @@ def _refresh_fund_flow_cache():
         try:
             logger.info(f"[DataEnrich] Refreshing fund flow rank attempt {attempt+1}...")
             df = ak.stock_individual_fund_flow_rank(indicator="今日")
+            if df is None or len(df) == 0:
+                raise ValueError("stock_individual_fund_flow_rank returned empty")
             result = {}
             for _, r in df.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -1195,32 +1200,32 @@ def _refresh_fund_flow_cache():
 
         # [TDX] fallback: 用 TDX 行情数据补充缺失的资金流向 (不覆盖已有缓存)
         if not _fund_flow_map or len(_fund_flow_map) < 50:
-            try:
+            ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
+            if not ff_codes:
+                _ensure_bond_stock_codes()
                 ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-                if not ff_codes:
-                    _ensure_bond_stock_codes()
-                    ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-                if ff_codes:
+            if ff_codes:
+                try:
                     adapter = get_tdx_adapter()
                     logger.info(f'[DataEnrich][TDX] Fund flow: fetching TDX spot for {len(ff_codes)} stocks')
                     tdx_q = adapter.fetch_quotes(ff_codes)
                     # Merge: only add codes missing from existing cache, never overwrite
+                    # TDX 只提供成交额，没有主力净流入方向，跳过而非用错误近似值覆盖
+                    # 此前 amount * 0.1 的 fallback 导致所有缺失股票被错误标记为净流入
                     merged = dict(_fund_flow_map) if _fund_flow_map else {}
                     tdx_added = 0
                     for code, q in tdx_q.items():
                         if code in merged:
                             continue  # preserve existing (likely better quality) data
-                        amount = q.get('amount', 0)
-                        if amount > 0:
-                            merged[code] = {'net_main': round(amount * 0.1, 2)}
-                            tdx_added += 1
+                        # TDX 没有 net_main 方向数据，跳过
                     if len(merged) > 50:
                         _set_global_map('_fund_flow_map', merged)
                         _save_cache(_FUND_FLOW_CACHE, merged)
                         logger.info(f'[DataEnrich][TDX] Fund flow: merged {tdx_added} TDX estimates into {len(merged)} total stocks')
-                        return
-            except Exception as tdx_e:
-                logger.debug(f'[DataEnrich][TDX] Fund flow fallback failed: {tdx_e}')
+                except Exception as e:
+                    logger.debug(f'[DataEnrich][TDX] Fund flow: adapter failed: {e}')
+            else:
+                logger.debug('[DataEnrich][TDX] Fund flow: no codes available')
 
 
 
@@ -1229,6 +1234,8 @@ def _refresh_fund_flow_from_spot_em():
     try:
         try:
             df = ak.stock_zh_a_spot_em()
+            if df is None or len(df) == 0:
+                raise ValueError("stock_zh_a_spot_em returned empty")
             flow_cols = [c for c in df.columns if '主力' in str(c)]
             if not flow_cols:
                 raise ValueError("No fund flow columns in stock_zh_a_spot_em")
@@ -1250,20 +1257,8 @@ def _refresh_fund_flow_from_spot_em():
                 logger.info(f"[DataEnrich] Fund flow from spot_em: {len(result)} stocks (caller decides merge)")
             return result
         except Exception:
-            # Fallback: use stock_zh_a_spot with 成交额 as approximation
-            df = ak.stock_zh_a_spot()
-            result = {}
-            for _, r in df.iterrows():
-                raw_code = str(r.get('代码', '')).strip().lower()
-                if not raw_code or raw_code.startswith('bj'):
-                    continue
-                s_code = raw_code[2:] if raw_code.startswith(('sz', 'sh')) else raw_code
-                amount = _sf(r.get('成交额'))
-                if amount is not None and amount > 0:
-                    result[s_code] = {"net_main": round(amount * 0.1, 2)}
-            if result:
-                logger.info(f"[DataEnrich] Fund flow from spot_em fallback: {len(result)} stocks (using 成交额 approximation)")
-            return result
+            # stock_zh_a_spot_em 失败时不使用成交额近似，避免方向错误（成交额无正负方向）
+            return {}
     except Exception as e:
         logger.warning(f"[DataEnrich] Fund flow spot_em fallback failed: {e}")
         return {}
@@ -1519,6 +1514,9 @@ def _refresh_buyback_cache():
     try:
         logger.info("[DataEnrich] Refreshing buyback data...")
         df = ak.stock_repurchase_em()
+        if df is None or len(df) == 0:
+            logger.warning("[DataEnrich] Buyback: stock_repurchase_em returned empty")
+            return 0
         result = {}
         for _, r in df.iterrows():
             code = str(r.get("股票代码", "")).strip()
@@ -1576,6 +1574,9 @@ def _refresh_mgmt_cache():
                 timeout=180.0, default=None,
                 op_name="mgmt_em_detail",
             )
+            if df_em_detail is None or getattr(df_em_detail, 'empty', True):
+                logger.warning("[DataEnrich] Mgmt EM detail returned None/empty, skipping primary source")
+                raise ValueError("EM detail returned None/empty")
             count_before = len(result)
             for _, r in df_em_detail.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -1632,6 +1633,9 @@ def _refresh_mgmt_cache():
                     lambda: ak.stock_hold_management_detail_cninfo(symbol="增持"),
                     timeout=120.0, default=None, op_name="mgmt_cninfo",
                 )
+                if df_cninfo is None or getattr(df_cninfo, 'empty', True):
+                    logger.debug("[DataEnrich] Mgmt cninfo returned None/empty, skipping")
+                    raise ValueError("cninfo returned None/empty")
                 count_before = len(result)
                 for _, r in df_cninfo.iterrows():
                     code = str(r.get("证券代码", "")).strip()
@@ -1857,9 +1861,10 @@ def _refresh_coupon_rate_cache():
                 if code and cr is not None:
                     try:
                         cr_val = float(str(cr).replace("%", "").strip())
-                        # 已经是百分比则保持，否则 /100
-                        if cr_val > 1: cr_val = cr_val / 100
-                        if 0 < cr_val < 1:
+                        # 统一：JSL 返回的票面利率可能是百分比整数（如 1.5）或百分比小数（如 0.015）
+                        # 大于 0.5 视为百分比整数，除以 100；否则保持原样
+                        if cr_val > 0.5: cr_val = cr_val / 100
+                        if 0 < cr_val <= 1:
                             result[str(code)] = cr_val
                     except (ValueError, TypeError):
                         continue
@@ -2296,6 +2301,9 @@ def _build_concept_cache():
         # Source 1: EastMoney
         try:
             df = ak.stock_board_concept_name_em()
+            if df is None or len(df) == 0:
+                logger.warning("[DataEnrich] Concept: stock_board_concept_name_em returned empty")
+                raise ValueError("EM concept empty")
             em_count = 0
             em_skipped = 0
             em_concept_names: list[str] = []
@@ -2329,6 +2337,8 @@ def _build_concept_cache():
         ths_concept_names: list[str] = []
         try:
             df2 = ak.stock_board_concept_name_ths()
+            if df2 is None or len(df2) == 0:
+                raise ValueError("stock_board_concept_name_ths returned empty")
             ths_skipped = 0
             for _, board in df2.iterrows():
                 bcode = str(board.get('代码', '')).strip()
@@ -2539,6 +2549,8 @@ def _refresh_event_cache():
         # Primary: THS bond info
         try:
             df = ak.bond_zh_cov_info_ths()
+            if df is None or len(df) == 0:
+                raise ValueError("bond_zh_cov_info_ths returned empty")
             for _, r in df.iterrows():
                 bc = str(r.get('债券代码', '')).strip()
                 if not bc or len(bc) != 6:
@@ -2613,6 +2625,9 @@ def _refresh_pledge_cache():
     try:
         logger.info('[DataEnrich] Refreshing pledge ratio...')
         df = ak.stock_gpzy_pledge_ratio_em()
+        if df is None or len(df) == 0:
+            logger.warning("[DataEnrich] Pledge: stock_gpzy_pledge_ratio_em returned empty, will try fallback")
+            raise ValueError("EM pledge empty")
         result = {}
         for _, r in df.iterrows():
             code = str(r.get('股票代码', '')).strip()
@@ -2673,12 +2688,16 @@ def _refresh_bond_outstanding_cache():
     try:
         logger.info('[DataEnrich] Refreshing bond outstanding scale...')
         df = ak.bond_cb_redeem_jsl()
+        if df is None or len(df) == 0:
+            logger.warning('[DataEnrich] Bond outstanding: JSL returned empty df')
+            df = None
         result = {}
-        for _, r in df.iterrows():
-            code = str(r.get('代码', '')).strip()
-            remaining = float(r.get('剩余规模', 0) or 0)
-            if code and remaining > 0:
-                result[code] = remaining
+        if df is not None:
+            for _, r in df.iterrows():
+                code = str(r.get('代码', '')).strip()
+                remaining = float(r.get('剩余规模', 0) or 0)
+                if code and remaining > 0:
+                    result[code] = remaining
         if result:
             logger.info(f'[DataEnrich] Bond outstanding: {len(result)} bonds from JSL')
         else:
@@ -2743,6 +2762,8 @@ def _refresh_call_status_cache():
             try:
                 logger.info('[DataEnrich] Refreshing call status from bond_zh_cov...')
                 df_all = ak.bond_zh_cov()
+                if df_all is None or len(df_all) == 0:
+                    raise ValueError("bond_zh_cov returned empty")
                 for _, r in df_all.iterrows():
                     code = str(r.get("债券代码", "")).strip()
                     if code and len(code) == 6 and code.isdigit():
@@ -2759,13 +2780,16 @@ def _refresh_call_status_cache():
         # Step 2: Overlay JSL redemption status (覆盖实际强赎状态)
         logger.info('[DataEnrich] Refreshing call status from JSL...')
         df = ak.bond_cb_redeem_jsl()
-        jsl_count = 0
-        for _, r in df.iterrows():
-            code = str(r.get('代码', '')).strip()
-            status = str(r.get('强赎状态', '')).strip()
-            if code and status and status != '':
-                result[code] = status
-                jsl_count += 1
+        if df is None or len(df) == 0:
+            logger.warning('[DataEnrich] Call status: JSL returned empty df')
+        else:
+            jsl_count = 0
+            for _, r in df.iterrows():
+                code = str(r.get('代码', '')).strip()
+                status = str(r.get('强赎状态', '')).strip()
+                if code and status and status != '':
+                    result[code] = status
+                    jsl_count += 1
         logger.info(f'[DataEnrich] Call status JSL overlay: {jsl_count} bonds with active status')
 
         # [TDX] fallback: 仍然不足时补充
@@ -2802,6 +2826,9 @@ def _refresh_stock_name_cache():
     try:
         logger.info('[DataEnrich] Refreshing stock names...')
         df = ak.stock_info_a_code_name()
+        if df is None or len(df) == 0:
+            logger.warning("[DataEnrich] Names: stock_info_a_code_name returned empty")
+            return 0
         result = {}
         for _, r in df.iterrows():
             code = str(r.get('code', '')).strip().zfill(6)
@@ -3443,7 +3470,8 @@ async def enrich_quotes(bonds: list) -> list:
                 elif abs(ytm_dec) > 0.0001:
                     # 正常 YTM（含 -100% < ytm < 0 的情况）
                     # 负 YTM 时 (1 + ytm_dec) 仍在 (0, 1) 区间，数学上正常
-                    pv_coupons = coupon_rate * (1 - 1 / (1 + ytm_dec) ** remaining_years) / ytm_dec
+                    # coupon_rate 是百分比小数（如 0.015 = 1.5%），需乘面值 100
+                    pv_coupons = coupon_rate * 100 * (1 - 1 / (1 + ytm_dec) ** remaining_years) / ytm_dec
                     pv_face = 100 / (1 + ytm_dec) ** remaining_years
                     bv = pv_coupons + pv_face
                     # 负 YTM 时纯债价值可能很高，cap at 500
@@ -3806,7 +3834,8 @@ async def start_background_refresh():
                 # 只刷新容易变 stale 的扩展缓存（spot/vol/fund_flow/bond_price 由 runner 子进程负责）
                 cmd = [_sys.executable, runner_script,
                        "--north", "--margin", "--lhb", "--block-trade",
-                       "--holder-num", "--restricted-release"]
+                       "--holder-num", "--restricted-release",
+                       "--fund-flow", "--vol", "--mgmt", "--earnings-forecast"]
                 proc = None
                 try:
                     proc = subprocess.Popen(
@@ -3879,7 +3908,8 @@ def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
     Returns:
         (status, data) :
             status: "missing" | "corrupted" | "stale" | "fresh"
-            data: 解析后的 dict（status != "fresh" 时为空 dict）
+            data: 解析后的 dict（status == "fresh" 或 "stale" 时返回实际数据，
+                  其余状态返回空 dict）
     """
     try:
         if not path.exists():
@@ -4190,19 +4220,19 @@ def _refresh_north_cache():
             logger.warning("[DataEnrich] North: summary empty")
 
         # 个股北向持仓：对可转债正股逐股查询（单股接口稳定）
+        #  always fetch all A-share codes for broad coverage (AGENTS.md #46)
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
         bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
         all_codes = bond_codes[:]
-        if not all_codes:
-            logger.debug("[DataEnrich] North: _bond_stock_codes empty, fetching all A-share codes")
-            try:
-                df_all = ak.stock_info_a_code_name()
-                if df_all is not None and not df_all.empty:
-                    a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
-                    all_codes = a_codes
-            except Exception as e:
-                logger.debug(f"[DataEnrich] North: failed to get all A-share codes: {e}")
+        # Extend to full A-share universe regardless of bond stock availability
+        try:
+            df_all = ak.stock_info_a_code_name()
+            if df_all is not None and not df_all.empty:
+                a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
+                all_codes = list(dict.fromkeys(bond_codes + a_codes))  # preserve order, dedup
+        except Exception as e:
+            logger.debug(f"[DataEnrich] North: failed to get all A-share codes: {e}")
         if not all_codes:
             logger.debug("[DataEnrich] North: no codes available, skipping per-stock query")
 

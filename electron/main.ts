@@ -220,6 +220,9 @@ let restartInFlight = false
 let _backendStarting = false
 let creatingWindow = false
 
+// Python hard-kill timer reference (cancelled on clean exit to avoid killing reused PIDs)
+let _pythonHardKillTimer: ReturnType<typeof setTimeout> | null = null
+
 // ---- Performance tracking ----
 const perfMetrics = {
   appStartTime: Date.now(),
@@ -312,7 +315,7 @@ function _startWsHeartbeat(wsId: string) {
 }
 
 // 全局定时器：每 60s 扫描一次 wsConnections，清理所有已关闭的连接
-setInterval(() => {
+const deadConnectionScanner = setInterval(() => {
   for (const [wsId, ws] of wsConnections.entries()) {
     if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
       console.log(`[WS] Cleanup dead connection ${wsId}`)
@@ -1066,12 +1069,15 @@ function killPythonProcessGroup(child: import('child_process').ChildProcess): vo
     } catch {
       try { child.kill('SIGTERM') } catch {}
     }
-    // Hard kill after grace period
+    // Hard kill after grace period — store timer ref so before-quit can cancel it
     const pid = child.pid
-    setTimeout(() => {
+    if (_pythonHardKillTimer) clearTimeout(_pythonHardKillTimer)
+    _pythonHardKillTimer = setTimeout(() => {
+      _pythonHardKillTimer = null
       try { process.kill(-pid, 'SIGKILL') } catch {}
       try { process.kill(pid, 'SIGKILL') } catch {}
-    }, 1500).unref()
+    }, 1500)
+    _pythonHardKillTimer.unref()
   }
 }
 
@@ -1131,6 +1137,11 @@ function startPythonBackend() {
   pythonProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
     removePidFile('backend')
     _backendStarting = false
+    // Cancel pending hard-kill timer so we don't accidentally kill a reused PID
+    if (_pythonHardKillTimer) {
+      clearTimeout(_pythonHardKillTimer)
+      _pythonHardKillTimer = null
+    }
     console.log('[Electron] Python process exited with code ' + code)
     if (!isQuitting && code !== 0 && !restartInFlight) {
       recordCrash('backend', `Python backend exited with code ${code}`)
@@ -1504,16 +1515,6 @@ async function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     recordCrash('renderer', `Renderer crashed: ${details.reason}`, details.reason)
   })
-
-  // Child process crash detection
-  app.on('child-process-gone', (_event: any, details: any) => {
-    const allowedTypes: ReadonlySet<CrashReport['type']> = new Set(['renderer', 'main', 'backend', 'gpu'])
-    const t: string = details?.type
-    const mapped: CrashReport['type'] = allowedTypes.has(t as CrashReport['type'])
-      ? (t as CrashReport['type'])
-      : 'main'  // utility / plugin / sandbox / service-worker / etc. → 'main'
-    recordCrash(mapped, `Child process gone: ${t} - ${details?.reason ?? 'unknown'}`)
-  })
 }
 
 // ---- Register global shortcuts ----
@@ -1778,11 +1779,7 @@ restartBackend = (isManualRestart = false) => {
   healthFailCount = 0
   if (isManualRestart) pythonRestartCount = 0
   for (const wsId of [...wsConnections.keys()]) {
-    const ws = wsConnections.get(wsId)
-    if (ws) {
-      ws.close()
-    }
-    wsConnections.delete(wsId)
+    _cleanupWsConnection(wsId)
   }
   const pendingTimeout = setTimeout(() => {
     if (isQuitting) {
@@ -2229,6 +2226,16 @@ if (!gotTheLock) {
   // App lifecycle
   // ============================================================
 
+  // Child process crash detection (must be outside createWindow, in the else branch per AGENTS.md)
+  app.on('child-process-gone', (_event: any, details: any) => {
+    const allowedTypes: ReadonlySet<CrashReport['type']> = new Set(['renderer', 'main', 'backend', 'gpu'])
+    const t: string = details?.type
+    const mapped: CrashReport['type'] = allowedTypes.has(t as CrashReport['type'])
+      ? (t as CrashReport['type'])
+      : 'main'  // utility / plugin / sandbox / service-worker / etc. → 'main'
+    recordCrash(mapped, `Child process gone: ${t} - ${details?.reason ?? 'unknown'}`)
+  })
+
   app.whenReady().then(async () => {
     // ---- Startup banner ----
     // AGENTS.md improvement #5: print asar path, port, resource paths so user
@@ -2327,10 +2334,15 @@ if (!gotTheLock) {
     }
     // Close all WebSocket connections
     for (const wsId of [...wsConnections.keys()]) {
-      const ws = wsConnections.get(wsId)
-      if (ws) ws.close()
-      wsConnections.delete(wsId)
+      _cleanupWsConnection(wsId)
     }
+    // Stop dead connection scanner
+    clearInterval(deadConnectionScanner)
+    // Clear all heartbeat timers
+    for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
+      clearTimeout(timer)
+    }
+    wsHeartbeatTimers.clear()
     if (tray) {
       tray.destroy()
       tray = null
@@ -2349,6 +2361,20 @@ if (!gotTheLock) {
     if (pythonRestartTimer) {
       clearTimeout(pythonRestartTimer)
       pythonRestartTimer = null
+    }
+    // Cancel pending Python hard-kill to avoid killing reused PIDs
+    if (_pythonHardKillTimer) {
+      clearTimeout(_pythonHardKillTimer)
+      _pythonHardKillTimer = null
+    }
+    // Clean up WebSocket resources
+    clearInterval(deadConnectionScanner)
+    for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
+      clearTimeout(timer)
+    }
+    wsHeartbeatTimers.clear()
+    for (const wsId of [...wsConnections.keys()]) {
+      _cleanupWsConnection(wsId)
     }
     // AGENTS.md improvement #1: clean up our PID files so the next launch
     // doesn't try to kill us thinking we're a stale instance.

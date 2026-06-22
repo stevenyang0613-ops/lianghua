@@ -25,6 +25,7 @@
 
 import asyncio
 import logging
+import math
 import time
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Tuple
@@ -246,6 +247,9 @@ class MacroDataService:
         def _task_vix():
             data.vix_index = self._fetch_vix()
 
+        def _task_market_turnover():
+            data.market_turnover = self._fetch_market_turnover()
+
         def _task_new_accounts():
             data.new_accounts = self._fetch_new_accounts()
 
@@ -256,7 +260,8 @@ class MacroDataService:
             _task_stock_index, _task_cb_stats, _task_north_bound,
             _task_margin, _task_main_force, _task_industry_flow,
             _task_pe_pb, _task_industrial_output, _task_retail_sales,
-            _task_export_growth, _task_pcr, _task_vix, _task_new_accounts,
+            _task_export_growth, _task_pcr, _task_vix, _task_market_turnover,
+            _task_new_accounts,
         ]
 
         # 使用线程池并行执行独立任务（I/O 密集，GIL 不阻塞网络）
@@ -313,8 +318,9 @@ class MacroDataService:
             ("cb_index", data.cb_index_current > 0, 0.05),
             ("stock_index", data.stock_index_current > 0, 0.05),
             ("cb_stats", data.cb_median_premium > 0, 0.04),
-            ("north_bound", True, 0.02),  # 数据源暂不可用，但不扣完整度
+            ("north_bound", not math.isnan(data.north_bound_net_flow), 0.02),
             ("margin", data.margin_balance > 0, 0.05),
+            ("market_turnover", data.market_turnover > 0, 0.03),
             ("main_force", True, 0.02),
             ("industry_flow", True, 0.02),
             ("pe_pb", data.stock_pe_median > 0 and data.stock_pb_median > 0, 0.06),
@@ -526,6 +532,39 @@ class MacroDataService:
             logger.warning(f"[MacroData] Market stats fetch failed: {e}")
             return 0, 0, 0, 0, 0, 0
 
+    def _fetch_market_turnover(self) -> float:
+        """全市场换手率（%）= 总成交额 / 前一日流通市值 * 100
+        若流通市值不可用，则返回总成交额（亿元）作为市场活跃度代理指标。"""
+        try:
+            if ak is None:
+                return 0.0
+            df = ak.stock_zh_a_spot()
+            if df is None or df.empty:
+                return 0.0
+            # 总成交额（元）
+            amount_col = '成交额'
+            if amount_col not in df.columns:
+                return 0.0
+            amount = pd.to_numeric(df[amount_col], errors='coerce').dropna()
+            if amount.empty:
+                return 0.0
+            total_amount = amount.sum()
+            if total_amount <= 0:
+                return 0.0
+            # 尝试从流通市值计算换手率
+            circ_cols = ['流通市值', 'circ_mv']
+            for col in circ_cols:
+                if col in df.columns:
+                    circ = pd.to_numeric(df[col], errors='coerce').dropna()
+                    if not circ.empty and circ.sum() > 0:
+                        turnover = total_amount / circ.sum() * 100
+                        return round(float(turnover), 2)
+            # 流通市值不可用，返回总成交额（亿元）作为代理指标
+            return round(float(total_amount / 1e8), 2)
+        except Exception as e:
+            logger.warning(f"[MacroData] Market turnover fetch failed: {e}")
+            return 0.0
+
     def _fetch_cb_index(self) -> Tuple[float, float, float, float, Optional[pd.DataFrame]]:
         try:
             if ak is None:
@@ -621,7 +660,7 @@ class MacroDataService:
             for col in ['成交净买额', '资金净流入']:
                 if col in north.columns:
                     vals = pd.to_numeric(north[col], errors='coerce').dropna()
-                    if not vals.empty and vals.sum() != 0:
+                    if not vals.empty:
                         return round(float(vals.sum()), 2)
             return float('nan')
         except Exception as e:
@@ -668,14 +707,6 @@ class MacroDataService:
         except Exception as e:
             logger.debug(f"[MacroData] Industry net inflow fetch failed: {e}")
             return float('nan')
-            positive = int((net > 0).sum())
-            total = len(net)
-            if total > 0:
-                return round(positive / total * 100, 1)
-            return 50.0
-        except Exception as e:
-            logger.debug(f"[MacroData] Industry flow fetch failed: {e}")
-            return 50.0
 
     def _fetch_new_accounts(self) -> float:
         """新增投资者开户数（万户）"""

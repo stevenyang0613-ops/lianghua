@@ -947,25 +947,25 @@ class EnhancedTimingModel:
             description=f"融资余额{ margin:+.1f}亿，{'杠杆加仓' if margin>30 else '杠杆减仓' if margin<-30 else '平稳'}",
         ))
         
-        # 4.5 全市场成交额趋势
+        # 4.5 全市场成交额趋势（亿元）
         turnover = data.market_turnover
         if turnover > 0:
-            if turnover >= 5:
+            if turnover >= 10000:
                 t_score = 75  # 高度活跃
-            elif turnover >= 3:
+            elif turnover >= 5000:
                 t_score = 65  # 活跃
-            elif turnover >= 1.5:
+            elif turnover >= 2000:
                 t_score = 55  # 正常
-            elif turnover >= 0.8:
+            elif turnover >= 1000:
                 t_score = 40  # 偏冷清
             else:
                 t_score = 25  # 极度冷清
-            t_signal = "bullish" if 1.5 <= turnover < 5 else "bearish" if turnover < 0.8 else "neutral"
-            t_desc = f"全市场换手率{turnover:.2f}%，{'交投活跃' if turnover>3 else '冷清' if turnover<1 else '正常'}"
+            t_signal = "bullish" if 2000 <= turnover < 10000 else "bearish" if turnover < 1000 else "neutral"
+            t_desc = f"全市场成交额{turnover:.0f}亿，{'交投活跃' if turnover>5000 else '冷清' if turnover<1000 else '正常'}"
         else:
             t_score = 50.0
             t_signal = "neutral"
-            t_desc = "无换手率数据"
+            t_desc = "无成交额数据"
         sub_factors.append(FactorScore(
             name="全市场换手率", score=t_score, weight=0.14,
             category="capital_flow", raw_value=turnover,
@@ -2341,14 +2341,23 @@ def convert_from_legacy_data(
     
     # 从旧版 MarketData 填充
     if legacy_data:
-        data.cb_median_premium = getattr(legacy_data, 'cb_median_premium', 0) or 0
-        data.cb_avg_daily_amount = getattr(legacy_data, 'cb_avg_daily_amount', 0) or 0
-        data.cb_index_change = getattr(legacy_data, 'cb_index_change', 0) or 0
-        data.cb_index_current = getattr(legacy_data, 'cb_index_current', 0) or 0
-        data.cb_index_ma20 = getattr(legacy_data, 'cb_index_ma20', 0) or 0
-        data.treasury_10y_yield = getattr(legacy_data, 'treasury_10y_yield', 0) or 0
-        data.pmi = getattr(legacy_data, 'pmi', 0) or 0
-        data.pmi_prev = getattr(legacy_data, 'pmi_prev', 0) or 0
+        # 数值型字段：旧版 MarketData 默认 0.0 表示缺失，映射为 NaN
+        val = getattr(legacy_data, 'cb_median_premium', 0)
+        data.cb_median_premium = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'cb_avg_daily_amount', 0)
+        data.cb_avg_daily_amount = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'cb_index_change', 0)
+        data.cb_index_change = val if val != 0 else float('nan')
+        val = getattr(legacy_data, 'cb_index_current', 0)
+        data.cb_index_current = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'cb_index_ma20', 0)
+        data.cb_index_ma20 = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'treasury_10y_yield', 0)
+        data.treasury_10y_yield = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'pmi', 0)
+        data.pmi = val if val > 0 else float('nan')
+        val = getattr(legacy_data, 'pmi_prev', 0)
+        data.pmi_prev = val if val > 0 else float('nan')
     
     # 从 MacroData 补充（扩展版 V2.0）
     if macro_data:

@@ -18,6 +18,12 @@ except ImportError as e:
     import logging
     logging.getLogger(__name__).warning(f"xb_strategy router unavailable ({e}), skipping")
     xb_strategy_router = None
+try:
+    from app.api.bjse_ipo import router as bjse_ipo_router
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"bjse_ipo router unavailable ({e}), skipping")
+    bjse_ipo_router = None
 from app.api.xuanji import router as xuanji_router
 from app.api.alert import router as alert_router
 from app.api.auth import router as auth_router, verify_token
@@ -42,6 +48,8 @@ router.include_router(signal_router, prefix="", tags=["signals"], dependencies=[
 router.include_router(score_router, prefix="/analysis", tags=["score"], dependencies=[Depends(verify_token)])
 if xb_strategy_router is not None:
     router.include_router(xb_strategy_router, tags=["xb-strategy"], dependencies=[Depends(verify_token)])
+if bjse_ipo_router is not None:
+    router.include_router(bjse_ipo_router, tags=["bjse-ipo"], dependencies=[Depends(verify_token)])
 router.include_router(xuanji_router, tags=["xuanji"], dependencies=[Depends(verify_token)])
 router.include_router(alert_router, tags=["alerts"], dependencies=[Depends(verify_token)])
 router.include_router(auth_router, prefix="/auth", tags=["auth"])  # 无需认证
