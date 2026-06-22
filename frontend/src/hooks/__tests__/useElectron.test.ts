@@ -107,7 +107,7 @@ describe('useElectron', () => {
   })
 
   it('should not register IPC listeners when not in electron', () => {
-    window.electronAPI = undefined
+    ;(window as any).electronAPI = undefined
     renderHook(() => useElectron())
 
     expect(mockElectronAPI.onNavigate).not.toHaveBeenCalled()

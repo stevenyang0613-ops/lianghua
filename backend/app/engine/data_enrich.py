@@ -309,19 +309,34 @@ def _write_metrics_to_file():
     独立于 _record_refresh_metric 的限频逻辑，可随时强制写入。
     stale 标记同时回写内存，确保 get_refresh_metrics() 和文件内容一致。
     注意：pending 预注册占位符不写入文件，避免覆盖 runner 子进程的真实结果。
+    加锁后读取文件并合并，防止与 runner 子进程的并发写产生 race condition。
     """
     now = time.time()
     try:
         with _cache_lock:
-            data = {k: v for k, v in _refresh_metrics.items() if v.get("status") != "pending"}
-        spot_mem = _refresh_metrics.get("_refresh_spot_cache", {})
-        logger.info(f"[DataEnrich][DEBUG] _write_metrics_to_file: spot_mem_status={spot_mem.get('status')} spot_in_data={'_refresh_spot_cache' in data}")
-        if not data:
+            mem_data = {k: dict(v) for k, v in _refresh_metrics.items() if v.get("status") != "pending"}
+        if not mem_data:
             return
         # 写入文件时强制刷新 stale 标记（不节流）
-        _mark_stale_entries(data, now, force=True)
-        # 使用统一的 save_cache：原子写入 + _ts 注入 + NaN 防御
-        _save_cache(_METRICS_FILE, data)
+        _mark_stale_entries(mem_data, now, force=True)
+        # 加锁加载文件并合并，避免覆盖 runner 子进程新写入的结果
+        lock_path = _lock_file_path(_METRICS_FILE)
+        with _acquire_file_lock(lock_path, timeout=5.0):
+            try:
+                file_data = _load_cache_impl(_METRICS_FILE) or {}
+            except Exception:
+                file_data = {}
+            if not isinstance(file_data, dict):
+                file_data = {}
+            # 用内存中的非 pending 条目覆盖文件中的同名条目
+            # runner 写入的真实结果保留（内存中对应条目仍是 pending，不会覆盖）
+            file_data.update(mem_data)
+            # 再次清理可能从文件加载到的 pending 占位符
+            file_data = {k: v for k, v in file_data.items() if isinstance(v, dict) and v.get("status") != "pending"}
+            try:
+                _save_cache_impl(_METRICS_FILE, file_data)
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Metrics save failed: {e}")
         global _last_metrics_flush
         _last_metrics_flush = now
     except Exception as e:

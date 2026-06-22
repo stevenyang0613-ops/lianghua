@@ -830,14 +830,21 @@ class EnhancedTimingModel:
         ))
         
         # 3.4 IPO/转债新发节奏（供给压力）
-        # 用PE分位作为供给压力的间接指标
-        supply_score = 50.0
+        # 用PE分位作为供给压力的间接指标（线性插值避免阶梯跳跃）
         pe_pct = data.stock_pe_percentile
-        if not math.isnan(pe_pct) and pe_pct > 0:
-            if pe_pct > 70:
-                supply_score = 40  # 高PE环境，发行积极=供给压力大=看空
-            elif pe_pct < 30:
-                supply_score = 65  # 低PE环境，发行受限=供给压力小=看多
+        if math.isnan(pe_pct) or pe_pct <= 0:
+            supply_score = 50.0
+        else:
+            # 低PE分位=供给压力小=看多=高分；高PE分位=供给压力大=看空=低分
+            # 20%→75分, 50%→50分, 80%→25分
+            if pe_pct <= 20:
+                supply_score = 75.0
+            elif pe_pct <= 50:
+                supply_score = 75 - (pe_pct - 20) / 30 * 25
+            elif pe_pct <= 80:
+                supply_score = 50 - (pe_pct - 50) / 30 * 25
+            else:
+                supply_score = 25.0
         sub_factors.append(FactorScore(
             name="供给压力评估", score=supply_score, weight=0.25,
             category="chip", raw_value=data.stock_pe_percentile,
