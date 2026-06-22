@@ -790,18 +790,18 @@ class EnhancedTimingModel:
             mb_chip_signal = "neutral"
             mb_chip_desc = "无融资买入数据"
         else:
-            # 使用线性插值避免阶梯跳跃：3%→80分, 6%→50分, 10%→30分, 12%→15分
-            if mb_ratio <= 3:
-                mb_chip_score = 80.0
-            elif mb_ratio <= 6:
-                mb_chip_score = 80 - (mb_ratio - 3) / 3 * 30
+            # 使用线性插值避免阶梯跳跃：2%→70分, 5%→50分, 10%→30分, 12%→15分
+            if mb_ratio <= 2:
+                mb_chip_score = 70.0
+            elif mb_ratio <= 5:
+                mb_chip_score = 70 - (mb_ratio - 2) / 3 * 20
             elif mb_ratio <= 10:
-                mb_chip_score = 50 - (mb_ratio - 6) / 4 * 20
+                mb_chip_score = 50 - (mb_ratio - 5) / 5 * 20
             elif mb_ratio <= 12:
                 mb_chip_score = 30 - (mb_ratio - 10) / 2 * 15
             else:
                 mb_chip_score = 15.0
-            mb_chip_signal = "bearish" if mb_ratio > 10 else "bullish" if mb_ratio < 4 else "neutral"
+            mb_chip_signal = "bearish" if mb_ratio > 10 else "bullish" if mb_ratio < 3 else "neutral"
             mb_chip_desc = f"融资买入占比{mb_ratio:.1f}%，{'过热' if mb_ratio>10 else '过冷' if mb_ratio<4 else '适中'}"
         sub_factors.append(FactorScore(
             name="融资余额占比", score=mb_chip_score, weight=0.20,
@@ -814,7 +814,7 @@ class EnhancedTimingModel:
         # 使用 sigmoid_score，center=2.0 使正常市场（破面1-3%）得中性分
         if data.cb_count > 0 and data.cb_below_par_count >= 0:
             pledge_ratio = data.cb_below_par_count / data.cb_count * 100
-            pledge_score = sigmoid_score(pledge_ratio, 0, steepness=0.5, invert=False)
+            pledge_score = sigmoid_score(pledge_ratio, 0, steepness=0.3, invert=False)
             pledge_signal = "bullish" if pledge_ratio > 10 else "bearish" if pledge_ratio < 1 else "neutral"
             pledge_desc = f"低于面值转债占比{pledge_ratio:.1f}%，{'恐慌筹码出清=机会' if pledge_ratio>10 else '安全' if pledge_ratio<1 else '关注'}"
         else:
@@ -1975,19 +1975,19 @@ class EnhancedTimingModel:
                 p30 = min(mean_score - 0.52 * std_score, mean_score - 5)
                 p15 = min(mean_score - 1.04 * std_score, mean_score - 8)
                 
-                # 使用线性插值避免阶梯跳跃
+                # 使用线性插值避免阶梯跳跃（匹配新的 POSITION_MAP：80→100%, 70→80%, 60→60%, 50→40%, 40→20%, 30→10%）
                 if score >= p75:
                     ratio = 1.00
                 elif score >= p60:
-                    ratio = 0.85 + (score - p60) / (p75 - p60) * 0.15
+                    ratio = 0.80 + (score - p60) / (p75 - p60) * 0.20
                 elif score >= p45:
-                    ratio = 0.70 + (score - p45) / (p60 - p45) * 0.15
+                    ratio = 0.60 + (score - p45) / (p60 - p45) * 0.20
                 elif score >= p30:
-                    ratio = 0.50 + (score - p30) / (p45 - p30) * 0.20
+                    ratio = 0.40 + (score - p30) / (p45 - p30) * 0.20
                 elif score >= p15:
-                    ratio = 0.30 + (score - p15) / (p30 - p15) * 0.20
+                    ratio = 0.20 + (score - p15) / (p30 - p15) * 0.20
                 else:
-                    ratio = 0.10 + (score - min(hist_scores)) / (p15 - min(hist_scores)) * 0.20
+                    ratio = 0.10 + (score - min(hist_scores)) / (p15 - min(hist_scores)) * 0.10
                 return min(ratio + trend_boost, 1.0)
         
         # 回退到硬编码阈值（历史数据不足时）——使用线性插值避免阶梯跳跃
