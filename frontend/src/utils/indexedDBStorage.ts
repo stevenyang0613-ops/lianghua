@@ -190,6 +190,7 @@ class IndexedDBStorage {
   }
 
   private cleanupTimer: ReturnType<typeof setInterval> | null = null
+  private initialCleanupTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
    * 启动自动清理
@@ -202,7 +203,7 @@ class IndexedDBStorage {
     }, this.cleanupConfig.interval)
 
     // 启动时也运行一次
-    setTimeout(() => this.runCleanup(), 10000)
+    this.initialCleanupTimer = setTimeout(() => this.runCleanup(), 10000)
   }
 
   /**
@@ -212,6 +213,10 @@ class IndexedDBStorage {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer)
       this.cleanupTimer = null
+    }
+    if (this.initialCleanupTimer) {
+      clearTimeout(this.initialCleanupTimer)
+      this.initialCleanupTimer = null
     }
   }
 

@@ -45,13 +45,14 @@ class TestNaNHandling:
     """NaN/0 处理: 所有hardcoded defaults → 0.0"""
 
     def test_enhanced_market_data_defaults(self):
+        import math
         from app.strategies.enhanced_timing_model import EnhancedMarketData
         data = EnhancedMarketData(date=date_type.today())
-        assert data.m2_growth == 0.0
-        assert data.gdp_growth == 0.0
-        assert data.cpi == 0.0
-        assert data.rsi_14 == 0.0
-        assert data.pcr_ratio == 0.0
+        assert math.isnan(data.m2_growth)
+        assert math.isnan(data.gdp_growth)
+        assert math.isnan(data.cpi)
+        assert math.isnan(data.rsi_14)
+        assert math.isnan(data.pcr_ratio)
 
     def test_macro_data_defaults(self):
         from app.services.macro_data import MacroData
@@ -69,9 +70,10 @@ class TestNaNHandling:
 
 
 class TestConvertFromLegacyNoSubstitution:
-    """convert_from_legacy_data: 不再替换 0 值"""
+    """convert_from_legacy_data: 0 值视为缺失（映射为 NaN）"""
 
-    def test_zero_values_pass_through(self):
+    def test_zero_values_treated_as_missing(self):
+        import math
         from app.strategies.enhanced_timing_model import convert_from_legacy_data
         from app.services.macro_data import MacroData
         macro = MacroData()
@@ -80,10 +82,10 @@ class TestConvertFromLegacyNoSubstitution:
         macro.m2_growth = 0.0
         macro.gdp_growth = 0.0
         result = convert_from_legacy_data(macro_data=macro)
-        assert result.pmi == 0.0
-        assert result.cpi == 0.0
-        assert result.m2_growth == 0.0
-        assert result.gdp_growth == 0.0
+        assert math.isnan(result.pmi)
+        assert math.isnan(result.cpi)
+        assert math.isnan(result.m2_growth)
+        assert math.isnan(result.gdp_growth)
 
     def test_nonzero_values_pass_through(self):
         from app.strategies.enhanced_timing_model import convert_from_legacy_data

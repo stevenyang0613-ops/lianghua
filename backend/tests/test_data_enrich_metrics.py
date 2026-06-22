@@ -173,6 +173,9 @@ class TestExtendedCacheRefresh:
             target = getattr(de, attr, None)
             if isinstance(target, dict):
                 target.clear()
+        # Prevent tests from writing mock data to the production cache directory.
+        self._orig_save_cache = de._save_cache
+        de._save_cache = lambda path, data: None
 
     def teardown_method(self):
         with de._cache_lock:
@@ -185,6 +188,8 @@ class TestExtendedCacheRefresh:
             target = getattr(de, attr, None)
             if isinstance(target, dict):
                 target.clear()
+        # Restore production save_cache.
+        de._save_cache = self._orig_save_cache
 
     def _mock_run_with_timeout(self, fn, *args, default=None, **kwargs):
         """Simulate _run_with_timeout returning a small DataFrame."""
@@ -282,6 +287,9 @@ class TestDataSourceApiCalls:
             except Exception:
                 return default
         de._run_with_timeout = _direct_run
+        # Prevent tests from writing mock data to the production cache directory.
+        self._orig_save_cache = de._save_cache
+        de._save_cache = lambda path, data: None
 
     def teardown_method(self):
         de._run_with_timeout = self._orig_run_with_timeout
@@ -295,6 +303,8 @@ class TestDataSourceApiCalls:
             target = getattr(de, attr, None)
             if isinstance(target, dict):
                 target.clear()
+        # Restore production save_cache.
+        de._save_cache = self._orig_save_cache
 
     def test_north_cache_uses_individual_em(self):
         """ak.stock_hsgt_individual_em is used for per-stock north-bound holdings."""

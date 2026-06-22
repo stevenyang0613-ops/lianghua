@@ -569,7 +569,7 @@ async def lifespan(app: FastAPI):
                 _enrich_log_dir = Path.home() / ".lianghua" / "logs"
                 _enrich_log_dir.mkdir(parents=True, exist_ok=True)
                 cmd = [sys.executable, runner_script, "--spot", "--vol", "--fund-flow", "--bond-price"]
-                _enrich_log = open(_enrich_log_dir / "enrich_runner.log", "a")
+                _enrich_log = open(_enrich_log_dir / "enrich_runner.log", "w")
                 p = subprocess.Popen(
                     cmd,
                     cwd=str(Path(__file__).parent.parent),

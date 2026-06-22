@@ -3665,7 +3665,7 @@ async def start_background_refresh():
     # 避免随后补 pending 占位符时把 spot/vol/fund_flow/bond_price 等
     # 实际已完成的指标覆盖成 pending。
     _load_metrics_from_file()
-    _startup_ts_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    _startup_ts_iso = "1970-01-01T00:00:00"
     with _cache_lock:
         for name in _PRE_REGISTERED_METRICS:
             if name not in _refresh_metrics:
@@ -3774,7 +3774,7 @@ async def start_background_refresh():
     # 不会因 runner 仅在启动时运行一次而变 stale
     async def _periodic_runner_loop():
         """定期重新运行 runner 子进程刷新扩展缓存到磁盘。"""
-        await asyncio.sleep(600)  # 首次延迟 10 分钟，等待首次 runner 完成
+        await asyncio.sleep(60)  # 首次延迟 60 秒，快速恢复 runner 刷新
         while True:
             try:
                 await asyncio.sleep(1800)  # 每 30 分钟运行一次
@@ -3888,12 +3888,12 @@ def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
             if ts > 0:
                 if time.time() - ts >= ttl:
                     logger.debug(f"[DataEnrich] Cache {path.stem} stale by _ts (age={time.time() - ts:.0f}s, ttl={ttl}s)")
-                    return "stale", {}
+                    return "stale", data  # 返回数据，让调用者决定 stale 时是否加载旧数据
             else:
                 mtime = path.stat().st_mtime
                 if time.time() - mtime >= ttl:
                     logger.debug(f"[DataEnrich] Cache {path.stem} stale by mtime (age={time.time() - mtime:.0f}s, ttl={ttl}s)")
-                    return "stale", {}
+                    return "stale", data  # 返回数据，让调用者决定 stale 时是否加载旧数据
         return "fresh", data
     except Exception as e:
         logger.warning(f"[DataEnrich] Failed to load cache {path}: {e}")
@@ -3901,13 +3901,13 @@ def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
 
 
 def _load_ext_cache(path: Path, ttl: int = 0) -> dict:
-    """从 JSON 缓存文件加载，失败返回空 dict。
+    """从 JSON 缓存文件加载，失败或过期返回空 dict。
 
     内部委托给 _load_ext_cache_with_status，避免重复打开文件。
     需要 status 时直接调用 _load_ext_cache_with_status 一次完成。
     """
-    _, data = _load_ext_cache_with_status(path, ttl)
-    return data
+    status, data = _load_ext_cache_with_status(path, ttl)
+    return data if status == "fresh" else {}
 
 
 
@@ -3918,10 +3918,10 @@ def _is_loadable(status: str) -> bool:
     Rules:
     - "fresh": new data, overwrite
     - "missing": first boot, init empty
-    - "stale": file exists but expired, keep memory
+    - "stale": file exists but expired, load it (memory may be empty after restart)
     - "corrupted": file corrupt, treat as missing (clear map)
     """
-    return status in ("fresh", "missing", "corrupted")
+    return status in ("fresh", "missing", "corrupted", "stale")
 
 
 
@@ -3929,12 +3929,13 @@ def _is_loadable(status: str) -> bool:
 def _load_north_cache():
     global _north_map
     status, new_map = _load_ext_cache_with_status(_NORTH_CACHE, ttl=6 * 3600)  # north TTL: 6h
-    if status == "stale":
-        logger.debug(f"[DataEnrich] North: {status}, keeping {len([k for k in _north_map if not k.startswith('_')])} in-memory stocks")
-        return
     with _cache_lock:
         _north_map = new_map
-    logger.info(f"[DataEnrich] North: loaded {len([k for k in _north_map if not k.startswith('_')])} stocks")
+    msg = f"[DataEnrich] North: loaded {len([k for k in _north_map if not k.startswith('_')])} stocks"
+    if status == "stale":
+        logger.warning(f"{msg} (stale, will refresh in background)")
+    else:
+        logger.info(msg)
 
 def get_north_map() -> dict:
     return _north_map
@@ -3943,12 +3944,13 @@ def get_north_map() -> dict:
 def _load_margin_cache():
     global _margin_map
     status, new_map = _load_ext_cache_with_status(_MARGIN_CACHE, ttl=12 * 3600)  # margin TTL: 12h
-    if status == "stale":
-        logger.debug(f"[DataEnrich] Margin: {status}, keeping {len([k for k in _margin_map if not k.startswith('_')])} in-memory stocks")
-        return
     with _cache_lock:
         _margin_map = new_map
-    logger.info(f"[DataEnrich] Margin: loaded {len([k for k in _margin_map if not k.startswith('_')])} stocks")
+    msg = f"[DataEnrich] Margin: loaded {len([k for k in _margin_map if not k.startswith('_')])} stocks"
+    if status == "stale":
+        logger.warning(f"{msg} (stale, will refresh in background)")
+    else:
+        logger.info(msg)
 
 def get_margin_map() -> dict:
     return _margin_map
@@ -3957,12 +3959,13 @@ def get_margin_map() -> dict:
 def _load_lhb_cache():
     global _lhb_map
     status, new_map = _load_ext_cache_with_status(_LHB_CACHE, ttl=12 * 3600)  # lhb TTL: 12h
-    if status == "stale":
-        logger.debug(f"[DataEnrich] LHB: {status}, keeping {len([k for k in _lhb_map if not k.startswith('_')])} in-memory stocks")
-        return
     with _cache_lock:
         _lhb_map = new_map
-    logger.info(f"[DataEnrich] LHB: loaded {len([k for k in _lhb_map if not k.startswith('_')])} stocks")
+    msg = f"[DataEnrich] LHB: loaded {len([k for k in _lhb_map if not k.startswith('_')])} stocks"
+    if status == "stale":
+        logger.warning(f"{msg} (stale, will refresh in background)")
+    else:
+        logger.info(msg)
 
 def get_lhb_map() -> dict:
     return _lhb_map
@@ -3971,12 +3974,13 @@ def get_lhb_map() -> dict:
 def _load_block_trade_cache():
     global _block_trade_map
     status, new_map = _load_ext_cache_with_status(_BLOCK_TRADE_CACHE, ttl=12 * 3600)  # block_trade TTL: 12h
-    if status == "stale":
-        logger.debug(f"[DataEnrich] BlockTrade: {status}, keeping {len([k for k in _block_trade_map if not k.startswith('_')])} in-memory stocks")
-        return
     with _cache_lock:
         _block_trade_map = new_map
-    logger.info(f"[DataEnrich] BlockTrade: loaded {len([k for k in _block_trade_map if not k.startswith('_')])} stocks")
+    msg = f"[DataEnrich] BlockTrade: loaded {len([k for k in _block_trade_map if not k.startswith('_')])} stocks"
+    if status == "stale":
+        logger.warning(f"{msg} (stale, will refresh in background)")
+    else:
+        logger.info(msg)
 
 def get_block_trade_map() -> dict:
     return _block_trade_map
@@ -3985,12 +3989,13 @@ def get_block_trade_map() -> dict:
 def _load_holder_num_cache():
     global _holder_num_map
     status, new_map = _load_ext_cache_with_status(_HOLDER_NUM_CACHE, ttl=24 * 3600)  # holder_num TTL: 24h
-    if status == "stale":
-        logger.debug(f"[DataEnrich] HolderNum: {status}, keeping {len([k for k in _holder_num_map if not k.startswith('_')])} in-memory stocks")
-        return
     with _cache_lock:
         _holder_num_map = new_map
-    logger.info(f"[DataEnrich] HolderNum: loaded {len([k for k in _holder_num_map if not k.startswith('_')])} stocks")
+    msg = f"[DataEnrich] HolderNum: loaded {len([k for k in _holder_num_map if not k.startswith('_')])} stocks"
+    if status == "stale":
+        logger.warning(f"{msg} (stale, will refresh in background)")
+    else:
+        logger.info(msg)
 
 def get_holder_num_map() -> dict:
     return _holder_num_map
@@ -4013,6 +4018,10 @@ def _load_earnings_forecast_cache():
                 return
             _earnings_forecast_map = new_map
         logger.info(f"[DataEnrich] EarningsForecast: loaded {len([k for k in _earnings_forecast_map if not k.startswith('_')])} stocks")
+    elif status == "stale":
+        with _cache_lock:
+            _earnings_forecast_map = new_map
+        logger.warning(f"[DataEnrich] EarningsForecast: loaded {len([k for k in _earnings_forecast_map if not k.startswith('_')])} stocks (stale, will refresh in background)")
     elif status == "missing":
         with _cache_lock:
             _earnings_forecast_map = {}
@@ -4020,7 +4029,7 @@ def _load_earnings_forecast_cache():
     elif _is_loadable(status):
         with _cache_lock:
             _earnings_forecast_map = {}
-        logger.info(f"[DataEnrich] EarningsForecast: corrupted/missing, cleared map")
+        logger.info(f"[DataEnrich] EarningsForecast: corrupted, cleared map")
     else:
         logger.debug(f"[DataEnrich] EarningsForecast: {status}, keeping {len([k for k in _earnings_forecast_map if not k.startswith('_')])} in-memory stocks")
 def _load_earnings_express_cache():
@@ -4030,6 +4039,10 @@ def _load_earnings_express_cache():
         with _cache_lock:
             _earnings_express_map = new_map
         logger.info(f"[DataEnrich] EarningsExpress: loaded {len([k for k in _earnings_express_map if not k.startswith('_')])} stocks")
+    elif status == "stale":
+        with _cache_lock:
+            _earnings_express_map = new_map
+        logger.warning(f"[DataEnrich] EarningsExpress: loaded {len([k for k in _earnings_express_map if not k.startswith('_')])} stocks (stale, will refresh in background)")
     elif status == "missing":
         with _cache_lock:
             _earnings_express_map = {}
@@ -4040,7 +4053,7 @@ def _load_earnings_express_cache():
             _earnings_express_map = {}
         logger.info(f"[DataEnrich] EarningsExpress: corrupted, cleared map")
     else:
-        # stale: 保留内存中的数据，不覆盖
+        # stale: 保留内存中的数据，不覆盖 (handled above)
         logger.debug(f"[DataEnrich] EarningsExpress: {status}, keeping {len([k for k in _earnings_express_map if not k.startswith('_')])} in-memory stocks")
 
 

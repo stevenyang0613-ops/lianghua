@@ -110,7 +110,6 @@ _METRICS_NAME_MAP = {
     "_refresh_pledge_cache": "_refresh_pledge_cache",
     "_refresh_momentum_cache": "_refresh_momentum_cache",
     "_refresh_event_cache": "_refresh_event_cache",
-    "_refresh_stock_names_cache": "_refresh_stock_name_cache",
     "_build_concept_cache": "_build_concept_cache",
     "_refresh_north_cache": "_refresh_north_cache",
     "_refresh_margin_cache": "_refresh_margin_cache",
@@ -1608,7 +1607,7 @@ def _refresh_event_cache():
 # ============================================================
 # Data source: Stock names cache
 # ============================================================
-def _refresh_stock_names_cache():
+def _refresh_stock_name_cache():
     """刷新正股名称缓存"""
     cache_path = _CACHE_FILES["stock_names"]
     cached = _load_cache(cache_path)
@@ -4106,7 +4105,7 @@ def main():
     if args.all or args.event:
         tasks.append(("Event", _refresh_event_cache))
     if args.all or getattr(args, 'stock_names', False):
-        tasks.append(("StockNames", _refresh_stock_names_cache))
+        tasks.append(("StockNames", _refresh_stock_name_cache))
     if args.all or getattr(args, 'concept', False):
         tasks.append(("Concept", _build_concept_cache))
     if args.all or getattr(args, 'north', False):
@@ -4134,7 +4133,9 @@ def main():
             count = fn()
             elapsed = time.time() - t0
             logger.info(f"[{name}] Done: {count}")
-            _record_runner_metric(fn.__name__, elapsed, count if isinstance(count, int) else 0, status="ok")
+            count_i = count if isinstance(count, int) else 0
+            status = "empty" if count_i == 0 else "ok"
+            _record_runner_metric(fn.__name__, elapsed, count_i, status=status)
         except KeyboardInterrupt:
             logger.warning(f"[{name}] Interrupted")
             _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error="interrupted")

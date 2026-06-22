@@ -15,6 +15,7 @@
     "dev:electron": "npm run build:electron-ts && concurrently \"cd frontend && npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build:frontend": "cd frontend && npm run build",
     "build:electron-ts": "cd electron && npx tsc",
+    "typecheck": "cd frontend && npm run typecheck && cd ../electron && npm run typecheck",
     "build:backend": "cd backend && pyinstaller lianghua-backend.spec",
     "validate": "bash scripts/validate-build.sh",
     "sync:dev-bundled": "bash scripts/sync-dev-to-bundled.sh",

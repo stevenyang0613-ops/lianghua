@@ -54,7 +54,7 @@ class MarketEngine:
         self._storage = storage
         self._last_snapshot_date: Optional[str] = None
         self._last_cache_date: Optional[str] = None
-        self._last_periodic_save: Optional[float] = 0  # timestamp of last periodic save
+        self._last_periodic_save: float = 0.0  # timestamp of last periodic save
         self._PERIODIC_SAVE_INTERVAL = 300  # 5 minutes
 
     async def start(self) -> None:
@@ -161,7 +161,8 @@ class MarketEngine:
             # 每日首次成功刷新时自动保存七维评分快照（线程池计算，不阻塞事件循环）
             if today != self._last_snapshot_date:
                 self._last_snapshot_date = today
-                asyncio.create_task(self._auto_save_seven_dim_snapshot_async(bonds))
+                task = asyncio.create_task(self._auto_save_seven_dim_snapshot_async(bonds))
+                task.add_done_callback(lambda t: None if t.exception() is None else logger.warning(f"Seven-dim snapshot failed: {t.exception()}"))
 
         return bonds
 

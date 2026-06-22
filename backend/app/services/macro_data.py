@@ -511,7 +511,17 @@ class MacroDataService:
             limit_down = int((valid <= -9.9).sum())
             advance = int((valid > 0).sum())
             decline = int((valid < 0).sum())
-            return limit_up, limit_down, advance, decline, 0, 0
+            # 60日新高/新低
+            new_high, new_low = 0, 0
+            try:
+                hl_df = ak.stock_a_high_low_statistics()
+                if hl_df is not None and not hl_df.empty:
+                    latest = hl_df.iloc[-1]
+                    new_high = int(latest.get('high60', 0)) if not pd.isna(latest.get('high60', 0)) else 0
+                    new_low = int(latest.get('low60', 0)) if not pd.isna(latest.get('low60', 0)) else 0
+            except Exception:
+                pass
+            return limit_up, limit_down, advance, decline, new_high, new_low
         except Exception as e:
             logger.warning(f"[MacroData] Market stats fetch failed: {e}")
             return 0, 0, 0, 0, 0, 0
@@ -596,11 +606,84 @@ class MacroDataService:
             data.cb_avg_daily_amount = round(total_vol / len(volumes), 2)
 
     def _fetch_north_bound_flow(self) -> float:
-        """北向资金净流入。当前东方财富相关接口已失效，返回 0（中性）"""
-        logger.debug("[MacroData] North bound flow data source unavailable, returning neutral 0")
-        return 0.0
+        """北向资金净流入（亿元）"""
+        try:
+            if ak is None:
+                return 0.0
+            df = ak.stock_hsgt_fund_flow_summary_em()
+            if df is None or df.empty:
+                return 0.0
+            # 筛选北向资金（沪股通 + 深股通）
+            north = df[df['资金方向'] == '北向']
+            if north.empty:
+                return 0.0
+            # 优先使用成交净买额，若无效则使用资金净流入
+            for col in ['成交净买额', '资金净流入']:
+                if col in north.columns:
+                    vals = pd.to_numeric(north[col], errors='coerce').dropna()
+                    if not vals.empty and vals.sum() != 0:
+                        return round(float(vals.sum()), 2)
+            return 0.0
+        except Exception as e:
+            logger.debug(f"[MacroData] North bound flow fetch failed: {e}")
+            return 0.0
 
-    def _fetch_margin_data(self) -> Tuple[float, float, float]:
+    def _fetch_main_force_flow(self) -> float:
+        """主力资金净流入（亿元）。使用行业资金流向汇总"""
+        try:
+            if ak is None:
+                return 0.0
+            df = ak.stock_fund_flow_industry()
+            if df is None or df.empty:
+                return 0.0
+            if '净额' not in df.columns:
+                return 0.0
+            net = pd.to_numeric(df['净额'], errors='coerce').dropna()
+            if net.empty:
+                return 0.0
+            return round(float(net.sum()), 2)
+        except Exception as e:
+            logger.debug(f"[MacroData] Main force flow fetch failed: {e}")
+            return 0.0
+
+    def _fetch_industry_net_inflow(self) -> float:
+        """行业净流入占比评分（0-100）。使用行业资金流向计算"""
+        try:
+            if ak is None:
+                return 50.0
+            df = ak.stock_fund_flow_industry()
+            if df is None or df.empty or '净额' not in df.columns:
+                return 50.0
+            net = pd.to_numeric(df['净额'], errors='coerce').dropna()
+            if net.empty:
+                return 50.0
+            positive = int((net > 0).sum())
+            total = len(net)
+            if total > 0:
+                return round(positive / total * 100, 1)
+            return 50.0
+        except Exception as e:
+            logger.debug(f"[MacroData] Industry flow fetch failed: {e}")
+            return 50.0
+
+    def _fetch_new_accounts(self) -> float:
+        """新增投资者开户数（万户）"""
+        try:
+            if ak is None:
+                return 0.0
+            df = ak.stock_account_statistics_em()
+            if df is None or df.empty:
+                return 0.0
+            col = '新增投资者-数量'
+            if col not in df.columns:
+                return 0.0
+            vals = pd.to_numeric(df[col], errors='coerce').dropna()
+            if vals.empty:
+                return 0.0
+            return round(float(vals.iloc[0]), 2)  # 第一行为最新
+        except Exception as e:
+            logger.debug(f"[MacroData] New accounts fetch failed: {e}")
+            return 0.0
         try:
             if ak is None:
                 return 0.0, 0.0, 0.0

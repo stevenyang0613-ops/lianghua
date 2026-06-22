@@ -1,4 +1,12 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, globalShortcut, shell, dialog, NativeImage, safeStorage, screen } from 'electron'
+import { spawn, ChildProcess } from 'child_process'
+import http from 'http'
+import https from 'https'
+import WebSocket from 'ws'
+import crypto from 'crypto'
+import path from 'path'
+import fs from 'fs'
+import os from 'os'
 
 const isDev = !app.isPackaged
 
@@ -13,14 +21,6 @@ try {
 } catch {
   console.log('[Electron] electron-updater not available, skipping auto-update')
 }
-import { spawn, ChildProcess } from 'child_process'
-import http from 'http'
-import https from 'https'
-import WebSocket from 'ws'
-import crypto from 'crypto'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
 
 let mainWindow: BrowserWindow | null = null
 let pythonProcess: ChildProcess | null = null
@@ -189,7 +189,7 @@ function startFrontendServer(): Promise<number> {
     })
 
     // Try FRONTEND_PORT first, fall back to a random port if occupied
-    server.on('error', (e: any) => {
+    server.on('error', (e: NodeJS.ErrnoException) => {
       if (e.code === 'EADDRINUSE') {
         // Port occupied, try a random port
         server.listen(0, '127.0.0.1', () => {
@@ -218,6 +218,7 @@ let actualFrontendPort: number = FRONTEND_PORT
 let restartBackend: (isManualRestart?: boolean) => void
 let restartInFlight = false
 let _backendStarting = false
+let creatingWindow = false
 
 // ---- Performance tracking ----
 const perfMetrics = {
@@ -1006,41 +1007,32 @@ function getBackendDir(): string {
   return path.join(__dirname, '..', 'backend')
 }
 
-function getPythonCmd(backendDir: string): string {
+function getPythonCmd(backendDir: string): { cmd: string; envPath?: string } {
   const pyinstallerBin = path.join(backendDir, 'lianghua-backend')
-  if (fs.existsSync(pyinstallerBin) && !fs.statSync(pyinstallerBin).isDirectory()) return pyinstallerBin
+  if (fs.existsSync(pyinstallerBin) && !fs.statSync(pyinstallerBin).isDirectory()) return { cmd: pyinstallerBin }
   const pyinstallerOnedir = path.join(backendDir, 'dist', 'lianghua-backend', 'lianghua-backend')
-  if (fs.existsSync(pyinstallerOnedir)) return pyinstallerOnedir
+  if (fs.existsSync(pyinstallerOnedir)) return { cmd: pyinstallerOnedir }
   if (isDev) {
     const venvPython = path.join(backendDir, '.venv', 'bin', 'python')
-    if (fs.existsSync(venvPython)) return venvPython
+    if (fs.existsSync(venvPython)) return { cmd: venvPython }
   }
   // Resolve python3 absolute path (macOS sandbox restricts PATH-based lookup)
-  function resolvePython3(): string {
-    const candidates = [
-      '/usr/local/bin/python3',
-      '/opt/homebrew/bin/python3',
-      '/usr/bin/python3',
-      '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
-      '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
-      '/Library/Frameworks/Python.framework/Versions/3.10/bin/python3',
-    ]
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c
-    }
-    // Fall back to PATH lookup (may fail in sandbox)
-    const extraPaths = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin']
-    const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'
-    const fullPath = [...extraPaths.filter(p => !currentPath.includes(p)), currentPath].join(':')
-    process.env.PATH = fullPath
-    return 'python3'
+  const candidates = [
+    '/usr/local/bin/python3',
+    '/opt/homebrew/bin/python3',
+    '/usr/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.10/bin/python3',
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return { cmd: c }
   }
-  const runAppPy = path.join(backendDir, 'run_app.py')
-  if (fs.existsSync(runAppPy)) {
-    const pythonExe = resolvePython3()
-    return pythonExe
-  }
-  return resolvePython3()
+  // Fall back to PATH lookup (may fail in sandbox)
+  const extraPaths = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin']
+  const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'
+  const fullPath = [...extraPaths.filter(p => !currentPath.includes(p)), currentPath].join(':')
+  return { cmd: 'python3', envPath: fullPath }
 }
 
 function getSSLCertEnv(): Record<string, string> {
@@ -1090,7 +1082,7 @@ function startPythonBackend() {
   }
   _backendStarting = true
   const backendDir = getBackendDir()
-  const pythonCmd = getPythonCmd(backendDir)
+  const { cmd: pythonCmd, envPath } = getPythonCmd(backendDir)
 
   const isPyinstaller = pythonCmd.endsWith('lianghua-backend')
   const pyinstallerCwd = isPyinstaller ? path.dirname(pythonCmd) : backendDir
@@ -1099,12 +1091,13 @@ function startPythonBackend() {
     : [path.join(backendDir, 'run_app.py'), '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
 
   const sslEnv = getSSLCertEnv()
+  const spawnEnv = { ...process.env, ...(envPath ? { PATH: envPath } : {}), ...sslEnv }
 
   console.log(`[Electron] startPythonBackend: cmd=${pythonCmd}, args=${JSON.stringify(args)}, cwd=${pyinstallerCwd}`)
   pythonProcess = spawn(pythonCmd, args, {
     cwd: pyinstallerCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...sslEnv },
+    env: spawnEnv,
     // detached: true lets us kill the entire process group (workers, children)
     // on Unix. On Windows, taskkill /T is used in killPythonProcessGroup.
     detached: process.platform !== 'win32',
@@ -1114,7 +1107,8 @@ function startPythonBackend() {
   if (pythonProcess.pid !== undefined) {
     writePidFile('backend', pythonProcess.pid)
   }
-  _backendStarting = false
+  // NOTE: _backendStarting is cleared inside waitForBackend().then() to prevent
+  // duplicate spawn during the 60s readiness check window (AGENTS.md #17).
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
     console.log('[Python] ' + data.toString().trim())
@@ -1134,7 +1128,7 @@ function startPythonBackend() {
     }
   })
 
-  pythonProcess.on('exit', (code: number | null) => {
+  pythonProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
     removePidFile('backend')
     _backendStarting = false
     console.log('[Electron] Python process exited with code ' + code)
@@ -1176,7 +1170,10 @@ function startPythonBackend() {
   })
 
   // Wait for backend and signal readiness
+  // _backendStarting is cleared here (not before waitForBackend) to prevent
+  // duplicate spawn during the 60s readiness check window.
   waitForBackend().then((ready) => {
+    _backendStarting = false
     if (ready) {
       console.log('[Electron] Backend is ready, notifying renderer')
       mainWindow?.webContents.send('backend-ready')
@@ -1191,6 +1188,14 @@ function startPythonBackend() {
         details: '请检查后端日志并手动重启'
       })
     }
+  }).catch((err) => {
+    _backendStarting = false
+    console.error('[Electron] waitForBackend threw:', err)
+    mainWindow?.webContents.send('backend-error', {
+      title: '后端启动异常',
+      message: `后端就绪检查异常: ${err.message}`,
+      details: err.stack || ''
+    })
   })
 
   if (pythonRestartTimer) clearTimeout(pythonRestartTimer)
@@ -1335,6 +1340,16 @@ function saveWindowState() {
   }
 }
 
+// Debounced window state saver — throttles resize/move (300ms interval)
+let _saveStateTimer: ReturnType<typeof setTimeout> | null = null
+function debouncedSaveWindowState() {
+  if (_saveStateTimer) return
+  _saveStateTimer = setTimeout(() => {
+    _saveStateTimer = null
+    saveWindowState()
+  }, 300)
+}
+
 // ---- Create main window ----
 async function createWindow() {
   const savedState = loadWindowState()
@@ -1365,11 +1380,8 @@ async function createWindow() {
     mainWindow.maximize()
   }
 
-  // 立即显示窗口：不等待 ready-to-show，避免黑屏
+  // Safety timeout: show window even if ready-to-show doesn't fire
   // macOS 上 ready-to-show 有时不会触发或触发过晚，导致用户看到黑屏
-  mainWindow.show()
-
-  // Safety timeout: show window even if show() above failed
   const readyShowTimeout = setTimeout(() => {
     if (mainWindow && !mainWindow.isVisible()) {
       console.warn('[Electron] window.show() failed, forcing show (3s timeout)')
@@ -1447,15 +1459,17 @@ async function createWindow() {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    shell.openExternal(url).catch((err: Error) =>
+      console.warn('[Electron] Failed to open external URL:', url, err.message)
+    )
     return { action: 'deny' }
   })
 
-  // Save window state on resize/move
-  mainWindow.on('resize', saveWindowState)
-  mainWindow.on('move', saveWindowState)
-  mainWindow.on('maximize', saveWindowState)
-  mainWindow.on('unmaximize', saveWindowState)
+  // Save window state on resize/move (debounced 300ms)
+  mainWindow.on('resize', debouncedSaveWindowState)
+  mainWindow.on('move', debouncedSaveWindowState)
+  mainWindow.on('maximize', debouncedSaveWindowState)
+  mainWindow.on('unmaximize', debouncedSaveWindowState)
 
   mainWindow.on('close', (e) => {
     saveWindowState()
@@ -1762,8 +1776,11 @@ restartBackend = (isManualRestart = false) => {
   stopHealthMonitor()
   healthFailCount = 0
   if (isManualRestart) pythonRestartCount = 0
-  for (const [wsId, ws] of wsConnections) {
-    ws.close()
+  for (const wsId of [...wsConnections.keys()]) {
+    const ws = wsConnections.get(wsId)
+    if (ws) {
+      ws.close()
+    }
     wsConnections.delete(wsId)
   }
   const pendingTimeout = setTimeout(() => {
@@ -1775,6 +1792,7 @@ restartBackend = (isManualRestart = false) => {
     startPythonBackend()
     restartInFlight = false
   }, 8000)
+  pendingTimeout.unref()
   if (pythonProcess) {
     const oldProcess = pythonProcess
     pythonProcess = null
@@ -1899,7 +1917,9 @@ ipcMain.handle('window-is-maximized', () => {
 })
 
 ipcMain.on('open-external', (_event, url: string) => {
-  shell.openExternal(url)
+  shell.openExternal(url).catch((err: Error) =>
+    console.warn('[Electron] Failed to open external URL (IPC):', url, err.message)
+  )
 })
 
 // ---- Multi-window management ----
@@ -2287,8 +2307,11 @@ if (!gotTheLock) {
         mainWindow.show()
         mainWindow.moveTop()
         mainWindow.focus()
-      } else if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow().catch((err: any) => console.error('[Electron] activate createWindow failed:', err))
+      } else if (!creatingWindow && BrowserWindow.getAllWindows().length === 0) {
+        creatingWindow = true
+        createWindow().catch((err: any) => console.error('[Electron] activate createWindow failed:', err)).finally(() => {
+          creatingWindow = false
+        })
       }
     })
   })
@@ -2302,8 +2325,9 @@ if (!gotTheLock) {
       frontendServer = null
     }
     // Close all WebSocket connections
-    for (const [wsId, ws] of wsConnections) {
-      ws.close()
+    for (const wsId of [...wsConnections.keys()]) {
+      const ws = wsConnections.get(wsId)
+      if (ws) ws.close()
       wsConnections.delete(wsId)
     }
     if (tray) {

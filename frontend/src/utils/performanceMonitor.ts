@@ -56,10 +56,17 @@ function loadRecords(): PerformanceRecord[] {
   return []
 }
 
+let saveRecordsTimer: ReturnType<typeof setTimeout> | null = null
+
 function saveRecords(): void {
   // 只保留最近100条记录
   records = records.slice(-100)
-  localStorage.setItem(RECORDS_KEY, JSON.stringify(records))
+  // Debounce localStorage writes to avoid performance issues with high-frequency API calls
+  if (saveRecordsTimer) clearTimeout(saveRecordsTimer)
+  saveRecordsTimer = setTimeout(() => {
+    localStorage.setItem(RECORDS_KEY, JSON.stringify(records))
+    saveRecordsTimer = null
+  }, 500)
 }
 
 export function getConfig(): PerformanceConfig {

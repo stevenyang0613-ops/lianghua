@@ -1194,10 +1194,7 @@ def _build_stock_from_cache(stock_code: str) -> dict:
     spot = data_enrich._spot_map.get(stock_code, {}) or {}
     fin = data_enrich._fin_map.get(stock_code, {}) or {}
     flow = data_enrich._fund_flow_map.get(stock_code, {}) or {}
-    if not flow:
-        flow = data_enrich._fund_flow_map.get(f"sh{stock_code}", {}) or {}
-    if not flow:
-        flow = data_enrich._fund_flow_map.get(f"sz{stock_code}", {}) or {}
+    # NOTE: _fund_flow_map keys are bare 6-digit codes (no sh/sz prefix), so prefix fallback is dead code.
     debt = data_enrich._debt_map.get(stock_code, {}) or {}
     mom = data_enrich._momentum_map.get(stock_code, {}) or {}
     volatility = data_enrich._vol_map.get(stock_code)

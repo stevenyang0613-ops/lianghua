@@ -164,80 +164,80 @@ class EnhancedMarketData:
     date: date
     
     # === 转债市场 ===
-    cb_median_premium: float = 0.0       # 转股溢价率中位数(%)
-    cb_avg_premium: float = 0.0          # 转股溢价率均值(%)
-    cb_median_price: float = 0.0                  # 转债价格中位数
-    cb_avg_daily_amount: float = 0.0              # 转债日均成交额(亿)
+    cb_median_premium: float = float('nan')       # 转股溢价率中位数(%)
+    cb_avg_premium: float = float('nan')          # 转股溢价率均值(%)
+    cb_median_price: float = float('nan')                  # 转债价格中位数
+    cb_avg_daily_amount: float = float('nan')              # 转债日均成交额(亿)
     cb_count: int = 0                    # 转债数量
-    cb_ytm_median: float = 0.0                    # 纯债YTM中位数(%)
+    cb_ytm_median: float = float('nan')                    # 纯债YTM中位数(%)
     cb_ytm_available: Optional[bool] = None  # YTM 数据可用性: True=确认有, False=确认无, None=未知(按旧逻辑)
-    cb_index_change: float = 0.0                  # 转债指数涨跌幅(%)
-    cb_index_current: float = 0.0                 # 转债指数当前值
-    cb_index_ma20: float = 0.0                    # 转债指数20日均线
-    cb_index_ma60: float = 0.0                    # 转债指数60日均线
+    cb_index_change: float = float('nan')                  # 转债指数涨跌幅(%)
+    cb_index_current: float = float('nan')                 # 转债指数当前值
+    cb_index_ma20: float = float('nan')                    # 转债指数20日均线
+    cb_index_ma60: float = float('nan')                    # 转债指数60日均线
     cb_below_par_count: int = 0          # 低于面值的转债数
 
     # === 正股市场 ===
-    stock_index_change: float = 0.0               # 沪深300日涨跌幅(%)
-    stock_index_change_20d: float = 0.0           # 沪深300近20日涨跌幅(%)
-    stock_index_change_60d: float = 0.0           # 沪深300近60日涨跌幅(%)
-    stock_index_current: float = 0.0              # 沪深300当前值
-    stock_index_ma20: float = 0.0                 # 沪深300 20日均线
-    stock_index_ma60: float = 0.0                 # 沪深300 60日均线
-    stock_pe_median: float = 0.0                  # 全市场PE中位数
-    stock_pb_median: float = 0.0                  # 全市场PB中位数
-    stock_pe_percentile: float = 0.0              # PE历史分位数(%)
-    stock_pb_percentile: float = 0.0              # PB历史分位数(%)
+    stock_index_change: float = float('nan')               # 沪深300日涨跌幅(%)
+    stock_index_change_20d: float = float('nan')           # 沪深300近20日涨跌幅(%)
+    stock_index_change_60d: float = float('nan')           # 沪深300近60日涨跌幅(%)
+    stock_index_current: float = float('nan')              # 沪深300当前值
+    stock_index_ma20: float = float('nan')                 # 沪深300 20日均线
+    stock_index_ma60: float = float('nan')                 # 沪深300 60日均线
+    stock_pe_median: float = float('nan')                  # 全市场PE中位数
+    stock_pb_median: float = float('nan')                  # 全市场PB中位数
+    stock_pe_percentile: float = float('nan')              # PE历史分位数(%)
+    stock_pb_percentile: float = float('nan')              # PB历史分位数(%)
 
     # === 技术指标 ===
     ma_arrangement: str = "neutral"      # MA排列: bullish/bearish/neutral
     macd_signal: str = "neutral"         # MACD信号
-    rsi_14: float = 0.0                           # RSI(14)
-    bollinger_position: float = 0.0               # 布林带位置 0-1
-    volume_ratio: float = 0.0                     # 量比
+    rsi_14: float = float('nan')                           # RSI(14)
+    bollinger_position: float = float('nan')               # 布林带位置 0-1
+    volume_ratio: float = float('nan')                     # 量比
 
     # === 筹码/资金 ===
-    main_force_net_flow: float = 0.0              # 主力净流入(亿)
-    margin_balance_change: float = 0.0            # 融资余额变化(亿)
-    north_bound_net_flow: float = 0.0             # 北向资金净流入(亿)
-    institutional_holding_change: float = 0.0     # 机构持仓变化
+    main_force_net_flow: float = float('nan')              # 主力净流入(亿)
+    margin_balance_change: float = float('nan')            # 融资余额变化(亿)
+    north_bound_net_flow: float = float('nan')             # 北向资金净流入(亿)
+    institutional_holding_change: float = float('nan')     # 机构持仓变化
 
     # === 债券/流动性 ===
-    treasury_10y_yield: float = 0.0               # 10年期国债收益率(%)
-    treasury_2y_yield: float = 0.0                # 2年期国债收益率(%)
-    shibor_overnight: float = 0.0                 # Shibor隔夜(%)
-    credit_spread: float = 0.0                    # 信用利差(bp)
-    term_spread: float = 0.0                      # 期限利差(bp)
+    treasury_10y_yield: float = float('nan')               # 10年期国债收益率(%)
+    treasury_2y_yield: float = float('nan')                # 2年期国债收益率(%)
+    shibor_overnight: float = float('nan')                 # Shibor隔夜(%)
+    credit_spread: float = float('nan')                    # 信用利差(bp)
+    term_spread: float = float('nan')                      # 期限利差(bp)
 
     # === 宏观 ===
-    pmi: float = 0.0                              # PMI当月（50=荣枯线）
-    pmi_prev: float = 0.0                         # PMI上月
-    cpi: float = 0.0                              # CPI当月同比(%)
-    ppi: float = 0.0                              # PPI当月同比(%)
-    m2_growth: float = 0.0                       # M2同比增速(%)
-    social_financing_growth: float = 0.0          # 社融同比增速(%)
-    industrial_output: float = 0.0                # 工业增加值同比(%)
-    retail_sales: float = 0.0                     # 社零同比(%)
-    export_growth: float = 0.0                    # 出口同比(%)
-    gdp_growth: float = 0.0                       # GDP同比增速(%)
+    pmi: float = float('nan')                              # PMI当月（50=荣枯线）
+    pmi_prev: float = float('nan')                         # PMI上月
+    cpi: float = float('nan')                              # CPI当月同比(%)
+    ppi: float = float('nan')                              # PPI当月同比(%)
+    m2_growth: float = float('nan')                       # M2同比增速(%)
+    social_financing_growth: float = float('nan')          # 社融同比增速(%)
+    industrial_output: float = float('nan')                # 工业增加值同比(%)
+    retail_sales: float = float('nan')                     # 社零同比(%)
+    export_growth: float = float('nan')                    # 出口同比(%)
+    gdp_growth: float = float('nan')                       # GDP同比增速(%)
 
     # === 情绪 ===
-    advance_decline_ratio: float = 0.0            # 涨跌比
+    advance_decline_ratio: float = float('nan')            # 涨跌比
     limit_up_count: int = 0              # 涨停数
     limit_down_count: int = 0            # 跌停数
     new_high_count: int = 0              # 60日新高数
     new_low_count: int = 0               # 60日新低数
-    pcr_ratio: float = 0.0                        # 认沽/认购比
-    vix_index: float = 0.0                        # 波动率指数
-    new_accounts: float = 0.0                     # 新增开户数(万)
-    margin_buy_ratio: float = 0.0                 # 融资买入占比(%)
-    market_turnover: float = 0.0                  # 全市场换手率(%)
+    pcr_ratio: float = float('nan')                        # 认沽/认购比
+    vix_index: float = float('nan')                        # 波动率指数
+    new_accounts: float = float('nan')                     # 新增开户数(万)
+    margin_buy_ratio: float = float('nan')                 # 融资买入占比(%)
+    market_turnover: float = float('nan')                  # 全市场换手率(%)
 
     # === 消息/政策 ===
     policy_signal_score: float = 50.0     # 政策信号评分 0-100
     event_impact_score: float = 50.0      # 事件冲击评分 0-100
     industry_cycle_score: float = 50.0    # 产业链景气评分 0-100
-    earnings_surprise_ratio: float = 0.0          # 盈利超预期比例
+    earnings_surprise_ratio: float = float('nan')          # 盈利超预期比例
 
     # === 资金/流向专用字段 ===
     industry_net_inflow_ratio: float = 50.0  # 行业净流入占比评分 0-100
@@ -248,6 +248,10 @@ class EnhancedMarketData:
 
 
 # ==================== 评分函数工具 ====================
+# NOTE: math.isnan in utility functions (linear_score, sigmoid_score, safe_score)
+# operates on INPUT VALUES (data fields or intermediate scores). These functions
+# return NaN when input is NaN — the NaN propagates up to FactorScore.total_score,
+# which is then filtered by `valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]`.
 
 def linear_score(value: float, low: float, high: float, invert: bool = False) -> float:
     """线性归一化评分
@@ -492,6 +496,10 @@ class EnhancedTimingModel:
         - BULL = 轻度超买（回调风险）
         - STRONG_BULL = 深度超买（回调风险）
         """
+        # NOTE: All math.isnan checks in this method are on DATA FIELDS (input data
+        # availability), NOT on score results. Data fields default to 0.0 in
+        # EnhancedMarketData, so a NaN check means "was this field actually populated
+        # by the data pipeline?"
         # 收集超卖/超买信号
         oversold_signals = 0
         overbought_signals = 0
@@ -505,6 +513,7 @@ class EnhancedTimingModel:
             elif rsi > 65: overbought_signals += 1
 
         # 2. 20日涨跌幅（反转视角）
+        # NOTE: math.isnan here checks if the DATA FIELD is available (not score result)
         change_20d = data.stock_index_change_20d if not math.isnan(data.stock_index_change_20d) else data.stock_index_change * 20
         if not math.isnan(change_20d):
             if change_20d < -10: oversold_signals += 2
@@ -658,6 +667,8 @@ class EnhancedTimingModel:
         ))
         
         # 加权计算
+        # NOTE: math.isnan(sf.score) checks if the SCORE RESULT is valid (not data field).
+        # A FactorScore with NaN total means data was unavailable for all sub-factors.
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
         total = sum(sf.score * sf.weight for sf in valid_sub)
         w_sum = sum(sf.weight for sf in valid_sub)
@@ -677,6 +688,8 @@ class EnhancedTimingModel:
         
         # 2.1 盈利超预期比例
         surprise = data.earnings_surprise_ratio
+        # NOTE: math.isnan(surprise) here checks DATA FIELD availability.
+        # has_data=(not math.isnan(...)) tells safe_score to return neutral if data missing.
         # earnings_surprise_ratio 默认 0.0 表示缺失，需区分于真实的 0%
         surprise_score = safe_score(surprise, lambda v: sigmoid_score(v, 0.5, steepness=4), has_data=(not math.isnan(surprise)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
@@ -784,6 +797,7 @@ class EnhancedTimingModel:
         ))
         
         # 3.2 融资融券余额占比（均值回归：过低=情绪冰点=机会=高分，过高=过热=风险=低分）
+        # NOTE: math.isnan(mb_ratio) checks DATA FIELD availability
         mb_ratio = data.margin_buy_ratio
         if math.isnan(mb_ratio) or mb_ratio <= 0:
             mb_chip_score = 50.0
@@ -831,6 +845,7 @@ class EnhancedTimingModel:
         
         # 3.4 IPO/转债新发节奏（供给压力）
         # 用PE分位作为供给压力的间接指标（线性插值避免阶梯跳跃）
+        # NOTE: math.isnan(pe_pct) checks DATA FIELD availability
         pe_pct = data.stock_pe_percentile
         if math.isnan(pe_pct) or pe_pct <= 0:
             supply_score = 50.0
@@ -1069,7 +1084,7 @@ class EnhancedTimingModel:
             spread_signal = "bullish" if spread < 80 else "bearish" if spread > 150 else "neutral"
             spread_desc = f"信用利差{spread:.0f}bp，{'信用环境宽松' if spread<80 else '信用紧缩' if spread>150 else '正常'}"
         else:
-            spread_score = 50.0
+            spread_score = float('nan')
             spread_signal = "neutral"
             spread_desc = "无信用利差数据"
         sub_factors.append(FactorScore(
@@ -1215,10 +1230,11 @@ class EnhancedTimingModel:
         ))
         
         # 5.6 指数 vs 均线关系
+        # NOTE: math.isnan here checks DATA FIELD availability (index/MA prices)
         current = data.stock_index_current
         ma20 = data.stock_index_ma20
         ma60 = data.stock_index_ma60
-        if current <= 0 or ma20 <= 0 or ma60 <= 0:
+        if math.isnan(current) or math.isnan(ma20) or math.isnan(ma60) or current <= 0 or ma20 <= 0 or ma60 <= 0:
             ma_rel_score = float('nan')
         elif current > ma20 and ma20 > ma60:
             ma_rel_score = 85
@@ -1241,7 +1257,7 @@ class EnhancedTimingModel:
         cb_current = data.cb_index_current
         cb_ma20 = data.cb_index_ma20
         cb_ma60 = data.cb_index_ma60
-        if cb_current <= 0 or cb_ma20 <= 0 or cb_ma60 <= 0:
+        if math.isnan(cb_current) or math.isnan(cb_ma20) or math.isnan(cb_ma60) or cb_current <= 0 or cb_ma20 <= 0 or cb_ma60 <= 0:
             cb_rel_score = float('nan')
         elif cb_current > cb_ma20 and cb_ma20 > cb_ma60:
             cb_rel_score = 80
@@ -1277,7 +1293,7 @@ class EnhancedTimingModel:
         
         # 6.1 涨跌比
         ad_ratio = data.advance_decline_ratio
-        ad_score = safe_score(ad_ratio, lambda v: sigmoid_score(v, 1.0, steepness=3), treat_zero_as_missing=False)
+        ad_score = safe_score(ad_ratio, lambda v: sigmoid_score(v, 1.0, steepness=1.5), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
             name="涨跌比", score=ad_score, weight=0.20,
             category="sentiment", raw_value=ad_ratio,
@@ -2336,36 +2352,58 @@ def convert_from_legacy_data(
     
     # 从 MacroData 补充（扩展版 V2.0）
     if macro_data:
-        if data.treasury_10y_yield <= 0:
-            data.treasury_10y_yield = getattr(macro_data, 'treasury_10y_yield', 0) or 0
-        data.treasury_2y_yield = getattr(macro_data, 'treasury_2y_yield', 0) or 0
+        # 国债收益率：>0 才有效，否则保持 NaN
+        if math.isnan(data.treasury_10y_yield) or data.treasury_10y_yield <= 0:
+            val = getattr(macro_data, 'treasury_10y_yield', float('nan'))
+            if val > 0:
+                data.treasury_10y_yield = val
+        val = getattr(macro_data, 'treasury_2y_yield', float('nan'))
+        if val > 0:
+            data.treasury_2y_yield = val
         # 转债市场核心字段（若 legacy_data 未提供，直接从 MacroData 填充）
         for attr in (
             'cb_median_premium', 'cb_median_price', 'cb_avg_daily_amount',
             'cb_index_current', 'cb_index_change', 'cb_index_ma20', 'cb_index_ma60',
             'cb_below_par_count', 'cb_count', 'cb_ytm_median',
         ):
-            if getattr(data, attr, 0) == 0:
+            if (isinstance(getattr(data, attr, 0), float) and math.isnan(getattr(data, attr, 0))) or getattr(data, attr, 0) == 0:
                 val = getattr(macro_data, attr, 0)
                 if val:
                     setattr(data, attr, val)
-        if data.pmi <= 0:
+        if math.isnan(data.pmi) or data.pmi <= 0:
             val = getattr(macro_data, 'pmi_current', 0)
             if val > 0:
                 data.pmi = val
-        if data.pmi_prev <= 0:
+        if math.isnan(data.pmi_prev) or data.pmi_prev <= 0:
             val = getattr(macro_data, 'pmi_prev', 0)
             if val > 0:
                 data.pmi_prev = val
-        # Shibor / 流动性
-        data.shibor_overnight = getattr(macro_data, 'shibor_overnight', 0) or 0
-        data.cpi = getattr(macro_data, 'cpi', 0) or 0
-        data.ppi = getattr(macro_data, 'ppi', 0) or 0
-        data.m2_growth = getattr(macro_data, 'm2_growth', 0) or 0
-        data.social_financing_growth = getattr(macro_data, 'social_financing_growth', 0) or 0
-        data.gdp_growth = getattr(macro_data, 'gdp_growth', 0) or 0
-        data.credit_spread = getattr(macro_data, 'credit_spread_aa', 0) or 0
-        data.term_spread = (data.treasury_10y_yield - data.treasury_2y_yield) * 100 if data.treasury_10y_yield > 0 and data.treasury_2y_yield > 0 else 0
+        # Shibor / 流动性：>0 才有效
+        val = getattr(macro_data, 'shibor_overnight', float('nan'))
+        if val > 0:
+            data.shibor_overnight = val
+        # 宏观指标：CPI/M2/GDP 等，0 表示缺失
+        val = getattr(macro_data, 'cpi', float('nan'))
+        if val != 0:
+            data.cpi = val
+        val = getattr(macro_data, 'ppi', float('nan'))
+        if val != 0:
+            data.ppi = val
+        val = getattr(macro_data, 'm2_growth', float('nan'))
+        if val != 0:
+            data.m2_growth = val
+        val = getattr(macro_data, 'social_financing_growth', float('nan'))
+        if val != 0:
+            data.social_financing_growth = val
+        val = getattr(macro_data, 'gdp_growth', float('nan'))
+        if val != 0:
+            data.gdp_growth = val
+        val = getattr(macro_data, 'credit_spread_aa', float('nan'))
+        if val != 0:
+            data.credit_spread = val
+        # 期限利差：由国债收益率计算，若已获取则计算
+        if not math.isnan(data.treasury_10y_yield) and not math.isnan(data.treasury_2y_yield) and data.treasury_10y_yield > 0 and data.treasury_2y_yield > 0:
+            data.term_spread = (data.treasury_10y_yield - data.treasury_2y_yield) * 100
         # 市场情绪
         data.limit_up_count = getattr(macro_data, 'limit_up_count', 0) or 0
         data.limit_down_count = getattr(macro_data, 'limit_down_count', 0) or 0
@@ -2461,14 +2499,14 @@ def convert_from_legacy_data(
         if 'premium_ratio' in bonds_df.columns:
             premiums = bonds_df['premium_ratio'].dropna()
             if len(premiums) > 0:
-                if data.cb_median_premium <= 0:
+                if math.isnan(data.cb_median_premium) or data.cb_median_premium <= 0:
                     data.cb_median_premium = float(premiums.median())
                 data.cb_avg_premium = float(premiums.mean())
 
         if 'price' in bonds_df.columns:
             prices = bonds_df['price'].dropna()
             if len(prices) > 0:
-                if data.cb_median_price <= 0:
+                if math.isnan(data.cb_median_price) or data.cb_median_price <= 0:
                     data.cb_median_price = float(prices.median())
                 data.cb_below_par_count = int((prices < 100).sum())
             data.cb_count = len(bonds_df)
@@ -2484,7 +2522,7 @@ def convert_from_legacy_data(
 
         if 'volume' in bonds_df.columns:
             volumes = bonds_df['volume'].dropna()
-            if len(volumes) > 0 and data.cb_avg_daily_amount <= 0:
+            if len(volumes) > 0 and (math.isnan(data.cb_avg_daily_amount) or data.cb_avg_daily_amount <= 0):
                 data.cb_avg_daily_amount = float(volumes.sum() / len(volumes))
     
     data.data_completeness = min(1.0, sum([

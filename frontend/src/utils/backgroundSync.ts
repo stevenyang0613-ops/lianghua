@@ -118,27 +118,29 @@ export function initBackgroundSync(): void {
   if (isAutoSyncEnabled()) {
     startBackgroundSync()
   }
-}
-
-// 页面可见性变化时触发同步
-if (typeof document !== 'undefined') {
-  visibilityHandler = () => {
-    if (document.visibilityState === 'visible' && isAutoSyncEnabled()) {
-      const lastSync = localStorage.getItem(LAST_SYNC_KEY)
-      if (lastSync) {
-        const lastSyncTime = new Date(lastSync).getTime()
-        const now = Date.now()
-        const interval = getSyncInterval()
-        // 如果上次同步时间超过一个周期，触发同步
-        if (now - lastSyncTime > interval) {
-          console.log('[BackgroundSync] Triggering sync due to page visibility change')
-          performSync()
+  // Register visibilitychange listener inside init to avoid duplicate registration on re-import
+  if (typeof document !== 'undefined' && !visibilityHandler) {
+    visibilityHandler = () => {
+      if (document.visibilityState === 'visible' && isAutoSyncEnabled()) {
+        const lastSync = localStorage.getItem(LAST_SYNC_KEY)
+        if (lastSync) {
+          const lastSyncTime = new Date(lastSync).getTime()
+          const now = Date.now()
+          const interval = getSyncInterval()
+          // 如果上次同步时间超过一个周期，触发同步
+          if (now - lastSyncTime > interval) {
+            console.log('[BackgroundSync] Triggering sync due to page visibility change')
+            performSync()
+          }
         }
       }
     }
+    document.addEventListener('visibilitychange', visibilityHandler)
   }
-  document.addEventListener('visibilitychange', visibilityHandler)
 }
+
+// 页面可见性变化时触发同步
+// NOTE: moved into initBackgroundSync() to avoid duplicate registration on re-import
 
 export function cleanupBackgroundSync(): void {
   stopBackgroundSync()

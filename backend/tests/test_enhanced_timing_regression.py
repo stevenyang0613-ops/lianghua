@@ -5,6 +5,7 @@
 """
 import sys
 import os
+import math
 from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -96,17 +97,31 @@ class TestCapitalFlowDefaults:
 class TestLiquidityDefaults:
     def test_credit_spread_zero(self):
         model = EnhancedTimingModel()
-        data = make_default_data()
+        data = make_default_data(credit_spread=0)
         result = model.calculate(data)
         sub = _find_subfactor(result, "信用利差")
-        assert 45 <= sub.score <= 55, f"Expected neutral, got {sub.score}"
+        assert math.isnan(sub.score), f"Expected NaN for zero credit_spread (treated as missing), got {sub.score}"
 
     def test_term_spread_zero(self):
+        model = EnhancedTimingModel()
+        data = make_default_data(term_spread=0)
+        result = model.calculate(data)
+        sub = _find_subfactor(result, "期限利差(10Y-2Y)")
+        assert 45 <= sub.score <= 55, f"Expected neutral, got {sub.score}"
+
+    def test_term_spread_missing(self):
         model = EnhancedTimingModel()
         data = make_default_data()
         result = model.calculate(data)
         sub = _find_subfactor(result, "期限利差(10Y-2Y)")
-        assert 45 <= sub.score <= 55, f"Expected neutral, got {sub.score}"
+        assert math.isnan(sub.score), f"Expected NaN for missing data, got {sub.score}"
+
+    def test_credit_spread_missing(self):
+        model = EnhancedTimingModel()
+        data = make_default_data()
+        result = model.calculate(data)
+        sub = _find_subfactor(result, "信用利差")
+        assert math.isnan(sub.score), f"Expected NaN for missing data, got {sub.score}"
 
 
 # ==================== BUG#7: 字段独立 ====================
