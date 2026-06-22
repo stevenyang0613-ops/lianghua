@@ -499,3 +499,59 @@ class TestSpotThenVol:
             de._spot_map = saved_spot
             de._vol_map = saved_vol
 
+
+class TestBondOrFallbackCodes:
+    """Verify _get_bond_or_fallback_codes() fallback chain."""
+
+    def teardown_method(self):
+        de._bond_stock_codes = set()
+        de._stock_name_map = {}
+
+    def test_returns_bond_codes_when_populated(self):
+        """_bond_stock_codes 已填充时，直接返回。"""
+        saved = de._bond_stock_codes
+        de._bond_stock_codes = {"000001", "000002"}
+        try:
+            codes = de._get_bond_or_fallback_codes()
+            assert codes == frozenset({"000001", "000002"})
+        finally:
+            de._bond_stock_codes = saved
+
+    def test_falls_back_to_stock_name_map(self):
+        """_bond_stock_codes 为空时，回退到 _stock_name_map 键。"""
+        saved_codes = de._bond_stock_codes
+        saved_names = de._stock_name_map
+        de._bond_stock_codes = set()
+        de._stock_name_map = {
+            "000001": "name1",
+            "000002": "name2",
+            "12": "too_short",  # 应被过滤
+            "abc": "not_digit",  # 应被过滤
+            "": "empty",  # 应被过滤
+            "600000": "valid_long",
+        }
+        try:
+            codes = de._get_bond_or_fallback_codes()
+            assert "000001" in codes
+            assert "000002" in codes
+            assert "600000" in codes
+            assert "12" not in codes
+            assert "abc" not in codes
+            assert "" not in codes
+        finally:
+            de._bond_stock_codes = saved_codes
+            de._stock_name_map = saved_names
+
+    def test_returns_empty_when_neither_populated(self):
+        """两者都为空时，返回空 frozenset。"""
+        saved_codes = de._bond_stock_codes
+        saved_names = de._stock_name_map
+        de._bond_stock_codes = set()
+        de._stock_name_map = {}
+        try:
+            codes = de._get_bond_or_fallback_codes()
+            assert codes == frozenset()
+        finally:
+            de._bond_stock_codes = saved_codes
+            de._stock_name_map = saved_names
+

@@ -804,13 +804,23 @@ def _refresh_volatility_cache():
 
         # Get all stock codes from stock_names or spot cache
         stock_codes = set()
+        # 1. Try stock_names (preferred - has full A-share list)
         names_path = _CACHE_FILES.get("stock_names") or (_CACHE_DIR / "stock_names.json")
         names_data = _load_cache(names_path)
         if names_data:
             stock_codes = {k for k in names_data if not k.startswith("_") and len(k) == 6 and k.isdigit()}
+        # 2. Fallback: read from spot cache (just refreshed in same runner if --spot was passed)
+        #    This ensures vol has all stock codes even when stock_names is not refreshed.
+        if not stock_codes:
+            spot_path = _CACHE_FILES.get("spot")
+            if spot_path and spot_path.exists():
+                spot_data = _load_cache(spot_path)
+                if spot_data:
+                    stock_codes = {k for k in spot_data if not k.startswith("_") and len(k) == 6 and k.isdigit()}
+                    logger.info(f"[Vol] Loaded {len(stock_codes)} codes from spot cache fallback")
 
         if not stock_codes:
-            # Fallback: bond stocks
+            # Fallback: bond stocks (limited coverage)
             try:
                 df_bond = ak.bond_zh_cov()
                 for _, r in df_bond.iterrows():
@@ -4126,6 +4136,10 @@ def main():
         tasks.append(("Restricted", _refresh_restricted_release_cache))
 
     logger.info(f"Starting {len(tasks)} data enrichment tasks...")
+    # NOTE: Tasks run sequentially (not concurrently). Spot must finish before
+    # Vol because Vol reads stock codes from the spot cache. FundFlow is
+    # independent and can run anywhere after spot. This avoids the race
+    # condition where Vol starts before spot finishes (AGENTS.md #34).
     for name, fn in tasks:
         t0 = time.time()
         try:

@@ -576,6 +576,10 @@ async def lifespan(app: FastAPI):
                     stdout=_enrich_log,
                     stderr=_enrich_log,
                     stdin=subprocess.DEVNULL,
+                    # start_new_session=True is the Python equivalent of setsid(2).
+                    # This detaches the child from the parent's session/PGID so
+                    # closing the terminal (SIGHUP) does not kill the runner.
+                    # See AGENTS.md #49.
                     start_new_session=True,
                 )
                 _enrich_procs.append(p)

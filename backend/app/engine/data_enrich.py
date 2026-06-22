@@ -442,8 +442,10 @@ def _with_metrics(fn):
             if bond_total > 0 and map_name:
                 with _cache_lock:
                     m = globals().get(map_name)
+                    # AGENTS.md fix: bond-related maps use bond codes as keys, not stock codes
+                    codes_to_check = _bond_codes if (map_name in _BOND_CODE_MAPS and _bond_codes) else _bond_codes_snapshot
                     if isinstance(m, dict):
-                        bond_count = sum(1 for c in _bond_codes_snapshot if c in m and m.get(c) is not None)
+                        bond_count = sum(1 for c in codes_to_check if c in m and m.get(c) is not None)
             status = "ok" if count and count > 0 else "empty"
             extra = {"bond_count": bond_count, "bond_total": bond_total} if bond_total > 0 else {}
             _record_refresh_metric(name, elapsed, count or 0, status=status, extra=extra)
@@ -488,6 +490,10 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_earnings_forecast_cache": "_earnings_forecast_map",
     "_refresh_restricted_release_cache": "_restricted_release_map",
 }
+
+
+# 这些 map 的 key 是债券代码（而非正股代码），_with_metrics 统计 bond_count 时应使用 _bond_codes
+_BOND_CODE_MAPS = {"_bond_outstanding_map", "_call_status_map", "_bond_price_map", "_coupon_rate_map", "_event_map"}
 
 
 def get_cache_refresh_ts() -> dict[str, float]:
@@ -958,6 +964,9 @@ def _ensure_bond_stock_codes():
                 logger.info(f"[DataEnrich] Auto-loaded {len(codes)} bond stock codes from THS")
     except Exception as e:
         logger.debug(f"[DataEnrich] Auto-load bond stock codes failed: {e}")
+
+
+_bond_codes: set[str] = set()  # 债券代码集合（用于 bond_count 统计）
 
 
 @_with_metrics
@@ -3869,6 +3878,12 @@ async def start_background_refresh():
                 except Exception:
                     pass  # 日志轮换失败不影响主流程
                 _log = open(_log_path, "a")
+                # AGENTS.md fix: 清理旧 runner 子进程，避免残留进程竞争资源
+                try:
+                    import subprocess as _sp
+                    _sp.run(['pkill', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=5)
+                except Exception:
+                    pass
                 # 只刷新容易变 stale 的扩展缓存（spot/vol/fund_flow/bond_price 由 runner 子进程负责）
                 cmd = [_sys.executable, runner_script,
                        "--north", "--margin", "--lhb", "--block-trade",
@@ -4290,6 +4305,7 @@ def _refresh_north_cache():
                     ak.stock_hsgt_individual_em, code,
                     timeout=_TIMEOUT_FAST, default=None,
                     op_name=f"north_{code}",
+                    quiet_errors=True,
                 )
                 if df is None or len(df) == 0:
                     return None
@@ -4620,10 +4636,10 @@ def _refresh_holder_num_cache():
                 if processed % 200 == 0:
                     _save_cache(_HOLDER_NUM_CACHE, result)
 
-        # Zero-fill: 对 _bond_stock_codes 中无数据的股票填充 0
-        if not _bond_stock_codes:
-            _ensure_bond_stock_codes()
-        for code in _bond_stock_codes:
+        # Zero-fill: 对所有已知股票代码中无数据的股票填充 0
+        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
+        # 避免启动阶段 AKShare 信号量争用导致超时
+        for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
                     "holder_num": 0,
@@ -4698,10 +4714,10 @@ def _refresh_earnings_forecast_cache():
                 logger.debug(f"[DataEnrich] EarningsForecast: {date_str} failed: {e}")
                 continue
 
-        # Zero-fill: 对 _bond_stock_codes 中无数据的股票填充 None
-        if not _bond_stock_codes:
-            _ensure_bond_stock_codes()
-        for code in _bond_stock_codes:
+        # Zero-fill: 对所有已知股票代码中无数据的股票填充 None
+        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
+        # 避免启动阶段 AKShare 信号量争用导致超时
+        for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
                     "yoy_change_pct": None,
@@ -4750,10 +4766,10 @@ def _refresh_restricted_release_cache():
             if amount and amount > 0:
                 entry = result.setdefault(code, {"restricted_release_amount": 0})
                 entry["restricted_release_amount"] += amount
-        # Zero-fill: 对 _bond_stock_codes 中无数据的股票填充 0
-        if not _bond_stock_codes:
-            _ensure_bond_stock_codes()
-        for code in _bond_stock_codes:
+        # Zero-fill: 对所有已知股票代码中无数据的股票填充 0
+        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
+        # 避免启动阶段 AKShare 信号量争用导致超时
+        for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
                     "restricted_release_amount": 0,
