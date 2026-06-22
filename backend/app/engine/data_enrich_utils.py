@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -22,14 +23,29 @@ def _ensure_cache_dir() -> Path:
     return _CACHE_DIR
 
 
-def load_cache(path) -> Optional[dict]:
-    """Load a JSON cache file. Returns None if not found or corrupted."""
+def load_cache(path, ttl: Optional[float] = None) -> Optional[dict]:
+    """Load a JSON cache file. Returns None if not found, corrupted, or expired.
+
+    改进 (2025-06-20): 支持 TTL 过期检查。若提供 ttl 且缓存中的 _ts 字段
+    超过 ttl 秒，则返回 None 触发重新刷新。
+
+    Args:
+        path: 缓存文件路径
+        ttl: 可选的过期时间（秒）。None 表示不检查过期。
+    """
     try:
         p = Path(path)
         if not p.exists():
             return None
         with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # TTL 过期检查
+        if ttl is not None and isinstance(data, dict):
+            ts = data.get("_ts")
+            if ts is not None and (time.time() - ts) > ttl:
+                logger.info(f"[DataEnrich] Cache expired: {path} (ttl={ttl}s, age={int(time.time() - ts)}s)")
+                return None
+        return data
     except json.JSONDecodeError as e:
         logger.warning(f"[DataEnrich] Cache corrupted: {path} -> {e}")
         return None
@@ -76,22 +92,24 @@ def _sanitize_for_json(v):
 _DROP = ...
 
 
-def save_cache(path, data: dict) -> None:
+def save_cache(path, data: dict, preserve_ts: bool = False) -> None:
     """Atomically save data to a JSON cache file with _ts timestamp.
 
     递归清理所有嵌套结构（dict/list/tuple）中的 NaN/Inf，
     防止 json.dump 抛出 "Out of range float values are not JSON compliant"。
 
-    Bug5/Data5 修复：无论 data 中是否已有 _ts，都强制刷新为当前时间，
-    保证 cache_status() 用 _ts 判断新鲜度时永远反映"文件最近写入时间"。
+    性能2：原地修改 _ts 而非 {**data, "_ts": t} 创建新 dict（节省一次全量复制）。
+    @param preserve_ts: 若 True，保留 data 中已有的 _ts（不覆盖）。
+                        默认 False 始终刷新 _ts（保证新鲜度反映当前时间）。
     """
     if not data or not isinstance(data, dict):
         return
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        # 始终刷新 _ts（即使已存在也覆盖）— 见 docstring
-        data = {**data, "_ts": time.time()}
+        # 性能2：原地修改避免 dict spread（大 dict 时节省内存）
+        if not preserve_ts:
+            data["_ts"] = time.time()
         clean = _sanitize_for_json(data)
         # 移除 _DROP 哨兵对象（极少见：_ts 本身是 NaN 等极端情况）
         if isinstance(clean, dict) and _DROP in clean.values():
@@ -100,15 +118,49 @@ def save_cache(path, data: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False, separators=(",", ":"))
         tmp.replace(p)
+    except TypeError as e:
+        # Bug11: Ellipsis/Ellipsis-like 残留导致 JSON 序列化失败
+        # 记录警告并尝试移除所有非基础 Python 类型
+        logger.warning(f"[DataEnrich] Cache JSON serialize error (TypeError): {path} -> {e}")
+        try:
+            # 终极降级：过滤所有 _is_safe_for_json 的值
+            def _recurse_safe(v):
+                if isinstance(v, (str, int, float, bool, type(None))):
+                    return v
+                if isinstance(v, (list, tuple)):
+                    result = [_recurse_safe(x) for x in v
+                              if x is not _DROP and not isinstance(x, (type(Ellipsis), type(...)))]
+                    return result
+                if isinstance(v, dict):
+                    return {k: _recurse_safe(val) for k, val in v.items()
+                            if val is not _DROP and not isinstance(val, (type(Ellipsis), type(...)))}
+                return None
+            final_clean = _recurse_safe(clean)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(final_clean, f, ensure_ascii=False, separators=(",", ":"))
+            tmp.replace(p)
+            logger.warning(f"[DataEnrich] Save succeeded after Ellipsis filter for {path}")
+        except Exception as e2:
+            logger.error(f"[DataEnrich] Cache save failed even after Ellipsis filter: {path} -> {e2}")
     except Exception as e:
         logger.warning(f"[DataEnrich] Cache save error: {path} -> {e}")
 
 
-def fresh(ttl: int, data) -> bool:
-    """Check if cached data is still fresh within TTL (seconds)."""
+def fresh(ttl: int, data, cache_path=None) -> bool:
+    """Check if cached data is still fresh within TTL (seconds).
+
+    If data has no _ts but cache_path is provided, fall back to the file's mtime.
+    """
     if data is None:
         return False
     ts = data.get("_ts", 0) if isinstance(data, dict) else 0
+    if not ts and cache_path is not None:
+        try:
+            p = Path(cache_path)
+            if p.exists():
+                ts = p.stat().st_mtime
+        except Exception:
+            pass
     return time.time() - ts < ttl
 
 
@@ -147,6 +199,138 @@ def safe_str(v) -> str:
         return ""
 
 
+# ── 跨进程共享 metrics 文件读写（带文件锁） ──
+# data_enrich.py 主进程与 data_enrich_runner.py 子进程都会写入 refresh_metrics.json，
+# 必须用锁避免并发写导致 JSON 损坏。
+
+def _lock_file_path(path: Path) -> Path:
+    """返回与目标文件配套的锁文件路径。"""
+    return path.with_suffix(path.suffix + ".lock")
+
+
+def _acquire_file_lock(lock_path: Path, timeout: float = 5.0):
+    """尝试获取文件锁，返回一个应在 with 语句中使用的对象。
+
+    优先使用 portalocker；不可用时在 Unix 上用 fcntl.flock；Windows 无 fcntl
+    时退化为基于锁文件存在的忙等待（可靠性较低，但避免崩溃）。
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import portalocker
+        f = open(lock_path, "w")
+        portalocker.lock(f, portalocker.LOCK_EX, timeout=timeout)
+        return f
+    except Exception:
+        pass
+    if hasattr(os, "O_EXLOCK"):
+        # BSD/macOS 专用：打开时直接加排他锁
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_EXLOCK)
+        return _BSDLock(fd)
+    try:
+        import fcntl
+        f = open(lock_path, "w")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        return f
+    except Exception:
+        # 最终降级：通过锁文件存在性做简单互斥（不 robust，但比直接并发写好）
+        return _FallbackLock(lock_path, timeout=timeout)
+
+
+class _BSDLock:
+    def __init__(self, fd: int):
+        self._fd = fd
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            os.close(self._fd)
+        except Exception:
+            pass
+
+
+class _FallbackLock:
+    def __init__(self, lock_path: Path, timeout: float = 5.0):
+        self.lock_path = lock_path
+        self.timeout = timeout
+
+    def __enter__(self):
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                # 独占创建锁文件；若已存在则等待
+                fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.close(fd)
+                return self
+            except FileExistsError:
+                if time.time() > deadline:
+                    return self  # 超时不再等待，直接执行
+                time.sleep(0.05)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if self.lock_path.exists():
+                self.lock_path.unlink()
+        except Exception:
+            pass
+
+
+def record_refresh_metric(
+    metrics_file: Path,
+    name: str,
+    elapsed_s: float,
+    count: int,
+    status: str = "ok",
+    error: str = "",
+    extra: Optional[dict] = None,
+) -> None:
+    """向共享 metrics 文件写入/更新一条刷新指标。
+
+    该函数被 data_enrich.py 主进程和 data_enrich_runner.py 子进程共同使用，
+    通过文件锁保证并发安全。_inproc 内部实现条目会被过滤。
+    """
+    if "_inproc" in name:
+        return
+    metrics_file = Path(metrics_file)
+    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _lock_file_path(metrics_file)
+    entry = {
+        "name": name,
+        "elapsed_s": round(elapsed_s, 2),
+        "count": int(count),
+        "status": status,
+        "error": error[:200] if error else "",
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+    }
+    if extra:
+        entry.update(extra)
+
+    with _acquire_file_lock(lock_path, timeout=5.0):
+        try:
+            data = load_cache(metrics_file) or {}
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[name] = entry
+        try:
+            save_cache(metrics_file, data, preserve_ts=True)
+        except Exception as e:
+            logger.warning(f"[Metrics] Failed to save {metrics_file}: {e}")
+
+
+def load_refresh_metrics(metrics_file: Path) -> dict:
+    """加载共享 metrics 文件，返回 name -> entry 的 dict（不含 _ts）。"""
+    try:
+        data = load_cache(metrics_file)
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, dict)}
+    except Exception as e:
+        logger.debug(f"[Metrics] Failed to load {metrics_file}: {e}")
+        return {}
+
 
 # ── 完整性保护：导入时自检 ──
 # 防 AGENTS.md Rule 关于 linter/外部工具损坏文件的回归：
@@ -155,11 +339,10 @@ def safe_str(v) -> str:
 _REQUIRED_EXPORTS = frozenset({
     "load_cache", "save_cache", "fresh",
     "safe_float", "safe_int", "safe_str",
+    "record_refresh_metric", "load_refresh_metrics",
 })
 
 
-# 函数签名要求：每个导出函数必须至少有指定数量的位置参数。
-# 防止 linter 将 `safe_float(v, default=None)` 改为 `safe_float()` 而不报错。
 _REQUIRED_SIGNATURES: dict[str, int] = {
     "load_cache": 1,   # (path)
     "save_cache": 2,   # (path, data)
@@ -167,6 +350,8 @@ _REQUIRED_SIGNATURES: dict[str, int] = {
     "safe_float": 1,   # (v, ...) — 至少 1 个位置参数
     "safe_int": 1,     # (v, ...) — 至少 1 个位置参数
     "safe_str": 1,     # (v) — 至少 1 个位置参数
+    "record_refresh_metric": 2,  # (metrics_file, name)
+    "load_refresh_metrics": 1,   # (metrics_file)
 }
 
 

@@ -1,15 +1,32 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Card, Table, Tag, Progress, Spin, Typography, Space, Button, Tooltip, Empty } from 'antd'
-import { ReloadOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import { ReloadOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 
 const { Title, Text } = Typography
+
+// 监听 prefers-reduced-motion 偏好变化（不只在模块加载时检查）
+// 用户运行时切换系统设置也能响应
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e: MediaQueryListEvent) => setReduced(e.matches)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+  return reduced
+}
 
 interface MetricEntry {
   name: string
   elapsed_s: number
   count: number
-  status: 'ok' | 'empty' | 'error'
+  status: 'ok' | 'pending' | 'empty' | 'error'
   error?: string
   ts: string
   bond_count?: number
@@ -55,7 +72,6 @@ const NAME_MAP: Record<string, string> = {
   _build_industry_cache: '行业分类',
   _refresh_spot_cache: '现货行情(PE/PB)',
   _refresh_fund_flow_cache: '资金流向',
-  _refresh_fund_flow_from_spot_em: '资金流向(EM)',
   _refresh_fin_cache: '财务数据(ROE/GPM)',
   _refresh_debt_cache: '负债率/流动比率',
   _refresh_volatility_cache: '波动率',
@@ -69,6 +85,16 @@ const NAME_MAP: Record<string, string> = {
   _refresh_bond_outstanding_cache: '剩余规模',
   _refresh_call_status_cache: '强赎状态',
   _refresh_stock_name_cache: '正股名称',
+  _refresh_coupon_rate_cache: '票面利率',
+  // 扩展数据源
+  _refresh_earnings_express_cache: '业绩快报',
+  _refresh_north_cache: '北向资金',
+  _refresh_margin_cache: '融资融券',
+  _refresh_lhb_cache: '龙虎榜',
+  _refresh_block_trade_cache: '大宗交易',
+  _refresh_holder_num_cache: '股东人数',
+  _refresh_earnings_forecast_cache: '业绩预告',
+  _refresh_restricted_release_cache: '限售解禁',
 }
 
 function formatName(n: string): string {
@@ -91,11 +117,13 @@ function timeAgo(isoTs: string): string {
   } catch { return '-' }
 }
 
-const STATUS_CFG: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
-  ok: { color: 'green', icon: <CheckCircleOutlined />, text: '正常' },
-  empty: { color: 'orange', icon: <WarningOutlined />, text: '空数据' },
-  error: { color: 'red', icon: <CloseCircleOutlined />, text: '异常' },
-}
+// 检测用户系统是否启用"减少动画"偏好（无障碍设置）
+const STATUS_CFG_BASE = {
+  ok: { color: 'green', text: '正常', Icon: CheckCircleOutlined },
+  empty: { color: 'orange', text: '空数据', Icon: WarningOutlined },
+  error: { color: 'red', text: '异常', Icon: CloseCircleOutlined },
+  pending: { color: 'blue', text: '等待中', Icon: SyncOutlined },
+} as const
 
 function Stat({ label, value, color }: { label: string; value: number; color?: string }) {
   return (
@@ -107,6 +135,19 @@ function Stat({ label, value, color }: { label: string; value: number; color?: s
 }
 
 export default function DataSourceMonitor() {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  // 动态构建 STATUS_CFG：根据 reduced-motion 偏好决定 pending 图标是否旋转
+  // useMemo 避免每次 render 重新创建对象，降低 reconciliation 开销
+  const STATUS_CFG = useMemo((): Record<string, { color: string; icon: React.ReactNode; text: string }> => ({
+    ok: { color: STATUS_CFG_BASE.ok.color, icon: <STATUS_CFG_BASE.ok.Icon />, text: STATUS_CFG_BASE.ok.text },
+    pending: {
+      color: STATUS_CFG_BASE.pending.color,
+      icon: <STATUS_CFG_BASE.pending.Icon spin={!prefersReducedMotion} />,
+      text: STATUS_CFG_BASE.pending.text,
+    },
+    empty: { color: STATUS_CFG_BASE.empty.color, icon: <STATUS_CFG_BASE.empty.Icon />, text: STATUS_CFG_BASE.empty.text },
+    error: { color: STATUS_CFG_BASE.error.color, icon: <STATUS_CFG_BASE.error.Icon />, text: STATUS_CFG_BASE.error.text },
+  }), [prefersReducedMotion])
   const [data, setData] = useState<MetricsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
@@ -204,10 +245,10 @@ export default function DataSourceMonitor() {
       key: 'status',
       width: 100,
       render: (status: MetricEntry['status'], row) => {
-        const cfg = STATUS_CFG[status] || STATUS_CFG.empty
+        const cfg = STATUS_CFG_BASE[status] || STATUS_CFG_BASE.empty
         return (
           <Tooltip title={row.error || undefined}>
-            <Tag color={row.stale ? 'default' : cfg.color} icon={cfg.icon}>
+            <Tag color={row.stale ? 'default' : cfg.color} icon={<cfg.Icon />}>
               {row.stale ? '过期' : cfg.text}
             </Tag>
           </Tooltip>
@@ -270,6 +311,7 @@ export default function DataSourceMonitor() {
 
   const totalSources = rows.length
   const okCount = rows.filter(r => r.status === 'ok' && !r.stale).length
+  const pendingCount = rows.filter((r: any) => r.status === 'pending').length
   const emptyCount = rows.filter(r => r.status === 'empty').length
   const errorCount = rows.filter(r => r.status === 'error').length
   const staleCount = rows.filter(r => r.stale).length
@@ -284,6 +326,9 @@ export default function DataSourceMonitor() {
         <Space size="middle">
           <Card size="small"><Stat label="数据源" value={totalSources} /></Card>
           <Card size="small"><Stat label="正常" value={okCount} color="#52c41a" /></Card>
+          {pendingCount > 0 && (
+            <Card size="small"><Stat label="等待中" value={pendingCount} color="#1890ff" /></Card>
+          )}
           <Card size="small"><Stat label="空数据" value={emptyCount} color="#fa8c16" /></Card>
           <Card size="small"><Stat label="异常" value={errorCount} color="#ff4d4f" /></Card>
           {staleCount > 0 && (

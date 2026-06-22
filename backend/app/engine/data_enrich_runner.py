@@ -51,6 +51,8 @@ from datetime import datetime
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
+from app.engine.data_enrich_utils import load_cache, save_cache, fresh, safe_float, safe_int, safe_str, record_refresh_metric
+
 logger = logging.getLogger("data_enrich_runner")
 
 # 安装AKShare代理补丁(解锁东方财富API) - 从 settings 读取
@@ -87,6 +89,43 @@ else:
 
 _CACHE_DIR = Path(os.environ.get("HOME", ".")) / ".lianghua" / "data_cache"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+_METRICS_FILE = _CACHE_DIR / "refresh_metrics.json"
+
+# 函数名到 metrics name 的映射（runner 内部函数名可能与 data_enrich.py 不同）
+_METRICS_NAME_MAP = {
+    "_build_industry_cache": "_build_industry_cache",
+    "_refresh_spot_cache": "_refresh_spot_cache",
+    "_refresh_fin_cache": "_refresh_fin_cache",
+    "_refresh_fund_flow_cache": "_refresh_fund_flow_cache",
+    "_refresh_debt_cache": "_refresh_debt_cache",
+    "_refresh_volatility_cache": "_refresh_volatility_cache",
+    "_refresh_buyback_cache": "_refresh_buyback_cache",
+    "_refresh_mgmt_cache": "_refresh_mgmt_cache",
+    "_refresh_bond_outstanding_cache": "_refresh_bond_outstanding_cache",
+    "_refresh_call_status_cache": "_refresh_call_status_cache",
+    "_refresh_bond_price_cache": "_refresh_bond_price_cache",
+    "_refresh_pledge_cache": "_refresh_pledge_cache",
+    "_refresh_momentum_cache": "_refresh_momentum_cache",
+    "_refresh_event_cache": "_refresh_event_cache",
+    "_refresh_stock_names_cache": "_refresh_stock_name_cache",
+    "_build_concept_cache": "_build_concept_cache",
+    "_refresh_north_cache": "_refresh_north_cache",
+    "_refresh_margin_cache": "_refresh_margin_cache",
+    "_refresh_lhb_cache": "_refresh_lhb_cache",
+    "_refresh_block_trade_cache": "_refresh_block_trade_cache",
+    "_refresh_holder_num_cache": "_refresh_holder_num_cache",
+    "_refresh_earnings_forecast_cache": "_refresh_earnings_forecast_cache",
+    "_refresh_earnings_express_cache": "_refresh_earnings_express_cache",
+    "_refresh_restricted_release_cache": "_refresh_restricted_release_cache",
+}
+
+
+def _record_runner_metric(fn_name: str, elapsed_s: float, count: int, status: str = "ok", error: str = ""):
+    """runner 子进程刷新完成后记录指标到共享 metrics 文件。"""
+    metric_name = _METRICS_NAME_MAP.get(fn_name, fn_name)
+    record_refresh_metric(_METRICS_FILE, metric_name, elapsed_s, count, status, error)
+
 
 _CACHE_FILES = {
     "industry": _CACHE_DIR / "stock_industry.json",
@@ -254,90 +293,13 @@ def _try_tdx_vol_fallback(codes: list[str], vol_map: dict):
         logger.info(f"[TDX] Vol: filled for {filled} stocks")
 
 
-def _load_cache(path: Path) -> dict | None:
-    try:
-        if path.exists():
-            with open(path, "r") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
-
-
-def _save_cache(path: Path, data: dict):
-    """原子写入缓存：先写 .tmp 再 rename，避免部分写入损坏完整数据"""
-    try:
-        payload = dict(data)
-        payload["_ts"] = time.time()
-        # Clean NaN values and sanitize strings
-        def _clean(o):
-            if isinstance(o, dict):
-                return {k: _clean(v) for k, v in o.items()}
-            if isinstance(o, list):
-                return [_clean(v) for v in o]
-            if isinstance(o, float) and (o != o or o == float("inf") or o == float("-inf")):
-                return None
-            if isinstance(o, str):
-                return o.replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("\\n", " ").strip()
-            return o
-        payload = _clean(payload)
-        tmp_path = path.with_suffix(".json.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
-        tmp_path.replace(path)  # Atomic rename
-    except Exception as e:
-        logger.warning(f"Cache save failed for {path.name}: {e}")
-
-
-def _fresh(ttl: int, data, cache_path: str | None = None) -> bool:
-    """判断缓存数据是否仍在 TTL 内。
-    
-    优先检查 data['_ts']；
-    无 _ts 时 fallback 到磁盘文件 mtime（需提供 cache_path）；
-    都无法判断时视为不新鲜（需要刷新）。
-    """
-    if data is None:
-        return False
-    ts = data.get("_ts", 0) if isinstance(data, dict) else 0
-    if ts > 0:
-        return time.time() - ts < ttl
-    # 无 _ts：尝试 fallback 到磁盘文件 mtime
-    # 注意：如果 runner 子进程正在并发写入该文件，mtime 可能反映写入中的时间戳，
-    # 导致误判为"新鲜"。不过 _load_cache() 已有 try/except 处理 JSON 解析错误，
-    # 所以实际风险较低——最坏情况下会多等一个 TTL 周期再刷新。
-    if cache_path:
-        try:
-            mtime = os.path.getmtime(cache_path)
-            if mtime > 0 and time.time() - mtime < ttl:
-                return True
-        except OSError:
-            pass
-    # 既无 _ts 又无 mtime，视为不新鲜
-    return False
-
-
-def _safe_float(v, default=0.0) -> float | None:
-    if v is None or v == "" or (isinstance(v, float) and v != v):
-        return default
-    try:
-        fv = float(v)
-        if fv != fv or fv == float("inf") or fv == float("-inf"):
-            return default
-        return fv
-    except (ValueError, TypeError):
-        return default
-
-
-def _safe_str(v) -> str:
-    """Safely convert any value to a stripped string; returns '' for None/NaN."""
-    if v is None:
-        return ''
-    if isinstance(v, float) and v != v:
-        return ''
-    try:
-        return str(v).strip()
-    except Exception:
-        return ''
+# ── 共享工具函数别名（从 data_enrich_utils 导入，保持 _ 前缀向后兼容）──
+_load_cache = load_cache
+_save_cache = save_cache
+_fresh = fresh
+_safe_float = safe_float
+_safe_str = safe_str
+_safe_int = safe_int
 
 
 # ============================================================
@@ -501,14 +463,20 @@ def _refresh_spot_cache():
                     if price is None or price <= 0:
                         if pe is None or pe <= 0:
                             continue
+                    tencent_volume = _safe_float(fields[6])  # 成交量 (shares)
+                    tencent_amount = _safe_float(fields[37]) if len(fields) > 37 else None  # 成交额 (yuan)
                     out[code] = {
                         "price": price,
                         "open": _safe_float(fields[5]),
                         "high": _safe_float(fields[33]) if len(fields) > 33 else None,
                         "low": _safe_float(fields[34]) if len(fields) > 34 else None,
                         "change_pct": _safe_float(fields[32]) if len(fields) > 32 else None,
-                        "volume": _safe_float(fields[6]),
-                        "amount": _safe_float(fields[37]) if len(fields) > 37 else None,
+                        # NOTE: "volume" means 成交额 (yuan), NOT 成交量 (shares).
+                        # Main process (data_enrich.py) stores 成交额 from Sina under "volume".
+                        # Subprocess must match this schema, otherwise consumers
+                        # (market.py, seed_duckdb.py) get share counts instead of yuan.
+                        "volume": tencent_amount if tencent_amount is not None else tencent_volume,
+                        "amount": tencent_amount if tencent_amount is not None else tencent_volume,
                         "pe": pe if pe and 0 < pe < 1000 else None,
                         "pb": _safe_float(fields[46]) if len(fields) > 46 and 0 < _safe_float(fields[46]) < 100 else None,
                         "turnover_rate": _safe_float(fields[38]) if len(fields) > 38 else None,
@@ -968,12 +936,17 @@ def _refresh_mgmt_cache():
 
     # Source 1 (primary): EM stock_hold_management_detail_em (董监高交易 - 含成交均价)
     # 该接口覆盖近 1 年所有董监高交易明细,在沙盒/CI 上仍可访问
+    # 只保留增持/买入方向，排除减持/卖出（否则减持高价会误导选股）
     try:
         df_em_detail = ak.stock_hold_management_detail_em()
         count_before = len(result)
         for _, r in df_em_detail.iterrows():
             code = str(r.get("代码", "")).strip()
             if len(code) != 6 or not code.isdigit():
+                continue
+            # 过滤方向：只保留增持/买入
+            direction = str(r.get("变动方向", "")).strip()
+            if direction and direction not in ("增持", "买入", "新增", "净增持"):
                 continue
             price = _safe_float(r.get("成交均价", None))
             if code and price and price > 0:
@@ -997,7 +970,13 @@ def _refresh_mgmt_cache():
     # Source 2 (fallback): EM stock_ggcg_em (股东增减持变动,用最新价作为参考)
     if len(result) < 200:
         try:
-            df_ggcg = ak.stock_ggcg_em(symbol="全部")
+            # stock_ggcg_em 可能拉取 290 页数据极慢，加 timeout 保护
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(ak.stock_ggcg_em, symbol="全部")
+                df_ggcg = future.result(timeout=60)
+            if df_ggcg is None:
+                raise TimeoutError("stock_ggcg_em returned None")
             count_before = len(result)
             for _, r in df_ggcg.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -2820,10 +2799,20 @@ def _refresh_north_cache():
                 logger.warning(f"[North] HOLDRANKS fallback failed: {e}")
 
         # 6. 北向持股估算 — 对于仍无个股数据的,从 spot 缓存流通市值估算
-        # 北向资金平均持股约占流通市值的 3-5%，使用保守 3% 作为估算
+        # 使用已获取的实际 hold_ratio 中位数替代硬编码 3%，提高估算准确性
         _actual_indiv = sum(1 for k in result if not k.startswith('summary_'))
         if _actual_indiv < 200 and all_a_codes:
-            logger.info(f"[North] Estimating north holdings for {len(all_a_codes)} stocks (insufficient API data)")
+            # 从已有个股数据中计算实际持股比例中位数
+            _actual_ratios = [v.get("hold_ratio", 0) for v in result.values()
+                              if isinstance(v, dict) and v.get("hold_ratio") and not v.get("_estimated")]
+            _median_ratio = 3.0  # 默认保守值
+            if _actual_ratios:
+                import statistics
+                _median_ratio = statistics.median(_actual_ratios)
+                logger.info(f"[North] Using actual hold_ratio median: {_median_ratio:.2f}% (from {len(_actual_ratios)} stocks)")
+            else:
+                logger.info(f"[North] No actual hold_ratio data, using default {_median_ratio}%")
+
             spot_data = _load_cache(_CACHE_FILES.get("spot", "")) or {}
             for code in all_a_codes:
                 if code in result and not result[code].get("_summary"):
@@ -2831,19 +2820,19 @@ def _refresh_north_cache():
                 sp = spot_data.get(code, {})
                 if not isinstance(sp, dict):
                     continue
-                # 估算: hold_market_cap ≈ 流通市值 * 3%
+                # 估算: hold_market_cap ≈ 流通市值 * 实际中位数持股比例
                 vol = sp.get("volume")
                 tr = sp.get("turnover_rate")
                 price = sp.get("price")
                 if vol and tr and tr > 0 and price:
                     circ_mv = vol / (tr / 100)
-                    est_hold_cap = circ_mv * 0.03
+                    est_hold_cap = circ_mv * (_median_ratio / 100)
                     est_shares = est_hold_cap / price / 10000  # 万股
                     result[code] = {
                         "code": code, "type": "北向",
                         "hold_shares": round(est_shares, 2),
                         "hold_market_cap": round(est_hold_cap, 2),
-                        "hold_ratio": 3.0,
+                        "hold_ratio": round(_median_ratio, 2),
                         "_estimated": True,
                     }
             est_count = sum(1 for k, v in result.items() if isinstance(v, dict) and v.get("_estimated"))
@@ -3163,6 +3152,11 @@ def _refresh_lhb_cache():
         # 2. 机构买卖统计（补充视角：按机构维度汇总）
         try:
             df_jg = ak.stock_lhb_jgstatistic_em()
+            # 首次运行时记录样本列名，便于调试列名变化
+            if len(df_jg) > 0:
+                logger.info(f"[LHB] jg_statistic columns: {list(df_jg.columns)}")
+                sample = df_jg.iloc[0].to_dict()
+                logger.debug(f"[LHB] jg_statistic sample: {sample}")
             jg_count = 0
             for _, r in df_jg.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -3486,13 +3480,6 @@ def _infer_concepts_from_name(stock_name: str, stock_code: str) -> list[str]:
 
 
 
-def _safe_int(v, default=0):
-    if v is None or v == "" or (isinstance(v, float) and v != v):
-        return default
-    try:
-        return int(float(v))
-    except (ValueError, TypeError):
-        return default
 
 
 # ============================================================
@@ -3763,6 +3750,9 @@ def _refresh_earnings_forecast_cache():
                     periods.append(p)
         if not periods:
             periods = [f"{_year-1}1231", f"{_year-1}0930", f"{_year-1}0630", f"{_year-1}0331"]
+            logger.warning(f"[EarnForecast] Dynamic periods empty (year={_year}, month={_month}), using fallback")
+        else:
+            logger.info(f"[EarnForecast] Using {len(periods)} dynamic periods: {periods[:4]}...")
 
         for period in periods:
             try:
@@ -3835,6 +3825,9 @@ def _refresh_earnings_express_cache():
                     periods.append(p)
         if not periods:
             periods = [f"{_year-1}1231", f"{_year-1}0930", f"{_year-1}0630", f"{_year-1}0331"]
+            logger.warning(f"[EarnExpress] Dynamic periods empty (year={_year}, month={_month}), using fallback")
+        else:
+            logger.info(f"[EarnExpress] Using {len(periods)} dynamic periods: {periods[:4]}...")
 
         for period in periods:
             try:
@@ -4133,19 +4126,25 @@ def main():
 
     logger.info(f"Starting {len(tasks)} data enrichment tasks...")
     for name, fn in tasks:
+        t0 = time.time()
         try:
             logger.info(f"[{name}] Starting...")
             count = fn()
+            elapsed = time.time() - t0
             logger.info(f"[{name}] Done: {count}")
+            _record_runner_metric(fn.__name__, elapsed, count if isinstance(count, int) else 0, status="ok")
         except KeyboardInterrupt:
             logger.warning(f"[{name}] Interrupted")
+            _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error="interrupted")
             break
         except SystemExit:
             raise
         except Exception as e:
             logger.error(f"[{name}] Failed: {e}")
+            _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error=str(e)[:200])
         except:  # noqa: E722 - Catch segfault/OS errors
             logger.error(f"[{name}] Crashed (possible AKShare segfault)")
+            _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error="segfault/os crash")
 
     logger.info("All enrichment tasks completed")
 

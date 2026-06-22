@@ -150,6 +150,7 @@ import datetime
 import math
 import asyncio
 import logging
+import logging.handlers  # 用于 RotatingFileHandler (见 setup_logging())
 import signal
 import threading
 import time
@@ -242,8 +243,9 @@ def setup_logging():
         log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "lianghua.log"
 
-    # 文件handler
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # 文件handler（自动轮转：50MB，保留5个备份）
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=50_000_000, backupCount=5, encoding='utf-8')
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -554,52 +556,28 @@ async def lifespan(app: FastAPI):
                 logger.error(f"[Startup] Engine start failed: {e}")
 
             # 数据增强在子进程中运行（AKShare C扩展 segfault 不杀死主进程）
+            # 仅把最高风险的 spot / vol / fund_flow / bond_price 放在 runner 中，
+            # 其余缓存由主进程 start_background_refresh 负责，避免重复刷新和 metrics 丢失。
+            _enrich_procs: list[subprocess.Popen] = []
             try:
                 import subprocess, sys
                 runner_script = str(Path(__file__).parent / "engine" / "data_enrich_runner.py")
                 _enrich_log_dir = Path.home() / ".lianghua" / "logs"
                 _enrich_log_dir.mkdir(parents=True, exist_ok=True)
-                cmd = [sys.executable, runner_script, "--industry", "--fin", "--debt", "--stock-names", "--outstanding", "--call-status", "--pledge", "--buyback", "--mgmt", "--north", "--margin", "--lhb", "--block-trade", "--holder-num", "--earnings-forecast", "--earnings-express", "--restricted-release", "--bond-price"]
-                _enrich1_log = open(_enrich_log_dir / "enrich1.log", "a")
-                subprocess.Popen(
+                cmd = [sys.executable, runner_script, "--spot", "--vol", "--fund-flow", "--bond-price"]
+                _enrich_log = open(_enrich_log_dir / "enrich_runner.log", "a")
+                p = subprocess.Popen(
                     cmd,
                     cwd=str(Path(__file__).parent.parent),
-                    stdout=_enrich1_log,
-                    stderr=_enrich1_log,
+                    stdout=_enrich_log,
+                    stderr=_enrich_log,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
                 )
-                logger.info("[Startup] DataEnrich subprocess 1 started (industry/fin/debt/names/outstanding/call-status/pledge/buyback/mgmt/north/margin/lhb/block-trade/holder-num/earnings)")
+                _enrich_procs.append(p)
+                logger.info("[Startup] DataEnrich runner subprocess started (spot/vol/fund-flow/bond-price)")
             except Exception as e:
-                logger.warning(f"[Startup] DataEnrich subprocess start failed: {e}")
-
-            # Also start a second enrichment subprocess for momentum + event + concept
-            try:
-                cmd2 = [sys.executable, runner_script, "--momentum", "--event", "--concept"]
-                _enrich2_log = open(_enrich_log_dir / "enrich2.log", "a")
-                subprocess.Popen(
-                    cmd2,
-                    cwd=str(Path(__file__).parent.parent),
-                    stdout=_enrich2_log,
-                    stderr=_enrich2_log,
-                )
-                logger.info("[Startup] DataEnrich subprocess 2 started (momentum/event/concept)")
-            except Exception as e:
-                logger.warning(f"[Startup] DataEnrich subprocess start failed: {e}")
-
-            
-
-            # Start a third enrichment subprocess for spot + vol + fund_flow
-            try:
-                cmd3 = [sys.executable, runner_script, "--spot", "--vol", "--fund-flow", "--bond-price"]
-                _enrich3_log = open(_enrich_log_dir / "enrich3.log", "a")
-                subprocess.Popen(
-                    cmd3,
-                    cwd=str(Path(__file__).parent.parent),
-                    stdout=_enrich3_log,
-                    stderr=_enrich3_log,
-                )
-                logger.info("[Startup] DataEnrich subprocess 3 started (spot/vol/fund-flow/bond-price)")
-            except Exception as e:
-                logger.warning(f"[Startup] DataEnrich subprocess 3 start failed: {e}")
+                logger.warning(f"[Startup] DataEnrich runner subprocess start failed: {e}")
 
             # 延迟刷新模拟盘持仓价格（轮询等待 MarketEngine 有行情数据后再刷新）
             async def _delayed_refresh_paper_positions():
@@ -722,8 +700,8 @@ async def log_requests(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 app.include_router(router, prefix="/api/v1")
 
@@ -798,6 +776,8 @@ def _health_response() -> dict:
         "version": _settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
+        # NOTE: ws_auth_token 仅在 127.0.0.1 本地暴露。
+        # 若将来开放远程访问，必须移除此字段或加鉴权保护，否则可被 SSRF 窃取。
         "ws_auth_token": _settings.ws_auth_token,
     }
 

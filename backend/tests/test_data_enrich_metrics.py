@@ -5,6 +5,7 @@ view of cache refresh functions, without stale `_inproc` entries or conflicting
 registrations.
 """
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -107,11 +108,10 @@ class TestStartBackgroundRefreshSchedule:
     """Verify that start_background_refresh dispatches the right refresh functions."""
 
     @pytest.mark.asyncio
-    async def test_spot_cache_is_dispatched_in_process(self):
-        """_spot_then_vol_then_bond must be dispatched in-process so the monitor does
-        not stay in pending/error if the runner subprocess fails.
-        Note: _refresh_spot_cache itself runs in the data_enrich_runner subprocess,
-        but the chained _spot_then_vol_then_bond is dispatched in the main process.
+    async def test_runner_caches_are_loaded_in_process(self):
+        """_load_runner_caches_with_fallback must be dispatched in-process so the monitor
+        can load runner-produced caches (spot/vol/fund_flow/bond_price) and fall back
+        to in-process refresh only if the runner output is missing.
         """
         dispatched = set()
         original_run_in_executor = asyncio.get_event_loop().run_in_executor
@@ -132,8 +132,8 @@ class TestStartBackgroundRefreshSchedule:
                     except Exception:
                         pass
 
-        assert "_spot_then_vol_then_bond" in dispatched, (
-            f"_spot_then_vol_then_bond was not dispatched. Dispatched: {dispatched}"
+        assert "_load_runner_caches_with_fallback" in dispatched, (
+            f"_load_runner_caches_with_fallback was not dispatched. Dispatched: {dispatched}"
         )
 
     @pytest.mark.asyncio
@@ -276,7 +276,7 @@ class TestDataSourceApiCalls:
         de._bond_stock_codes = {"000001"}
         # Bypass threading/semaphore in _run_with_timeout to make tests deterministic
         self._orig_run_with_timeout = de._run_with_timeout
-        def _direct_run(fn, *args, timeout=30.0, default=None, op_name=""):
+        def _direct_run(fn, *args, timeout=30.0, default=None, op_name="", quiet_errors=False):
             try:
                 return fn(*args)
             except Exception:
@@ -352,4 +352,34 @@ class TestDataSourceApiCalls:
         assert not mock_queue.called, "Per-stock queue endpoint should not be used"
         kwargs = mock_detail.call_args.kwargs
         assert "start_date" in kwargs and "end_date" in kwargs, f"Missing date range: {kwargs}"
+
+    def test_mgmt_cache_skips_cninfo_by_default(self):
+        """cninfo 接口默认应被跳过（macOS 沙盒不兼容），仅使用 EM 数据源。"""
+        df_em_detail = pd.DataFrame({"代码": ["000001"], "变动方向": ["增持"], "成交均价": [10.5]})
+        df_em_ggcg = pd.DataFrame({"代码": ["000002"], "持股变动信息-增减": ["增持"], "成交均价": [20.5]})
+        with patch.object(de.ak, "stock_hold_management_detail_em", return_value=df_em_detail) as mock_em_detail:
+            with patch.object(de.ak, "stock_ggcg_em", return_value=df_em_ggcg) as mock_ggcg:
+                with patch.object(de.ak, "stock_hold_management_detail_cninfo") as mock_cninfo:
+                    de._refresh_mgmt_cache()
+        assert mock_em_detail.called, "Expected EM detail to be called"
+        assert mock_ggcg.called, "Expected EM ggcg to be called"
+        assert not mock_cninfo.called, "cninfo should be skipped by default (LH_MGMT_TRY_CNINFO not set)"
+        assert de._mgmt_map.get("000001") == 10.5
+        assert de._mgmt_map.get("000002") == 20.5
+
+    def test_mgmt_cache_falls_back_to_em_when_cninfo_fails(self):
+        """当 LH_MGMT_TRY_CNINFO=1 且 cninfo 抛出 dlsym 错误时，EM 数据应保留。"""
+        df_em_detail = pd.DataFrame({"代码": ["000001"], "变动方向": ["增持"], "成交均价": [10.5]})
+        df_em_ggcg = pd.DataFrame({"代码": ["000002"], "持股变动信息-增减": ["增持"], "成交均价": [20.5]})
+        with patch.dict(os.environ, {"LH_MGMT_TRY_CNINFO": "1"}):
+            with patch.object(de.ak, "stock_hold_management_detail_em", return_value=df_em_detail) as mock_em_detail:
+                with patch.object(de.ak, "stock_ggcg_em", return_value=df_em_ggcg) as mock_ggcg:
+                    with patch.object(de.ak, "stock_hold_management_detail_cninfo",
+                                      side_effect=OSError("dlsym(RTLD_DEFAULT, init_mini_racer): symbol not found")) as mock_cninfo:
+                        de._refresh_mgmt_cache()
+        assert mock_em_detail.called, "Expected EM detail to be called"
+        assert mock_ggcg.called, "Expected EM ggcg to be called"
+        assert mock_cninfo.called, "cninfo should be attempted when LH_MGMT_TRY_CNINFO=1"
+        assert de._mgmt_map.get("000001") == 10.5, "EM data should be preserved even when cninfo fails"
+        assert de._mgmt_map.get("000002") == 20.5, "EM ggcg data should be preserved even when cninfo fails"
 
