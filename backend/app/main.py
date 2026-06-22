@@ -163,15 +163,28 @@ from contextlib import asynccontextmanager
 # 抑制 py_mini_racer (cninfo 数据源) 的 mr_free_context GC 错误
 # 该错误在 macOS Electron 沙盒中频繁触发但不影响功能
 # sys.excepthook 无法拦截 GC __del__ 中的异常，需直接 patch 类方法
+# 扩展异常列表以覆盖 FATAL Check failed 类型的 C 级别 abort
 try:
     import py_mini_racer
     _original_del = py_mini_racer.MiniRacer.__del__
     def _quiet_del(self):
         try:
             _original_del(self)
-        except (AttributeError, TypeError):
-            pass  # 静默处理 mr_free_context 等清理错误
+        except (AttributeError, TypeError, RuntimeError, Exception):
+            pass  # 静默处理 mr_free_context / address_pool_manager 等清理错误
     py_mini_racer.MiniRacer.__del__ = _quiet_del
+    # 同时 patch mini_racer 的 addresses 属性，确保 IsInitialized 错误被捕获
+    if hasattr(py_mini_racer, 'MiniRacer'):
+        _original_mr_init = getattr(py_mini_racer.MiniRacer, '__init__', None)
+        if _original_mr_init:
+            def _safe_init(self, *args, **kwargs):
+                try:
+                    return _original_mr_init(self, *args, **kwargs)
+                except Exception as e:
+                    if 'IsInitialized' in str(e) or 'pool' in str(e).lower():
+                        raise RuntimeError(f"mini_racer init blocked (sandbox): {e}")
+                    raise
+            py_mini_racer.MiniRacer.__init__ = _safe_init
 except (ImportError, AttributeError):
     pass  # py_mini_racer 不可用或已更新，跳过
 from fastapi import FastAPI, Request

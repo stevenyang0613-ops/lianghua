@@ -190,12 +190,16 @@ def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: s
     但 _runner 在 fn 完成（或异常）后一定会 release semaphore，避免泄漏。
 
     Args:
-        fn: 要执行的同步函数
+        fn: 要执行的同步函数（async def 会被拒绝，防止 coroutine 对象泄漏）
         timeout: 超时秒数（默认 30s）
         default: 超时后返回值（默认 None）
         op_name: 操作名称，用于日志
         quiet_errors: 已知易失败的接口（如 East Money 单股查询）报异常时降低日志级别为 DEBUG
     """
+    # AGENTS.md #51: 防御 async def 传入 _run_with_timeout
+    if asyncio.iscoroutinefunction(fn):
+        logger.error(f"[DataEnrich] {op_name or fn.__name__} is async def, cannot run in _run_with_timeout")
+        return default
     result_box = [default]
     error_box = [None]
     tb_box = [None]
@@ -994,7 +998,7 @@ def _refresh_spot_cache():
         df = ak.stock_zh_a_spot()
         if df is None or df.empty:
             logger.warning("[DataEnrich] stock_zh_a_spot returned empty, skipping spot refresh")
-            return
+            return 0
         all_codes = set()
         sina_map = {}
         for _, r in df.iterrows():
@@ -1462,10 +1466,12 @@ def _refresh_fin_cache():
         _save_cache(_FIN_CACHE, result)
         cagr_count = sum(1 for v in result.values() if isinstance(v, dict) and v.get("cagr") is not None)
         logger.info(f"[DataEnrich] Financial: {len(result)} stocks, {cagr_count} with CAGR")
+        return len(result)
     except Exception as e:
         logger.warning(f"[DataEnrich] Financial refresh failed: {e}", exc_info=True)
         if not _fin_map:
             _load_fin_cache()
+        return len(_fin_map) if _fin_map else 0
 
 
 @_with_metrics
@@ -1624,7 +1630,16 @@ def _refresh_volatility_cache():
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
             futures = [ex.submit(_fetch_one_vol, item) for item in sorted_stocks]
-            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            # AGENTS.md fix: as_completed 无 timeout 时，如果 AKShare 接口 hang 住，
+            # 线程池会无限等待。添加 180s 总超时，超时的 future 直接丢弃。
+            done, pending = concurrent.futures.wait(
+                futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+            )
+            if pending:
+                logger.warning(f"[DataEnrich] Volatility: {len(pending)} (of {len(futures)}) futures unfinished after 180s, keeping {len(done)}")
+                for fut in pending:
+                    fut.cancel()
+            for i, future in enumerate(done):
                 code, vol, em_failed = future.result()
                 if vol is not None:
                     result[code] = round(vol, 2)
@@ -1711,18 +1726,70 @@ def _refresh_mgmt_cache():
         if _mgmt_map:
             result.update(_mgmt_map)
 
-        # Source 1 (primary): EM stock_hold_management_detail_em
-        # 注意: EM 返回列名为 "代码" 而非 "证券代码"
-        # 只保留增持/买入方向，排除减持/卖出（否则减持高价会误导选股）
-        try:
-            df_em_detail = _run_with_timeout(
-                ak.stock_hold_management_detail_em,
-                timeout=180.0, default=None,
-                op_name="mgmt_em_detail",
-            )
-            if df_em_detail is None or getattr(df_em_detail, 'empty', True):
-                logger.warning("[DataEnrich] Mgmt EM detail returned None/empty, skipping primary source")
-                raise ValueError("EM detail returned None/empty")
+        # 三个数据源（em_detail 180s, em_ggcg 180s, cninfo 120s）改为并行执行，
+        # 整体时间从串行的 ~480s 缩短到 ~180s（最慢那个的耗时）
+        import threading as _threading
+        _source_results: dict[str, list] = {}
+        _source_lock = _threading.Lock()
+
+        def _fetch_em_detail():
+            try:
+                df = _run_with_timeout(
+                    ak.stock_hold_management_detail_em,
+                    timeout=180.0, default=None,
+                    op_name="mgmt_em_detail",
+                )
+                if df is None or getattr(df, 'empty', True):
+                    raise ValueError("EM detail returned None/empty")
+                with _source_lock:
+                    _source_results["em_detail"] = df
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Mgmt EM detail (primary) failed: {type(e).__name__}: {str(e)[:100]}")
+
+        def _fetch_ggcg():
+            try:
+                df = _run_with_timeout(
+                    lambda: ak.stock_ggcg_em(symbol="全部"),
+                    timeout=180.0, default=None, op_name="mgmt_ggcg_em"
+                )
+                if df is None:
+                    raise TimeoutError("stock_ggcg_em timed out (180s)")
+                with _source_lock:
+                    _source_results["ggcg"] = df
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Mgmt EM ggcg (fallback) failed: {type(e).__name__}: {str(e)[:100]}")
+
+        def _fetch_cninfo():
+            # macOS sandbox 默认跳过 cninfo（py_mini_racer dlsym 错误）
+            if sys.platform == 'darwin' and os.environ.get("LH_MGMT_TRY_CNINFO", "").lower() not in ("1", "true", "yes"):
+                logger.debug("[DataEnrich] Mgmt cninfo skipped (macOS sandbox + no LH_MGMT_TRY_CNINFO)")
+                return
+            try:
+                df = _run_with_timeout(
+                    lambda: ak.stock_hold_management_detail_cninfo(symbol="增持"),
+                    timeout=120.0, default=None, op_name="mgmt_cninfo",
+                )
+                if df is None or getattr(df, 'empty', True):
+                    raise ValueError("cninfo returned None/empty")
+                with _source_lock:
+                    _source_results["cninfo"] = df
+            except Exception as e:
+                logger.info(f"[DataEnrich] Mgmt cninfo (opt-in) skipped: {type(e).__name__}: {str(e)[:80]}")
+
+        # 并行启动三个数据源
+        threads = [
+            _threading.Thread(target=_fetch_em_detail, daemon=True),
+            _threading.Thread(target=_fetch_ggcg, daemon=True),
+            _threading.Thread(target=_fetch_cninfo, daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=200)  # 总体 200s 上限，比单源最长的 180s 多 20s 缓冲
+
+        # 处理 em_detail（primary）
+        if "em_detail" in _source_results:
+            df_em_detail = _source_results["em_detail"]
             count_before = len(result)
             for _, r in df_em_detail.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -1741,60 +1808,39 @@ def _refresh_mgmt_cache():
             if len(result) > 100:
                 _set_global_map("_mgmt_map", result, replace=True)
                 _save_cache(_MGMT_CACHE, result)
-        except Exception as e_em_detail:
-            logger.warning(f"[DataEnrich] Mgmt EM detail (primary) failed: {type(e_em_detail).__name__}: {str(e_em_detail)[:100]}")
 
-        # Source 2 (fallback): EM stock_ggcg_em (股东增减持变动)
-        if len(result) < 200:
-            try:
-                df_ggcg = _run_with_timeout(
-                    lambda: ak.stock_ggcg_em(symbol="全部"),
-                    timeout=180.0, default=None, op_name="mgmt_ggcg_em"
-                )
-                if df_ggcg is None:
-                    raise TimeoutError("stock_ggcg_em timed out (180s)")
-                count_before = len(result)
-                for _, r in df_ggcg.iterrows():
-                    code = str(r.get("代码", "")).strip()
-                    if len(code) != 6 or not code.isdigit():
-                        continue
-                    direction = str(r.get("持股变动信息-增减", "")).strip()
-                    if direction != "增持":
-                        continue
-                    price = _sf(r.get("成交均价"))
-                    if not price:
-                        price = _sf(r.get("最新价"))
-                    if code and price and price > 0:
-                        last_price = result.get(code, 0)
-                        if price > last_price:
-                            result[code] = price
-                logger.info(f"[DataEnrich] Mgmt EM ggcg (增持 only, fallback): {len(result)} stocks (added {len(result) - count_before})")
-            except Exception as e_ggcg:
-                logger.warning(f"[DataEnrich] Mgmt EM ggcg (fallback) failed: {type(e_ggcg).__name__}: {str(e_ggcg)[:100]}")
+        # 处理 em_ggcg（fallback）
+        if "ggcg" in _source_results and len(result) < 200:
+            df_ggcg = _source_results["ggcg"]
+            count_before = len(result)
+            for _, r in df_ggcg.iterrows():
+                code = str(r.get("代码", "")).strip()
+                if len(code) != 6 or not code.isdigit():
+                    continue
+                direction = str(r.get("持股变动信息-增减", "")).strip()
+                if direction != "增持":
+                    continue
+                price = _sf(r.get("成交均价"))
+                if not price:
+                    price = _sf(r.get("最新价"))
+                if code and price and price > 0:
+                    last_price = result.get(code, 0)
+                    if price > last_price:
+                        result[code] = price
+            logger.info(f"[DataEnrich] Mgmt EM ggcg (增持 only, fallback): {len(result)} stocks (added {len(result) - count_before})")
 
-        # Source 3 (opt-in): cninfo - 非 macOS 环境自动启用，macOS sandbox 需设 LH_MGMT_TRY_CNINFO=1
-        if sys.platform != 'darwin' or os.environ.get("LH_MGMT_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
-            try:
-                df_cninfo = _run_with_timeout(
-                    lambda: ak.stock_hold_management_detail_cninfo(symbol="增持"),
-                    timeout=120.0, default=None, op_name="mgmt_cninfo",
-                )
-                if df_cninfo is None or getattr(df_cninfo, 'empty', True):
-                    logger.debug("[DataEnrich] Mgmt cninfo returned None/empty, skipping")
-                    raise ValueError("cninfo returned None/empty")
-                count_before = len(result)
-                for _, r in df_cninfo.iterrows():
-                    code = str(r.get("证券代码", "")).strip()
-                    price = _sf(r.get("成交均价"))
-                    if code and price and price > 0:
-                        last_price = result.get(code, 0)
-                        if price > last_price:
-                            result[code] = price
-                logger.info(f"[DataEnrich] Mgmt cninfo (opt-in): added {len(result) - count_before}")
-            except Exception as e_cninfo:
-                logger.info(f"[DataEnrich] Mgmt cninfo (opt-in) skipped: {type(e_cninfo).__name__}: {str(e_cninfo)[:80]}")
-        else:
-            logger.debug("[DataEnrich] Mgmt cninfo skipped (macOS sandbox + no LH_MGMT_TRY_CNINFO)")
+        # 处理 cninfo（opt-in）
+        if "cninfo" in _source_results:
+            df_cninfo = _source_results["cninfo"]
+            count_before = len(result)
+            for _, r in df_cninfo.iterrows():
+                code = str(r.get("证券代码", "")).strip()
+                price = _sf(r.get("成交均价"))
+                if code and price and price > 0:
+                    last_price = result.get(code, 0)
+                    if price > last_price:
+                        result[code] = price
+            logger.info(f"[DataEnrich] Mgmt cninfo (opt-in): added {len(result) - count_before}")
 
         # Zero-fill: 对所有已知的股票代码中无增持数据的股票填充 0
         # mgmt_map 格式特殊：直接存储增持均价（float），非嵌套 dict
@@ -3262,6 +3308,18 @@ async def enrich_quotes(bonds: list) -> list:
         await loop.run_in_executor(None, _load_earnings_forecast_cache); _ext_ts["earnings_forecast"] = _now
     if _needs_reload("earnings_express", 1800, min_size=100):
         await loop.run_in_executor(None, _load_earnings_express_cache); _ext_ts["earnings_express"] = _now
+    if _needs_reload("buyback", 3600, min_size=10):
+        await loop.run_in_executor(None, _load_buyback_cache); _ext_ts["buyback"] = _now
+    if _needs_reload("mgmt", 3600, min_size=100):
+        await loop.run_in_executor(None, _load_mgmt_cache); _ext_ts["mgmt"] = _now
+    if _needs_reload("momentum", 3600, min_size=100):
+        await loop.run_in_executor(None, _load_momentum_cache); _ext_ts["momentum"] = _now
+    if _needs_reload("event", 3600, min_size=10):
+        await loop.run_in_executor(None, _load_event_cache); _ext_ts["event"] = _now
+    if _needs_reload("vol", 3600, min_size=100):
+        await loop.run_in_executor(None, _load_vol_cache); _ext_ts["vol"] = _now
+    if _needs_reload("debt", 3600, min_size=100):
+        await loop.run_in_executor(None, _load_debt_cache); _ext_ts["debt"] = _now
 
     # CPython dict.copy() is thread-safe under GIL (atomic snapshot of the
     # outer dict). No lock needed; background thread updates via _set_global_map
@@ -4490,26 +4548,28 @@ def _refresh_north_cache():
             processed = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=15) as pool:
                 futures = {pool.submit(_fetch_one, c): c for c in all_codes}
-                # AGENTS.md fix: use wait() instead of as_completed(timeout) to handle
-                # partial completion gracefully. as_completed(timeout=180) throws
-                # TimeoutError when not all 854 futures finish in time, losing all
-                # completed results. wait() returns done/pending sets; we process
-                # done and ignore pending (cancelled on pool shutdown).
-                done, pending = concurrent.futures.wait(
-                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
-                )
-                if pending:
-                    logger.warning(f"[DataEnrich] North: {len(pending)} (of {len(futures)}) futures unfinished after 300s, keeping {len(done)} completed")
-                for fut in done:
-                    try:
-                        r = fut.result()
-                        if r:
-                            result[r[0]] = r[1]
-                            processed += 1
-                    except Exception:
-                        pass
+                # 用 wait() + FIRST_COMPLETED + 60s 硬截止，按批处理 done futures。
+                # 原 ALL_COMPLETED 让少量卡死的 future 拖慢整体 16+ 分钟。
+                deadline = time.time() + 60
+                while futures and time.time() < deadline:
+                    done, futures = concurrent.futures.wait(
+                        futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    for fut in done:
+                        try:
+                            r = fut.result()
+                            if r:
+                                result[r[0]] = r[1]
+                                processed += 1
+                        except Exception:
+                            pass
                     if processed % 200 == 0:
                         _save_cache(_NORTH_CACHE, result)
+                # 超时后取消剩余 futures，保留已完成的（多数股票已有数据）
+                if futures:
+                    logger.warning(f"[DataEnrich] North: {len(futures)} (of {len(all_codes)}) futures unfinished after 60s, keeping {len(result)} completed")
+                    for fut in futures:
+                        fut.cancel()
 
         # Zero-fill: 无论 API 是否成功，都对所有已知股票代码填充默认值
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
