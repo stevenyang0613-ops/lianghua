@@ -3015,19 +3015,19 @@ def _refresh_event_cache():
 @_with_metrics
 def _refresh_pledge_cache():
     """刷新质押比例 — EM + CNINFO + [TDX] fin fallback"""
+    result = {}  # 提前初始化，避免 EM 失败时 NameError
     try:
         logger.info('[DataEnrich] Refreshing pledge ratio...')
         df = ak.stock_gpzy_pledge_ratio_em()
         if df is None or len(df) == 0:
             logger.warning("[DataEnrich] Pledge: stock_gpzy_pledge_ratio_em returned empty, will try fallback")
             raise ValueError("EM pledge empty")
-        result = {}
         for _, r in df.iterrows():
             code = str(r.get('股票代码', '')).strip()
             ratio = _sf(r.get('质押比例'))
             if code and ratio is not None:
                 result[code] = ratio
-        if len(result) > 100:
+        if len(result) > 0:
             _set_global_map('_pledge_map', result, replace=True)
             _save_cache(_PLEDGE_CACHE, result)
             logger.info(f'[DataEnrich] Pledge: {len(result)} stocks (from EM)')
@@ -3050,9 +3050,9 @@ def _refresh_pledge_cache():
                         if code not in result2 or ratio > result2[code]:
                             result2[code] = ratio
             # AGENTS.md #48: 即使 CNINFO 返回数较少，也合并 EM 部分结果而非丢弃
-            # CNINFO 优先（数值更新），EM 补缺；合并后只要总数 > 100 就接受
+            # CNINFO 优先（数值更新），EM 补缺；合并后只要总数 > 0 就接受
             merged = {**result, **result2}
-            if len(merged) > 100:
+            if len(merged) > 0:
                 _set_global_map('_pledge_map', merged)
                 _save_cache(_PLEDGE_CACHE, merged)
                 logger.info(f'[DataEnrich] Pledge: {len(merged)} stocks (EM={len(result)}, CNINFO={len(result2)})')
@@ -3552,9 +3552,13 @@ def _populate_field_loader_map():
         "momentum_20d": _load_momentum_cache,
         "momentum_60d": _load_momentum_cache,
         "event_score": _load_event_cache,
+        "event_detail": _load_event_cache,
         "outstanding_scale": _load_bond_outstanding_cache,
         "revenue_yoy": _load_earnings_express_cache,
         "profit_yoy": _load_earnings_express_cache,
+        "cagr": _load_fin_cache,
+        "eps": _load_fin_cache,
+        "bps": _load_fin_cache,
     })
 
 
@@ -3883,12 +3887,15 @@ async def enrich_quotes(bonds: list) -> list:
 
         # Pledge ratio from pledge map
         # stock_gpzy_pledge_ratio_em only returns stocks with active pledges;
-        # stocks not in cache have pledge_ratio = 0 (no active pledges)
+        # stocks not in cache have pledge_ratio = 0 (no active pledges) — BUT
+        # only if the cache was actually loaded successfully. If the cache is
+        # empty due to API failure, keep None to avoid data-loss.
         pledge = pledge_ref.get(stock_code)
         if pledge is not None:
             b.pledge_ratio = pledge
-        else:
-            b.pledge_ratio = 0
+        elif _pledge_map:  # cache was loaded successfully, missing = no pledge
+            b.pledge_ratio = 0.0
+        # else: cache empty due to API failure, keep None
 
         # Stock name from name map
         if not b.stock_name:
@@ -4457,6 +4464,10 @@ async def start_background_refresh():
                                 "eps_forecast": "--earnings-forecast",
                                 "revenue_yoy": "--earnings-express",
                                 "profit_yoy": "--earnings-express",
+                                "event_detail": "--event",
+                                "cagr": "--fin",
+                                "eps": "--fin",
+                                "bps": "--fin",
                             }
                             flags = sorted({_field_to_flag[f] for f in still_low if f in _field_to_flag})
                             if flags:
@@ -4675,10 +4686,13 @@ def _is_loadable(status: str) -> bool:
 
 
 def _load_north_cache():
-    global _north_map
+    global _north_map, _north_loaded
+    if _north_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_NORTH_CACHE, ttl=6 * 3600)  # north TTL: 6h
     with _cache_lock:
         _north_map = new_map
+    _north_loaded = True
     msg = f"[DataEnrich] North: loaded {len([k for k in _north_map if not k.startswith('_')])} stocks"
     if status == "stale":
         logger.warning(f"{msg} (stale, will refresh in background)")
@@ -4690,10 +4704,13 @@ def get_north_map() -> dict:
 
 
 def _load_margin_cache():
-    global _margin_map
+    global _margin_map, _margin_loaded
+    if _margin_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_MARGIN_CACHE, ttl=12 * 3600)  # margin TTL: 12h
     with _cache_lock:
         _margin_map = new_map
+    _margin_loaded = True
     msg = f"[DataEnrich] Margin: loaded {len([k for k in _margin_map if not k.startswith('_')])} stocks"
     if status == "stale":
         logger.warning(f"{msg} (stale, will refresh in background)")
@@ -4705,10 +4722,13 @@ def get_margin_map() -> dict:
 
 
 def _load_lhb_cache():
-    global _lhb_map
+    global _lhb_map, _lhb_loaded
+    if _lhb_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_LHB_CACHE, ttl=12 * 3600)  # lhb TTL: 12h
     with _cache_lock:
         _lhb_map = new_map
+    _lhb_loaded = True
     msg = f"[DataEnrich] LHB: loaded {len([k for k in _lhb_map if not k.startswith('_')])} stocks"
     if status == "stale":
         logger.warning(f"{msg} (stale, will refresh in background)")
@@ -4720,10 +4740,13 @@ def get_lhb_map() -> dict:
 
 
 def _load_block_trade_cache():
-    global _block_trade_map
+    global _block_trade_map, _block_trade_loaded
+    if _block_trade_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_BLOCK_TRADE_CACHE, ttl=12 * 3600)  # block_trade TTL: 12h
     with _cache_lock:
         _block_trade_map = new_map
+    _block_trade_loaded = True
     msg = f"[DataEnrich] BlockTrade: loaded {len([k for k in _block_trade_map if not k.startswith('_')])} stocks"
     if status == "stale":
         logger.warning(f"{msg} (stale, will refresh in background)")
@@ -4735,10 +4758,13 @@ def get_block_trade_map() -> dict:
 
 
 def _load_holder_num_cache():
-    global _holder_num_map
+    global _holder_num_map, _holder_num_loaded
+    if _holder_num_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_HOLDER_NUM_CACHE, ttl=24 * 3600)  # holder_num TTL: 24h
     with _cache_lock:
         _holder_num_map = new_map
+    _holder_num_loaded = True
     msg = f"[DataEnrich] HolderNum: loaded {len([k for k in _holder_num_map if not k.startswith('_')])} stocks"
     if status == "stale":
         logger.warning(f"{msg} (stale, will refresh in background)")
@@ -4755,7 +4781,9 @@ def _load_earnings_forecast_cache():
     Bug10 修复：只有当文件 _ts 比内存 _ts 更新时才覆盖内存，
     避免每 120s reload 时 race condition 导致数据回滚。
     """
-    global _earnings_forecast_map
+    global _earnings_forecast_map, _earnings_forecast_loaded
+    if _earnings_forecast_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_EARNINGS_FORECAST_CACHE, ttl=7 * 24 * 3600)
     if status == "fresh":
         file_ts = new_map.get("_ts", 0)
@@ -4780,8 +4808,11 @@ def _load_earnings_forecast_cache():
         logger.info(f"[DataEnrich] EarningsForecast: corrupted, cleared map")
     else:
         logger.debug(f"[DataEnrich] EarningsForecast: {status}, keeping {len([k for k in _earnings_forecast_map if not k.startswith('_')])} in-memory stocks")
+    _earnings_forecast_loaded = True
 def _load_earnings_express_cache():
-    global _earnings_express_map
+    global _earnings_express_map, _earnings_express_loaded
+    if _earnings_express_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_EARNINGS_EXPRESS_CACHE, ttl=7 * 24 * 3600)
     if status == "fresh":
         file_ts = new_map.get("_ts", 0)
@@ -4808,6 +4839,7 @@ def _load_earnings_express_cache():
     else:
         # stale: 保留内存中的数据，不覆盖 (handled above)
         logger.debug(f"[DataEnrich] EarningsExpress: {status}, keeping {len([k for k in _earnings_express_map if not k.startswith('_')])} in-memory stocks")
+    _earnings_express_loaded = True
 
 
 def get_earnings_express_map() -> dict:
@@ -4887,7 +4919,9 @@ def _refresh_earnings_express_cache():
         return 0
 
 def _load_restricted_release_cache():
-    global _restricted_release_map
+    global _restricted_release_map, _restricted_release_loaded
+    if _restricted_release_loaded:
+        return
     status, new_map = _load_ext_cache_with_status(_RESTRICTED_RELEASE_CACHE, ttl=86400 * 3)
     if status == "fresh":
         file_ts = new_map.get("_ts", 0)
@@ -4912,6 +4946,7 @@ def _load_restricted_release_cache():
         logger.info(f"[DataEnrich] RestrictedRelease: corrupted, cleared map")
     else:
         logger.debug(f"[DataEnrich] RestrictedRelease: {status}, keeping {len([k for k in _restricted_release_map if not k.startswith('_')])} in-memory events")
+    _restricted_release_loaded = True
 
 def get_restricted_release_map() -> dict:
     return _restricted_release_map
@@ -4960,8 +4995,13 @@ def _refresh_north_cache():
         bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
         all_codes = bond_codes[:]
         # Extend to full A-share universe regardless of bond stock availability
+        # 用 _run_with_timeout 包装避免测试/启动阻塞（默认 30s 超时）
         try:
-            df_all = ak.stock_info_a_code_name()
+            df_all = _run_with_timeout(
+                ak.stock_info_a_code_name,
+                timeout=_TIMEOUT_MEDIUM, default=None,
+                op_name="stock_info_a_code_name",
+            )
             if df_all is not None and not df_all.empty:
                 a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
                 all_codes = list(dict.fromkeys(bond_codes + a_codes))  # preserve order, dedup

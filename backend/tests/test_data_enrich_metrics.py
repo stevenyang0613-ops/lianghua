@@ -337,9 +337,12 @@ class TestDataSourceApiCalls:
         """ak.stock_hsgt_individual_em is used for per-stock north-bound holdings."""
         summary_df = pd.DataFrame({"成交净买额": [1.5], "交易日期": ["2026-01-01"]})
         individual_df = pd.DataFrame({"持股市值": [2.5], "今日增持资金": [0.5]})
-        with patch.object(de.ak, "stock_hsgt_fund_flow_summary_em", return_value=summary_df) as mock_summary:
-            with patch.object(de.ak, "stock_hsgt_individual_em", return_value=individual_df) as mock_individual:
-                de._refresh_north_cache()
+        # 也 mock stock_info_a_code_name 避免实际 API 调用
+        code_name_df = pd.DataFrame({"代码": ["000001"]})
+        with patch.object(de.ak, "stock_hsgt_fund_flow_summary_em", return_value=summary_df) as mock_summary, \
+             patch.object(de.ak, "stock_hsgt_individual_em", return_value=individual_df) as mock_individual, \
+             patch.object(de.ak, "stock_info_a_code_name", return_value=code_name_df):
+            de._refresh_north_cache()
         assert mock_summary.called
         assert mock_individual.called, "Expected stock_hsgt_individual_em to be called for per-stock data"
         assert any(c.args[0] == "000001" for c in mock_individual.call_args_list)
