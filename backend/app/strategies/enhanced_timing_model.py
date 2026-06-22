@@ -453,11 +453,11 @@ class EnhancedTimingModel:
     # ========== 仓位映射 ==========
     POSITION_MAP = [
         (80, 1.00, "满仓积极配置"),     # 80分以上满仓
-        (70, 0.85, "高仓位积极配置"),
-        (60, 0.70, "中高仓位配置"),    # 60-70给70%
-        (50, 0.50, "中性配置"),        # 50-60给50%
-        (40, 0.30, "防御配置"),        # 40-50给30%
-        (30, 0.15, "高度防御"),        # 30-40给15%
+        (70, 0.80, "高仓位积极配置"),
+        (60, 0.60, "中高仓位配置"),    # 60-70给60%
+        (50, 0.40, "中性配置"),        # 50-60给40%
+        (40, 0.20, "防御配置"),        # 40-50给20%
+        (30, 0.10, "高度防御"),        # 30-40给10%
         (0, 0.05, "极端防御，启动对冲"),
     ]
     
@@ -541,14 +541,14 @@ class EnhancedTimingModel:
         max_dd = data.max_dd_20d if hasattr(data, 'max_dd_20d') else 0
         if not math.isnan(max_dd) and max_dd < -10: oversold_signals += 1
         
-        # 综合判断（2个以上强信号才判定极端状态）
-        if oversold_signals >= 4:
+        # 综合判断（降低阈值让更多天数被识别为非range）
+        if oversold_signals >= 3:
             regime = MarketRegime.STRONG_BEAR  # 深度超卖
-        elif oversold_signals >= 2:
+        elif oversold_signals >= 1:
             regime = MarketRegime.BEAR         # 轻度超卖
-        elif overbought_signals >= 4:
+        elif overbought_signals >= 3:
             regime = MarketRegime.STRONG_BULL  # 深度超买
-        elif overbought_signals >= 2:
+        elif overbought_signals >= 1:
             regime = MarketRegime.BULL         # 轻度超买
         else:
             regime = MarketRegime.RANGE
@@ -1328,7 +1328,7 @@ class EnhancedTimingModel:
         # 6.4 认沽/认购比（均值回归：低PCR=贪婪=风险，高PCR=恐慌=买入机会）
         # PCR 0.5-1.0 为正常区间，使用 invert=True 使得低PCR得高分（看涨）
         pcr = data.pcr_ratio
-        if pcr > 0:
+        if not math.isnan(pcr):
             pcr_score = sigmoid_score(pcr, 0.5, steepness=2.0)
             pcr_signal = "bullish" if pcr > 0.8 else "bearish" if pcr < 0.3 else "neutral"
             pcr_desc = f"PCR={pcr:.2f}，{'恐慌情绪=买入机会' if pcr>0.8 else '贪婪情绪=风险' if pcr<0.3 else '中性'}"
@@ -1346,7 +1346,7 @@ class EnhancedTimingModel:
         # 6.5 波动率指数（均值回归：低VIX=平静=风险，高VIX=恐慌=买入机会）
         # VIX 15-25 为正常区间，使用 invert=True 使得低VIX得高分（看涨）
         vix = data.vix_index
-        if vix > 0:
+        if not math.isnan(vix):
             vix_score = sigmoid_score(vix, 22, steepness=0.15)
             vix_signal = "bullish" if vix > 28 else "bearish" if vix < 18 else "neutral"
             vix_desc = f"VIX={vix:.1f}，{'极度恐慌=买入机会' if vix>30 else '恐慌=机会' if vix>25 else '平静=风险' if vix<18 else '正常'}"

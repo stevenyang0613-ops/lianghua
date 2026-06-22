@@ -167,11 +167,11 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     }
 
     async function check() {
-      // 仅在 Electron 环境中等待 electronAPI.httpRequest 可用
+      // 仅在 Electron 环境中等待 window.electronAPI 注入
       // 非 Electron 环境（浏览器开发模式）跳过，避免浪费 5 秒
-      if (typeof window !== 'undefined' && window.electronAPI && !window.electronAPI.httpRequest) {
+      if (typeof window !== 'undefined' && !window.electronAPI) {
         for (let i = 0; i < 50; i++) {
-          if (window.electronAPI?.httpRequest) break
+          if (window.electronAPI) break
           await new Promise((r) => setTimeout(r, 100))
         }
       }

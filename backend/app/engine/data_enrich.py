@@ -1057,8 +1057,12 @@ def _refresh_spot_cache():
                 if remaining:
                     logger.info(f"[DataEnrich] Fallback: fetching {len(remaining)} stocks individually")
                     with ThreadPoolExecutor(max_workers=6) as ex:
-                        futures = [ex.submit(_fetch_single, code) for code in remaining]
-                        for i, future in enumerate(as_completed(futures)):
+                        futures = []
+                        for i, code in enumerate(remaining):
+                            futures.append(ex.submit(_fetch_single, code))
+                            if (i + 1) % 30 == 0:
+                                _time.sleep(0.5)
+                        for future in as_completed(futures):
                             res = future.result()
                             for code, vals in res.items():
                                 if vals.get('pe') and vals['pe'] > 0 and code not in pe_map:
@@ -1067,8 +1071,6 @@ def _refresh_spot_cache():
                                     pb_map[code] = round(vals['pb'], 2)
                                 if vals.get('tr') and vals['tr'] >= 0 and code not in tr_map:
                                     tr_map[code] = round(vals['tr'], 2)
-                            if (i + 1) % 30 == 0:
-                                _time.sleep(0.5)
 
         if _bond_stock_codes:
             bond_missing = [c for c in _bond_stock_codes if c not in pe_map or c not in pb_map]
@@ -1456,7 +1458,7 @@ def _refresh_volatility_cache():
             try:
                 df_tx = ak.stock_zh_a_hist_tx(
                     symbol=f"sh{code}" if code.startswith(('6', '9')) else f"sz{code}",
-                    start_date=time.strftime("%Y%m%d", time.localtime(time.time() - 90 * 86400)),
+                    start_date=(datetime.now() - timedelta(days=90)).strftime("%Y%m%d"),
                     end_date=time.strftime("%Y%m%d"),
                     adjust="qfq",
                 )
@@ -1476,7 +1478,7 @@ def _refresh_volatility_cache():
                 try:
                     df = ak.stock_zh_a_hist(
                         symbol=code, period="daily",
-                        start_date=time.strftime("%Y%m%d", time.localtime(time.time() - 90 * 86400)),
+                        start_date=(datetime.now() - timedelta(days=90)).strftime("%Y%m%d"),
                         end_date=time.strftime("%Y%m%d"),
                         adjust="qfq",
                     )
@@ -1727,7 +1729,8 @@ def _try_ths_fin_fallback(codes: list[str], fin_map: dict):
     """从同花顺财务摘要补充缺失的 ROE/净利润增长率 (3 线程并发)"""
     if not codes:
         return
-    batch = codes[:200]
+    total_filled = 0
+    missing = codes[:]
 
     def _fetch_one(code):
         """单只股票 THS 财务数据获取"""
@@ -1749,24 +1752,29 @@ def _try_ths_fin_fallback(codes: list[str], fin_map: dict):
         except Exception:
             return None
 
-    filled = 0
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(_fetch_one, code): code for code in batch}
-        for future in as_completed(futures):
-            code = futures[future]
-            try:
-                result = future.result()
-                if result:
-                    entry = fin_map.setdefault(code, {})
-                    for k, v in result.items():
-                        if not entry.get(k):
-                            entry[k] = v
-                    filled += 1
-            except Exception:
-                pass
-    if filled:
-        logger.info(f'[DataEnrich][THS] Fin fallback: filled financial data for {filled} stocks')
+    while missing:
+        batch = missing[:200]
+        missing = missing[200:]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(_fetch_one, code): code for code in batch}
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    result = future.result()
+                    if result:
+                        entry = fin_map.setdefault(code, {})
+                        for k, v in result.items():
+                            if not entry.get(k):
+                                entry[k] = v
+                        total_filled += 1
+                except Exception:
+                    pass
+        if missing:
+            import time as _time
+            _time.sleep(1)
+    if total_filled:
+        logger.info(f'[DataEnrich][THS] Fin fallback: filled financial data for {total_filled} stocks')
 
 
 def _load_pledge_cache():
@@ -4419,8 +4427,8 @@ def _refresh_holder_num_cache():
 
     重要：akshare 1.18.x 没有批量"股东人数"接口（stock_holder_num_em 不存在），
     只有单股接口 stock_main_stock_holder(stock=code)。
-    采用 10 并发线程池批量调用，只覆盖 _bond_stock_codes（约 250 只），
-    而不是全 A 股（5000+ 只）导致启动太慢。
+    采用 10 并发线程池批量调用，优先覆盖 _bond_stock_codes，
+    然后扩展到全 A 股（上限 1000 只），避免启动卡住太久。
     """
     try:
         if not callable(getattr(ak, "stock_main_stock_holder", None)):
@@ -4428,9 +4436,22 @@ def _refresh_holder_num_cache():
             return 0
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
-        bond_codes = sorted(_bond_stock_codes)[:250]  # 限制 250 只避免启动慢
-        if not bond_codes:
-            logger.debug("[DataEnrich] HolderNum: _bond_stock_codes 空，跳过")
+        bond_codes = sorted(_bond_stock_codes)[:250] if _bond_stock_codes else []
+        all_codes = bond_codes[:]
+        if len(all_codes) < 1000:
+            try:
+                df_all = ak.stock_info_a_code_name()
+                if df_all is not None and not df_all.empty:
+                    a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
+                    seen = set(all_codes)
+                    for c in a_codes:
+                        if c not in seen and len(all_codes) < 1000:
+                            all_codes.append(c)
+                            seen.add(c)
+            except Exception:
+                pass
+        if not all_codes:
+            logger.debug("[DataEnrich] HolderNum: no codes available, skipping")
             return 0
 
         result = {}
@@ -4453,7 +4474,8 @@ def _refresh_holder_num_cache():
                 return None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_fetch_one, c): c for c in bond_codes}
+            futures = {pool.submit(_fetch_one, c): c for c in all_codes}
+            processed = 0
             for fut in concurrent.futures.as_completed(futures, timeout=120):
                 r = fut.result()
                 if r:
@@ -4471,11 +4493,14 @@ def _refresh_holder_num_cache():
                             "holder_num_change": holder_num_change,
                             "_data_source": "estimated",
                         }
+                processed += 1
+                if processed % 200 == 0:
+                    _save_cache(_HOLDER_NUM_CACHE, result)
 
         if result:
             _set_global_map("_holder_num_map", result)
             _save_cache(_HOLDER_NUM_CACHE, result)
-            logger.info(f"[DataEnrich] HolderNum: {len(result)}/{len(bond_codes)} stocks refreshed")
+            logger.info(f"[DataEnrich] HolderNum: {len(result)}/{len(all_codes)} stocks refreshed")
             return len(result)
         return 0
     except Exception as e:
