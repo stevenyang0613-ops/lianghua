@@ -311,18 +311,23 @@ function _startWsHeartbeat(wsId: string) {
       _cleanupWsConnection(wsId)
     }
   }, WS_HEARTBEAT_INTERVAL_MS)
-  wsHeartbeatTimers.set(wsId, timer as unknown as ReturnType<typeof setTimeout>)
+  wsHeartbeatTimers.set(wsId, timer)
 }
 
 // 全局定时器：每 60s 扫描一次 wsConnections，清理所有已关闭的连接
-const deadConnectionScanner = setInterval(() => {
-  for (const [wsId, ws] of wsConnections.entries()) {
-    if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-      console.log(`[WS] Cleanup dead connection ${wsId}`)
-      _cleanupWsConnection(wsId)
+// NOTE: declared here (module scope), but initialized inside the single-instance else block
+// so it doesn't run in second instances that call app.quit()
+let deadConnectionScanner: ReturnType<typeof setInterval> | null = null
+function _startDeadConnectionScanner(): void {
+  deadConnectionScanner = setInterval(() => {
+    for (const [wsId, ws] of wsConnections.entries()) {
+      if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        console.log(`[WS] Cleanup dead connection ${wsId}`)
+        _cleanupWsConnection(wsId)
+      }
     }
-  }
-}, 60000)
+  }, 60000)
+}
 
 // ---- Child windows ----
 const childWindows = new Map<number, BrowserWindow>()
@@ -2309,6 +2314,7 @@ if (!gotTheLock) {
     }
     registerGlobalShortcuts()
     setupAutoUpdater()
+    _startDeadConnectionScanner()
 
     app.on('activate', () => {
       if (mainWindow) {
@@ -2337,10 +2343,10 @@ if (!gotTheLock) {
       _cleanupWsConnection(wsId)
     }
     // Stop dead connection scanner
-    clearInterval(deadConnectionScanner)
-    // Clear all heartbeat timers
+    if (deadConnectionScanner) clearInterval(deadConnectionScanner)
+    // Clear all heartbeat timers (use clearInterval since created via setInterval)
     for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
-      clearTimeout(timer)
+      clearInterval(timer)
     }
     wsHeartbeatTimers.clear()
     if (tray) {
@@ -2368,7 +2374,7 @@ if (!gotTheLock) {
       _pythonHardKillTimer = null
     }
     // Clean up WebSocket resources
-    clearInterval(deadConnectionScanner)
+    if (deadConnectionScanner) clearInterval(deadConnectionScanner)
     for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
       clearTimeout(timer)
     }

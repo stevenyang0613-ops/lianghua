@@ -341,8 +341,11 @@ class SignalGenerator:
             return None
 
         # 2. 检查转债条件
-        # 换手率检查 - 如果数据缺失则跳过
-        if cb.turnover_rate > 0 and cb.turnover_rate < 0.8:
+        # 换手率检查 - 数据缺失时拒绝（无法评估流动性风险）
+        if cb.turnover_rate is not None and 0 < cb.turnover_rate < 0.8:
+            return None
+        elif cb.turnover_rate is None:
+            logger.warning(f"[SignalGenerator] {cb.code} 换手率数据缺失，跳过")
             return None
 
         if cb.conversion_premium > 50:  # 溢价率<=50%（放宽条件）
@@ -355,7 +358,12 @@ class SignalGenerator:
 
         # 计算建议数量
         suggested_amount = self.aum * 10000 * position_limit  # 元
+        if not cb.close or cb.close <= 0:
+            return None
         suggested_qty = int(suggested_amount / cb.close / 100) * 100  # 取整到百张
+
+        if suggested_qty <= 0:
+            return None
 
         return self._create_signal(
             code=cb.code,
@@ -564,7 +572,7 @@ class HFTSignalGenerator:
         Returns:
             出场信号
         """
-        pnl_pct = (current_price - entry_price) / entry_price * 100
+        pnl_pct = (current_price - entry_price) / entry_price * 100 if entry_price and entry_price > 0 else 0.0
 
         # 止盈
         if pnl_pct >= params.hft_profit_target:

@@ -137,6 +137,7 @@ class StrategyParams:
     hedge_put_ratio_high: float = 0.25         # 高相关时认沽对冲比
     hedge_csi300_ratio_mid: float = 0.25       # 中相关时期指对冲比
     hedge_put_ratio_mid: float = 0.20          # 中相关时认沽对冲比
+    hedge_put_ratio_low: float = 0.15          # 低相关时认沽对冲比（不使用股指期货）
     hedge_pure_bond_high: float = 0.25         # 高相关时纯债比例
     hedge_pure_bond_mid: float = 0.30          # 中相关时纯债比例
     hedge_pure_bond_low: float = 0.40          # 低相关时纯债比例

@@ -192,20 +192,16 @@ class SevenDimScoringEngine:
             score.news_factor = self._score_news_factor(stock)
             score.fundamentals = self._score_fundamentals(stock)
         else:
-            # 正股数据缺失时，给予默认高分(90%满分)
-            # 注意：在生产环境中应尽可能提供完整的正股数据
-            # 这里使用高分是因为：
-            # 1. 转债自身的得分已经能反映部分风险
-            # 2. 一票否决过滤已经排除了高风险标的
-            # 3. 白名单机制会进一步筛选
-            score.short_momentum = self.DIM_SHORT_MOMENTUM * 0.90
-            score.sector_sentiment = self.DIM_SECTOR_SENTIMENT * 0.90
-            score.technical = self.DIM_TECHNICAL * 0.90
-            score.chip_structure = self.DIM_CHIP_STRUCTURE * 0.90
-            score.volatility = self.DIM_VOLATILITY * 0.90
-            score.news_factor = self.DIM_NEWS_FACTOR * 0.90
-            score.fundamentals = self.DIM_FUNDAMENTALS * 0.90
-            logger.debug(f"[Scoring] {cb.code} 正股数据缺失，使用默认分数(90%)")
+            # 正股数据缺失时，给予中性分(60%满分)
+            # 数据缺失时不应给出高分，避免掩盖风险
+            score.short_momentum = self.DIM_SHORT_MOMENTUM * 0.60
+            score.sector_sentiment = self.DIM_SECTOR_SENTIMENT * 0.60
+            score.technical = self.DIM_TECHNICAL * 0.60
+            score.chip_structure = self.DIM_CHIP_STRUCTURE * 0.60
+            score.volatility = self.DIM_VOLATILITY * 0.60
+            score.news_factor = self.DIM_NEWS_FACTOR * 0.60
+            score.fundamentals = self.DIM_FUNDAMENTALS * 0.60
+            logger.warning(f"[Scoring] {cb.code} 正股数据缺失，使用中性分数(60%)并标记风险")
 
         score.stock_total = (
             score.short_momentum
@@ -411,7 +407,9 @@ class SevenDimScoringEngine:
 
         # 隐含波动率分位数(0-3分)
         iv_pct = cb.implied_vol_percentile
-        if params.iv_percentile_low <= iv_pct <= params.iv_percentile_high:
+        if iv_pct is None:
+            score += 1.5  # 数据缺失时给中性分
+        elif params.iv_percentile_low <= iv_pct <= params.iv_percentile_high:
             score += 3.0  # 中等分位最佳
         elif params.iv_percentile_low * 0.5 <= iv_pct < params.iv_percentile_low:
             score += 1.5
@@ -422,7 +420,9 @@ class SevenDimScoringEngine:
 
         # 历史波动率分位数(0-2分)
         hv_pct = stock.hist_vol_percentile
-        if params.hv_percentile_low <= hv_pct <= params.hv_percentile_high:
+        if hv_pct is None:
+            score += 1.0  # 数据缺失时给中性分
+        elif params.hv_percentile_low <= hv_pct <= params.hv_percentile_high:
             score += 2.0
         elif params.hv_percentile_low * 0.5 <= hv_pct < params.hv_percentile_low:
             score += 1.0
@@ -433,9 +433,12 @@ class SevenDimScoringEngine:
 
         # 波动率偏度(0-1.6分)
         # 正偏度意味着上涨弹性好
-        if cb.vol_skew > 0:
+        vol_skew = cb.vol_skew
+        if vol_skew is None:
+            score += 0.8  # 数据缺失时给中性分
+        elif vol_skew > 0:
             score += 1.6
-        elif cb.vol_skew > -0.5:
+        elif vol_skew > -0.5:
             score += 0.8
         else:
             score += 0.0
@@ -446,11 +449,11 @@ class SevenDimScoringEngine:
         """计算消息面得分(满分3.85分)
 
         包括: 行业政策 + 公司公告
-        注: 这需要外部数据支持，这里提供默认实现
+        注: 需要外部数据支持，当前返回中性分
         """
-        # 默认给予中性分数
-        # 实际应结合新闻情绪分析
-        return self.DIM_NEWS_FACTOR * 0.5
+        # TODO: 接入新闻情绪分析数据源
+        # 实际应结合新闻情绪分析、行业政策、公司公告等
+        return self.DIM_NEWS_FACTOR * 0.5  # 中性分，等待外部数据
 
     def _score_fundamentals(self, stock: StockData) -> float:
         """计算基本面得分(满分1.65分)
@@ -554,7 +557,7 @@ class SevenDimScoringEngine:
         基于信用评分模型结果
         """
         if credit_score is None:
-            return self.DIM_CREDIT * 0.7  # 默认中等分数
+            return self.DIM_CREDIT * 0.5  # 数据缺失时给中性分，避免高估
 
         # 信用评分映射(0-100 -> 0-8.1)
         return credit_score.total_score / 100 * self.DIM_CREDIT

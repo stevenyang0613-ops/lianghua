@@ -107,6 +107,8 @@ export function setupGlobalErrorHandler(): void {
         colno: event.colno,
       },
     })
+    // 阻止错误继续传播，避免触发全局页面崩溃
+    event.preventDefault()
   })
 
   // Promise 未捕获错误
@@ -121,6 +123,8 @@ export function setupGlobalErrorHandler(): void {
         type: 'unhandledrejection',
       },
     })
+    // 阻止未处理的 Promise rejection 继续传播，避免连锁崩溃
+    event.preventDefault()
   })
 
   // 资源加载错误

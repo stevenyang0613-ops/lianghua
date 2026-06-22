@@ -60,7 +60,7 @@ async function refreshAuthToken(): Promise<boolean> {
 async function requestAPI<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
-  body?: any
+  body?: unknown
 ): Promise<T> {
   // 关键修复：只检查 httpRequest 是否存在，不依赖 isElectron()
   // 因为 isElectron 可能因 preload 加载时序问题返回 false
@@ -130,11 +130,11 @@ async function requestAPI<T>(
 }
 
 // 快捷方法
-function postJSON<T>(url: string, body: any): Promise<T> {
+function postJSON<T>(url: string, body: unknown): Promise<T> {
   return requestAPI<T>('POST', url, body)
 }
 
-function putJSON<T>(url: string, body: any): Promise<T> {
+function putJSON<T>(url: string, body: unknown): Promise<T> {
   return requestAPI<T>('PUT', url, body)
 }
 

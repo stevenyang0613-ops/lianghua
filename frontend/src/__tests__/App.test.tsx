@@ -13,7 +13,7 @@ vi.mock('../utils/electron', () => ({
 }))
 vi.mock('../utils/indexedDBStorage', () => ({
   initDB: vi.fn(),
-  indexedDBStorage: { startAutoCleanup: vi.fn() },
+  indexedDBStorage: { startAutoCleanup: vi.fn(), stopAutoCleanup: vi.fn() },
 }))
 vi.mock('../utils/alertNotification', () => ({
   alertManager: { addRule: vi.fn(), getRules: vi.fn(() => []), init: vi.fn() },
@@ -31,9 +31,11 @@ vi.mock('../utils/performanceOptimization', () => ({
 }))
 vi.mock('../utils/backgroundSync', () => ({
   initBackgroundSync: vi.fn(),
+  cleanupBackgroundSync: vi.fn(),
 }))
 vi.mock('../utils/smartSync', () => ({
   initNetworkMonitor: vi.fn(),
+  cleanupNetworkMonitor: vi.fn(),
 }))
 vi.mock('../utils/cacheWarmup', () => ({
   initWarmup: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock('../utils/wsInstances', () => ({
   marketWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
   signalsWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
   refreshWsToken: vi.fn(),
+  cancelRefreshWsToken: vi.fn(),
 }))
 vi.mock('../utils/routePreload', () => ({
   preloadByPriority: vi.fn(),

@@ -80,6 +80,8 @@ class MacroData:
     # === 正股市场 ===
     stock_index_current: float = 0.0
     stock_index_change: float = 0.0
+    stock_index_change_20d: float = 0.0     # 近20日累计涨跌幅(%)
+    stock_index_change_60d: float = 0.0     # 近60日累计涨跌幅(%)
     stock_index_ma20: float = 0.0
     stock_index_ma60: float = 0.0
     stock_pe_median: float = 0.0
@@ -209,6 +211,7 @@ class MacroDataService:
 
         def _task_stock_index():
             (data.stock_index_current, data.stock_index_change,
+             data.stock_index_change_20d, data.stock_index_change_60d,
              data.stock_index_ma20, data.stock_index_ma60,
              data.stock_index_df) = self._fetch_stock_index()
 
@@ -526,6 +529,7 @@ class MacroDataService:
                     new_high = int(latest.get('high60', 0)) if not pd.isna(latest.get('high60', 0)) else 0
                     new_low = int(latest.get('low60', 0)) if not pd.isna(latest.get('low60', 0)) else 0
             except Exception:
+                logger.warning("[MacroData] stock_a_high_low_statistics failed, using 0 for new_high/new_low")
                 pass
             return limit_up, limit_down, advance, decline, new_high, new_low
         except Exception as e:
@@ -584,24 +588,32 @@ class MacroDataService:
             logger.warning(f"[MacroData] CB index fetch failed: {e}")
             return 0.0, 0.0, 0.0, 0.0, None
 
-    def _fetch_stock_index(self) -> Tuple[float, float, float, float, Optional[pd.DataFrame]]:
+    def _fetch_stock_index(self) -> Tuple[float, float, float, float, float, float, Optional[pd.DataFrame]]:
         try:
             if ak is None:
-                return 0.0, 0.0, 0.0, 0.0, None
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
             df = ak.stock_zh_index_daily_tx(symbol='sz399300')
             if df is None or df.empty:
-                return 0.0, 0.0, 0.0, 0.0, None
+                return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
             df = df.sort_values('date', ascending=True).reset_index(drop=True)
-            latest = df.iloc[-1]
-            current = float(latest['close'])
-            prev = float(df.iloc[-2]['close']) if len(df) >= 2 else current
-            change = (current - prev) / prev * 100 if prev > 0 else 0.0
-            ma20 = float(df['close'].tail(20).mean()) if len(df) >= 20 else current
-            ma60 = float(df['close'].tail(60).mean()) if len(df) >= 60 else current
-            return round(current, 2), round(change, 2), round(ma20, 2), round(ma60, 2), df
+            closes = df['close']
+            latest_close = float(closes.iloc[-1])
+            prev_close = float(closes.iloc[-2]) if len(df) >= 2 else latest_close
+            change = (latest_close - prev_close) / prev_close * 100 if prev_close > 0 else 0.0
+            # 20d change: (close 20 trading days ago → latest)
+            close_20d_ago = float(closes.iloc[-21]) if len(df) >= 21 else prev_close
+            change_20d = (latest_close - close_20d_ago) / close_20d_ago * 100 if close_20d_ago > 0 else 0.0
+            # 60d change: (close 60 trading days ago → latest)
+            close_60d_ago = float(closes.iloc[-61]) if len(df) >= 61 else prev_close
+            change_60d = (latest_close - close_60d_ago) / close_60d_ago * 100 if close_60d_ago > 0 else 0.0
+            ma20 = float(closes.tail(20).mean()) if len(df) >= 20 else latest_close
+            ma60 = float(closes.tail(60).mean()) if len(df) >= 60 else latest_close
+            return (round(latest_close, 2), round(change, 2),
+                    round(change_20d, 2), round(change_60d, 2),
+                    round(ma20, 2), round(ma60, 2), df)
         except Exception as e:
             logger.warning(f"[MacroData] HS300 index fetch failed: {e}")
-            return 0.0, 0.0, 0.0, 0.0, None
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None
 
     def _fill_cb_stats_from_jsl(self, data: MacroData) -> None:
         """从集思录转债指数获取真实的中位数溢价、价格、成交额、破面数"""
@@ -807,6 +819,7 @@ class MacroDataService:
                 get_cookie_csrf,
             )
         except Exception:
+            logger.debug("[MacroData] akshare.stock_feature.stock_a_pe_and_pb import failed, PE/PB median unavailable")
             return pe_median, pb_median, pe_pct, pb_pct
 
         try:

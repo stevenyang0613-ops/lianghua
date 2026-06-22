@@ -439,12 +439,19 @@ class EnhancedWhitelistManager(WhitelistManager):
         if len(self._history) < min_days:
             return []
 
-        # 计算每个转债在白名单内的连续天数
-        bond_days: Dict[str, int] = {}
+        # 计算每个转债在白名单内的最大连续天数
+        bond_max_consecutive: Dict[str, int] = {}
 
-        for state in reversed(self._history):
-            for code in state.whitelist:
-                bond_days[code] = bond_days.get(code, 0) + 1
+        for code in self._history[-1].whitelist:
+            max_consecutive = 0
+            current = 0
+            for state in reversed(self._history):
+                if code in state.whitelist:
+                    current += 1
+                    max_consecutive = max(max_consecutive, current)
+                else:
+                    current = 0
+            bond_max_consecutive[code] = max_consecutive
 
         # 返回连续天数足够的转债
-        return [code for code, days in bond_days.items() if days >= min_days]
+        return [code for code, days in bond_max_consecutive.items() if days >= min_days]

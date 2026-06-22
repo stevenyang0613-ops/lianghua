@@ -289,8 +289,9 @@ class ConfigManager:
     def create_version(self, change_log: str = "", created_by: str = "system") -> str:
         """创建版本"""
         with self._lock:
-            # 生成版本ID
-            version_id = f"v_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # 生成版本ID（使用微秒避免冲突）
+            now = datetime.now()
+            version_id = f"v_{now.strftime('%Y%m%d_%H%M%S')}_{now.microsecond:06d}"
 
             # 计算配置哈希
             config_str = json.dumps(self.get_all(), sort_keys=True)
@@ -331,8 +332,22 @@ class ConfigManager:
             version.status = ConfigStatus.ACTIVE
             version.activated_at = datetime.now()
 
-            # 应用配置
-            self._configs = copy.deepcopy(version.parameters)
+            # 应用配置并触发变更回调
+            new_params = copy.deepcopy(version.parameters)
+            changed_keys = set()
+            for key, val in new_params.items():
+                if key in self._configs and self._configs[key] != val:
+                    changed_keys.add(key)
+                elif key not in self._configs:
+                    changed_keys.add(key)
+            self._configs = new_params
+            # 触发变更回调
+            for key in changed_keys:
+                for callback in self._change_callbacks.get(key, []):
+                    try:
+                        callback(key, self._configs[key])
+                    except Exception as e:
+                        logger.warning(f"[ConfigManager] 回调触发失败: {key} -> {e}")
 
             self._active_version = version_id
 

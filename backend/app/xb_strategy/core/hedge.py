@@ -151,7 +151,7 @@ class HedgeEngine:
             # 相关性过低，不使用股指期货
             return (
                 0.0,
-                0.15,
+                params.hedge_put_ratio_low,
                 params.hedge_pure_bond_low,
             )
 
@@ -256,10 +256,15 @@ class HedgeEngine:
             if not cb:
                 continue
 
-            # 纯债性评分
-            ytm = cb.get("ytm", 0)
-            premium = cb.get("conversion_premium", 0)
-            rating = cb.get("issuer_rating", "")
+            # 防御性检查：统一处理 dict 和 dataclass
+            if isinstance(cb, dict):
+                ytm = cb.get("ytm", 0)
+                premium = cb.get("conversion_premium", 0)
+                rating = cb.get("issuer_rating", "")
+            else:
+                ytm = getattr(cb, "ytm", 0)
+                premium = getattr(cb, "conversion_premium", 0)
+                rating = getattr(cb, "issuer_rating", "")
 
             # 高YTM(>3%)、低溢价(<20%)、高评级(AA及以上)
             score = 0

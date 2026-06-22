@@ -45,6 +45,8 @@ def _make_real_macro_data():
     m.cb_ytm_median = 0.0  # 当前未接入真实 YTM 中位数，保持 0
     m.stock_index_current = 3500.0
     m.stock_index_change = 0.6
+    m.stock_index_change_20d = 3.2    # 近20日累计涨跌幅
+    m.stock_index_change_60d = -1.8   # 近60日累计涨跌幅
     m.stock_index_ma20 = 3480.0
     m.stock_index_ma60 = 3450.0
     m.stock_pe_median = 22.5
@@ -102,6 +104,8 @@ def test_convert_from_legacy_data_maps_real_fields():
     assert data.cb_median_premium == pytest.approx(32.5)
     assert data.cb_median_price == pytest.approx(118.0)
     assert data.stock_index_current == pytest.approx(3500.0)
+    assert data.stock_index_change_20d == pytest.approx(3.2)
+    assert data.stock_index_change_60d == pytest.approx(-1.8)
     assert data.stock_pe_median == pytest.approx(22.5)
     assert data.stock_pb_percentile == pytest.approx(35.0)
     assert data.pcr_ratio == pytest.approx(0.92)
@@ -177,3 +181,18 @@ def test_data_completeness_not_penalized_for_unavailable_fields():
     data = convert_from_legacy_data(macro_data=macro)
     # 真实数据较全时，完整度应较高（不可用字段不扣分）
     assert data.data_completeness >= 0.6
+
+
+def test_stock_index_change_20d_60d_fallback():
+    """当 20d/60d 数据缺失时，detect_market_regime 应回退到 stock_index_change * 20/60"""
+    macro = _make_real_macro_data()
+    # 模拟缺失 20d/60d 字段
+    macro.stock_index_change_20d = 0.0
+    macro.stock_index_change_60d = 0.0
+    data = convert_from_legacy_data(macro_data=macro)
+    model = EnhancedTimingModel()
+    signal = model.calculate(data)
+    # 有 stock_index_change=0.6 时，回退逻辑应在 detect_market_regime 内生效
+    assert signal.total_score is not None
+    # stock_index_change 有值，所以综合得分应合理
+    assert 20 <= signal.total_score <= 80

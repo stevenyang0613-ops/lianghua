@@ -8,6 +8,7 @@ import AlertPanel from './components/AlertPanel'
 import TitleBar from './components/electron/TitleBar'
 import OfflineIndicator from './components/OfflineIndicator'
 import PerformanceMonitor from './components/PerformanceMonitor'
+import ErrorBoundary from './components/ErrorBoundary'
 import { useResponsive } from './hooks/useResponsive'
 import { useAppStore } from './stores/useAppStore'
 import { useAlertStore } from './stores/useAlertStore'
@@ -17,6 +18,11 @@ import type React from 'react'
 
 // 懒加载详情面板 — 仅当有选中的债券时才加载
 const DetailPanel = lazy(() => import('./components/DetailPanel'))
+
+/** 轻量级错误 fallback：仅显示空白，不阻断整个布局 */
+function SilentFallback() {
+  return <div style={{ display: 'none' }} />
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const selectedBond = useAppStore((s) => s.selectedBond)
@@ -38,7 +44,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         flexDirection: 'column',
       }}
     >
-      <TitleBar />
+      <ErrorBoundary fallback={<SilentFallback />}>
+        <TitleBar />
+      </ErrorBoundary>
       {isMobile && (
         <div style={{
           height: 48,
@@ -66,16 +74,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             width={200}
             styles={{ body: { padding: 0 } }}
           >
-            <Sidebar collapsed={false} onCollapse={() => {}} />
+            <ErrorBoundary fallback={<SilentFallback />}>
+              <Sidebar collapsed={false} onCollapse={() => {}} />
+            </ErrorBoundary>
           </Drawer>
         ) : (
           <div style={{ width: sidebarCollapsed ? 80 : 200, borderRight: '1px solid var(--border-color, #f0f0f0)', overflow: 'auto', transition: 'width 0.2s', flexShrink: 0, willChange: 'width' }}>
-            <Sidebar collapsed={sidebarCollapsed} onCollapse={setSidebarCollapsed} />
+            <ErrorBoundary fallback={<SilentFallback />}>
+              <Sidebar collapsed={sidebarCollapsed} onCollapse={setSidebarCollapsed} />
+            </ErrorBoundary>
           </div>
         )}
 
         <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-color, #f5f5f5)', display: 'flex', flexDirection: 'column' }}>
-          <OfflineIndicator />
+          <ErrorBoundary fallback={<SilentFallback />}>
+            <OfflineIndicator />
+          </ErrorBoundary>
           <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
             {!isMobile && (
               <div style={{ position: 'absolute', top: 8, right: 16, zIndex: 100, display: 'flex', gap: 8 }}>
@@ -88,19 +102,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {selectedBond && !isMobile && (
           <Suspense fallback={<div style={{ width: 320, borderLeft: '1px solid var(--border-color, #e8e8e8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
-            <DetailPanel />
+            <ErrorBoundary fallback={<SilentFallback />}>
+              <DetailPanel />
+            </ErrorBoundary>
           </Suspense>
         )}
       </div>
 
-      <StatusBar />
+      <ErrorBoundary fallback={<SilentFallback />}>
+        <StatusBar />
+      </ErrorBoundary>
 
       {isMobile && (
         <AlertPanel visible={alertVisible} onClose={() => setAlertVisible(false)} />
       )}
 
       {/* 性能监控面板 - 仅在开发环境或设置启用时显示 */}
-      <PerformanceMonitor />
+      <ErrorBoundary fallback={<SilentFallback />}>
+        <PerformanceMonitor />
+      </ErrorBoundary>
     </div>
   )
 }

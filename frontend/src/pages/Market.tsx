@@ -304,7 +304,7 @@ export default function Market() {
                 {wsConnected ? <><WifiOutlined /> 实时</> : (
                   <>
                     <DisconnectOutlined /> 离线
-                    <Button type="link" size="small" style={{ padding: 0, marginLeft: 4, fontSize: 11 }} onClick={() => { import('../utils/wsInstances').then(m => m.marketWs.connect()) }}>重连</Button>
+                    <Button type="link" size="small" style={{ padding: 0, marginLeft: 4, fontSize: 11 }} onClick={() => { import('../utils/wsInstances').then(m => m.marketWs.connect()).catch(() => {}) }}>重连</Button>
                   </>
                 )}
               </span>

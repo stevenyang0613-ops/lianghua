@@ -35,8 +35,8 @@ def _load_guarantee():
             if time.time() - cached.get("_ts", 0) < _GUARANTEE_TTL:
                 _guarantee_map = {k: v for k, v in cached.items() if k != "_ts"}
                 _guarantee_ts = cached.get("_ts", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[EnrichmentFinance] guarantee cache load failed: {e}")
 
 
 def _save_guarantee():

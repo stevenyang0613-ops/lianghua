@@ -322,6 +322,7 @@ class SimulatedBroker(BrokerInterface):
         """卖出"""
         with self._lock:
             if not self._connected:
+                logger.warning(f"[SimulatedBroker] 未连接，无法卖出: {code}")
                 return None
 
             # 检查持仓
@@ -347,7 +348,7 @@ class SimulatedBroker(BrokerInterface):
             if not order:
                 return False
 
-            if order.status not in [OrderStatus.PENDING, OrderStatus.SUBMITTED]:
+            if order.status not in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL]:
                 return False
 
             # 撤销订单
@@ -363,7 +364,9 @@ class SimulatedBroker(BrokerInterface):
             else:
                 pos = self._positions.get(order.cb_code)
                 if pos:
-                    pos['available'] += order.quantity - order.filled_quantity
+                    pos['available'] = pos.get('available', 0) + (order.quantity - order.filled_quantity)
+                else:
+                    logger.warning(f"[SimulatedBroker] 撤单时持仓不存在: {order.cb_code}")
 
             logger.info(f"[SimulatedBroker] 撤单成功: {order_id}")
             return True
@@ -383,17 +386,21 @@ class SimulatedBroker(BrokerInterface):
         """查询持仓"""
         positions = []
         for code, pos in self._positions.items():
-            if pos['quantity'] > 0:
+            if pos.get('quantity', 0) > 0:
+                quantity = pos.get('quantity', 0)
+                available = pos.get('available', 0)
+                cost_price = pos.get('cost_price', 0)
+                current_price = pos.get('current_price', cost_price)
                 positions.append(Position(
                     cb_code=code,
-                    cb_name=pos['name'],
-                    quantity=pos['quantity'],
-                    available=pos['available'],
-                    cost_price=pos['cost_price'],
-                    current_price=pos.get('current_price', pos['cost_price']),
-                    market_value=pos['quantity'] * pos.get('current_price', pos['cost_price']),
-                    profit=(pos.get('current_price', pos['cost_price']) - pos['cost_price']) * pos['quantity'],
-                    profit_pct=(pos.get('current_price', pos['cost_price']) - pos['cost_price']) / pos['cost_price'] * 100 if pos['cost_price'] > 0 else 0,
+                    cb_name=pos.get('name', code),
+                    quantity=quantity,
+                    available=available,
+                    cost_price=cost_price,
+                    current_price=current_price,
+                    market_value=quantity * current_price,
+                    profit=(current_price - cost_price) * quantity if cost_price > 0 else 0,
+                    profit_pct=(current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0,
                 ))
         return positions
 
@@ -530,6 +537,8 @@ class SimulatedBroker(BrokerInterface):
 
     def _calc_commission(self, amount: float, side: str) -> float:
         """计算佣金"""
+        if amount <= 0:
+            return 0.0
         # 佣金万1，最低5元
         commission = max(amount * 0.0001, 5.0)
         # 印花税（卖出）
@@ -593,8 +602,12 @@ class HuataiBroker(BrokerInterface):
             return None
         try:
             result = self._api.order(code, "buy", quantity, price)
+            order_id = result.get('order_id') if isinstance(result, dict) else None
+            if not order_id:
+                logger.error(f"[HuataiBroker] 买入失败: API返回无效结果")
+                return None
             return Order(
-                order_id=result['order_id'],
+                order_id=order_id,
                 cb_code=code,
                 cb_name=name,
                 side=OrderSide.BUY,
@@ -613,8 +626,12 @@ class HuataiBroker(BrokerInterface):
             return None
         try:
             result = self._api.order(code, "sell", quantity, price)
+            order_id = result.get('order_id') if isinstance(result, dict) else None
+            if not order_id:
+                logger.error(f"[HuataiBroker] 卖出失败: API返回无效结果")
+                return None
             return Order(
-                order_id=result['order_id'],
+                order_id=order_id,
                 cb_code=code,
                 cb_name=name,
                 side=OrderSide.SELL,
@@ -695,8 +712,8 @@ class HuataiBroker(BrokerInterface):
         try:
             result = self._api.query_account()
             return Account(
-                total_asset=result['total_asset'],
-                cash=result['cash'],
+                total_asset=result.get('total_asset', 0),
+                cash=result.get('cash', 0),
                 frozen=result.get('frozen', 0),
                 market_value=result.get('market_value', 0),
                 profit=result.get('profit', 0),
@@ -1164,8 +1181,9 @@ class TradingSystem:
         # 智能路由
         orders = self.smart_router.route_order(code, name, side, quantity, price, liquidity_score)
 
-        # 更新风控状态
-        self.circuit_breaker.update_after_trade(account)
+        # 更新风控状态（仅当订单成功提交后）
+        if orders:
+            self.circuit_breaker.update_after_trade(account)
 
         # 检查自动对冲
         account = self.broker.query_account()

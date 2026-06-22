@@ -558,7 +558,9 @@ class SignalEnhancer:
         valid_signals = []
 
         for s in signals:
-            decay = self.decay_manager.calculate_decay(s.created_at, TimeFrame.MINUTE_5, current_time)
+            # 使用信号原始时间框架计算衰减，而非硬编码MINUTE_5
+            tf = getattr(s, 'timeframe', TimeFrame.MINUTE_5)
+            decay = self.decay_manager.calculate_decay(s.created_at, tf, current_time)
             if decay > 0.1:  # 保留衰减大于10%的信号
                 s.decay_factor = decay
                 valid_signals.append(s)

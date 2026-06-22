@@ -74,6 +74,7 @@ export class WSReconnect {
   private isManualClose = false
   private _eventLog: WsLogEntry[] = []
   private static MAX_LOG = 10
+  private static MAX_QUEUE_SIZE = 1000
   private _lastPingTs = 0
   private _latency = 0
   private _latencyHistory: number[] = []
@@ -161,11 +162,14 @@ export class WSReconnect {
       const unsubMsg = api.onWsMessage((id: string, data: string, isBinary: boolean) => {
         if (id !== this.wsId) return
         if (isBinary) {
-          // Base64 解码为 ArrayBuffer
-          const binary = atob(data)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-          this.handleMessage(bytes.buffer)
+          try {
+            const binary = atob(data)
+            const bytes = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+            this.handleMessage(bytes.buffer)
+          } catch (err) {
+            console.error('[WS] IPC binary decode error:', err)
+          }
         } else {
           this.handleMessage(data)
         }
@@ -180,6 +184,12 @@ export class WSReconnect {
       if (!result.ok) {
         this._addLog('error', `IPC连接失败: ${result.error}`)
         this.handleConnectionFailure()
+        return
+      }
+
+      // 重连竞态防护：IPC Promise resolve 后，状态可能被并发路径改变
+      if (this.state !== 'connecting') {
+        this._addLog('reconnect', `IPC连接成功后状态变更: ${this.state}`)
         return
       }
 
@@ -440,7 +450,23 @@ export class WSReconnect {
 
   send(message: unknown): void {
     if (this.state === 'connected') this.doSend(message)
-    else this.messageQueue.push(message)
+    else {
+      this.messageQueue.push(message)
+      if (this.messageQueue.length > WSReconnect.MAX_QUEUE_SIZE) {
+        this.messageQueue = this.messageQueue.slice(-WSReconnect.MAX_QUEUE_SIZE)
+      }
+    }
+  }
+
+  dispose(): void {
+    this.disconnect()
+    this.messageHandlers.clear()
+    this.stateListeners.clear()
+    this._latencyListeners.clear()
+    this._healthListeners.clear()
+    this._eventLog = []
+    this._latencyHistory = []
+    this._highLatencyCount = 0
   }
 
   subscribe(type: string, handler: MessageHandler): () => void {

@@ -537,6 +537,8 @@ class SyncScheduler:
 
                 await asyncio.sleep(60)  # 每分钟检查一次
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[SyncScheduler] 调度异常: {e}")
                 await asyncio.sleep(60)

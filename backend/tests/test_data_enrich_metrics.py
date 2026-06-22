@@ -173,11 +173,15 @@ class TestExtendedCacheRefresh:
             target = getattr(de, attr, None)
             if isinstance(target, dict):
                 target.clear()
+        # Pin bond-stock universe so zero-fill tests are deterministic.
+        self._original_bond_codes = set(de._bond_stock_codes) if de._bond_stock_codes else set()
+        de._bond_stock_codes = {"000001"}
         # Prevent tests from writing mock data to the production cache directory.
         self._orig_save_cache = de._save_cache
         de._save_cache = lambda path, data: None
 
     def teardown_method(self):
+        de._bond_stock_codes = self._original_bond_codes
         with de._cache_lock:
             de._refresh_metrics.clear()
         # Restore maps to empty to avoid leaking into other tests.
@@ -213,24 +217,37 @@ class TestExtendedCacheRefresh:
         assert metrics["_refresh_north_cache"]["status"] == "ok"
 
     def test_margin_cache_handles_missing_akshare_interface(self):
-        """If akshare doesn't expose the margin interface, refresh should return 0
-        and record empty metrics, not error."""
-        with patch.object(de.ak, "stock_margin_underlying_info_szse", create=True):
-            # The hasattr check above would see a mock attribute and try to call it.
-            # We simulate an AttributeError on the actual call to exercise the outer try/except.
-            with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
-                count = de._refresh_margin_cache()
-        assert count == 0
-        metrics = de.get_refresh_metrics()
-        assert metrics["_refresh_margin_cache"]["status"] == "empty"
+        """If akshare doesn't expose the margin interface, refresh should still
+        zero-fill bond stock codes and return count > 0, not an error."""
+        saved_codes = de._bond_stock_codes
+        de._bond_stock_codes = {"000001", "000002"}
+        try:
+            with patch.object(de.ak, "stock_margin_underlying_info_szse", create=True):
+                # The hasattr check above would see a mock attribute and try to call it.
+                # We simulate an AttributeError on the actual call to exercise the outer try/except.
+                with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
+                    count = de._refresh_margin_cache()
+            # 零填充确保即使 API 失败也有基础数据
+            assert count > 0
+            metrics = de.get_refresh_metrics()
+            assert metrics["_refresh_margin_cache"]["status"] == "ok"
+        finally:
+            de._bond_stock_codes = saved_codes
 
-    def test_lhb_cache_refresh_empty_dataframe_records_empty(self):
-        empty_df = pd.DataFrame()
-        with patch.object(de, "_run_with_timeout", return_value=empty_df):
-            count = de._refresh_lhb_cache()
-        assert count == 0
-        metrics = de.get_refresh_metrics()
-        assert metrics["_refresh_lhb_cache"]["status"] == "empty"
+    def test_lhb_cache_refresh_empty_dataframe_records_ok(self):
+        """Even when LHB API returns empty, zero-fill should produce count > 0."""
+        saved_codes = de._bond_stock_codes
+        de._bond_stock_codes = {"000001", "000002"}
+        try:
+            empty_df = pd.DataFrame()
+            with patch.object(de, "_run_with_timeout", return_value=empty_df):
+                count = de._refresh_lhb_cache()
+            # 零填充确保即使 API 失败也有基础数据
+            assert count > 0
+            metrics = de.get_refresh_metrics()
+            assert metrics["_refresh_lhb_cache"]["status"] == "ok"
+        finally:
+            de._bond_stock_codes = saved_codes
 
     def test_block_trade_cache_refresh_ok(self):
         df = pd.DataFrame({"证券代码": ["000001"], "成交额": [12345.6]})
@@ -240,12 +257,19 @@ class TestExtendedCacheRefresh:
         assert de._block_trade_map.get("000001", {}).get("block_trade_amount") == 12345.6
 
     def test_holder_num_cache_handles_missing_interface(self):
-        with patch.object(de.ak, "stock_main_stock_holder", create=True):
-            with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
-                count = de._refresh_holder_num_cache()
-        assert count == 0
-        metrics = de.get_refresh_metrics()
-        assert metrics["_refresh_holder_num_cache"]["status"] == "empty"
+        # 预填充 _bond_stock_codes，防止 _run_with_timeout 修补导致 _ensure_bond_stock_codes 失败
+        saved_codes = de._bond_stock_codes
+        de._bond_stock_codes = {"000001", "000002"}
+        try:
+            with patch.object(de.ak, "stock_main_stock_holder", create=True):
+                with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
+                    count = de._refresh_holder_num_cache()
+            # 即使 API 不可用，零填充应为所有 bond_stock_codes 添加条目
+            assert count > 0
+            metrics = de.get_refresh_metrics()
+            assert metrics["_refresh_holder_num_cache"]["status"] == "ok"
+        finally:
+            de._bond_stock_codes = saved_codes
 
     def test_earnings_forecast_cache_refresh_ok(self):
         df = pd.DataFrame({"股票代码": ["000001"], "业绩变动幅度": [50.0]})
@@ -394,4 +418,84 @@ class TestDataSourceApiCalls:
         assert mock_cninfo.called, "cninfo should be attempted when LH_MGMT_TRY_CNINFO=1"
         assert de._mgmt_map.get("000001") == 10.5, "EM data should be preserved even when cninfo fails"
         assert de._mgmt_map.get("000002") == 20.5, "EM ggcg data should be preserved even when cninfo fails"
+
+
+class TestFieldLoaderMap:
+    """Verify _FIELD_LOADER_MAP completeness for self-check recovery."""
+
+    def teardown_method(self):
+        de._bond_stock_codes = set()
+
+    def test_field_loader_map_includes_momentum_fields(self):
+        """momentum_5d/10d/20d/60d 应有加载器，使 self_check_loop 可重载。"""
+        de._populate_field_loader_map()
+        for f in ("momentum_5d", "momentum_10d", "momentum_20d", "momentum_60d"):
+            assert f in de._FIELD_LOADER_MAP, f"{f} missing from _FIELD_LOADER_MAP"
+            assert de._FIELD_LOADER_MAP[f] is de._load_momentum_cache
+
+    def test_field_loader_map_includes_event_score(self):
+        """event_score 应有加载器。"""
+        de._populate_field_loader_map()
+        assert "event_score" in de._FIELD_LOADER_MAP
+        assert de._FIELD_LOADER_MAP["event_score"] is de._load_event_cache
+
+    def test_field_loader_map_includes_outstanding_scale(self):
+        """outstanding_scale 应有加载器。"""
+        de._populate_field_loader_map()
+        assert "outstanding_scale" in de._FIELD_LOADER_MAP
+        assert de._FIELD_LOADER_MAP["outstanding_scale"] is de._load_bond_outstanding_cache
+
+
+class TestSpotThenVol:
+    """Verify _spot_then_vol function exists and chains spot→vol correctly."""
+
+    def test_spot_then_vol_exists(self):
+        """_spot_then_vol 应在 data_enrich 模块中存在。"""
+        assert hasattr(de, "_spot_then_vol")
+        assert callable(de._spot_then_vol)
+
+    def test_spot_then_vol_calls_spot_when_empty(self):
+        """当 _spot_map 为空时，_spot_then_vol 应调用 _refresh_spot_cache。"""
+        saved = de._spot_map
+        de._spot_map = {}
+        try:
+            with patch.object(de, "_refresh_spot_cache") as mock_spot:
+                with patch.object(de, "_refresh_volatility_cache"):
+                    de._spot_then_vol()
+            mock_spot.assert_called_once()
+        finally:
+            de._spot_map = saved
+
+    def test_spot_then_vol_skips_spot_when_large_enough(self):
+        """当 _spot_map >= 1000 时，_spot_then_vol 不应调用 _refresh_spot_cache。"""
+        saved_spot = de._spot_map
+        saved_vol = de._vol_map
+        # 构造含 1000 个条目的 _spot_map
+        de._spot_map = {str(i).zfill(6): {"price": float(i)} for i in range(1000)}
+        de._vol_map = {}
+        try:
+            with patch.object(de, "_refresh_spot_cache") as mock_spot:
+                with patch.object(de, "_refresh_volatility_cache") as mock_vol:
+                    de._spot_then_vol()
+            mock_spot.assert_not_called()
+            mock_vol.assert_called_once()
+        finally:
+            de._spot_map = saved_spot
+            de._vol_map = saved_vol
+
+    def test_spot_then_vol_skips_both_when_large_enough(self):
+        """当 _spot_map >= 1000 且 _vol_map >= 1000 时，不调用任何 refresh。"""
+        saved_spot = de._spot_map
+        saved_vol = de._vol_map
+        de._spot_map = {str(i).zfill(6): {"price": float(i)} for i in range(1000)}
+        de._vol_map = {str(i).zfill(6): {"iv": 0.2} for i in range(1000)}
+        try:
+            with patch.object(de, "_refresh_spot_cache") as mock_spot:
+                with patch.object(de, "_refresh_volatility_cache") as mock_vol:
+                    de._spot_then_vol()
+            mock_spot.assert_not_called()
+            mock_vol.assert_not_called()
+        finally:
+            de._spot_map = saved_spot
+            de._vol_map = saved_vol
 

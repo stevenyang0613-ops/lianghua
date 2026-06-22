@@ -124,7 +124,7 @@ class CreditScoringEngine:
         - 线性插值
         """
         if cb.pure_bond_value <= 0:
-            return 12.5  # 默认中等分数
+            return 0.0  # 数据缺失时不给分，避免掩盖风险
 
         price_to_bond = cb.price_to_bond_ratio
 
@@ -147,6 +147,8 @@ class CreditScoringEngine:
 
         AAA=10, AA+=7, AA=5, AA-=3, A+=1, A=0.5, A-及以下=0
         """
+        if not rating:
+            return 5.0  # 数据缺失时给中性分
         return self.RATING_SCORES.get(rating.upper(), 0.0)
 
     def _score_debt_ratio(self, debt_ratio: float) -> float:

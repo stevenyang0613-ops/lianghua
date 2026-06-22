@@ -39,7 +39,11 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
   const bond = useMemo(() => allBonds.find(b => b.code === code), [allBonds, code])
 
   useEffect(() => {
-    loadECharts().then(() => setEchartsReady(true))
+    let mounted = true
+    loadECharts().then(() => {
+      if (mounted) setEchartsReady(true)
+    })
+    return () => { mounted = false }
   }, [])
 
   useEffect(() => {

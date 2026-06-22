@@ -95,7 +95,12 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidMount(): void {
-    setupRejectionGuard()
+    // 实例级 rejection handler：每个 ErrorBoundary 维护自己的 listener，避免全局单例问题
+    this.rejectionHandler = (event: PromiseRejectionEvent) => {
+      console.warn('[ErrorBoundary] Unhandled promise rejection (isolated):', event.reason)
+      event.preventDefault()
+    }
+    window.addEventListener('unhandledrejection', this.rejectionHandler)
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {

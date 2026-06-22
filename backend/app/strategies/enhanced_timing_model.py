@@ -2426,6 +2426,8 @@ def convert_from_legacy_data(
         # 股票指数
         data.stock_index_current = getattr(macro_data, 'stock_index_current', 0) or 0
         data.stock_index_change = getattr(macro_data, 'stock_index_change', 0) or 0
+        data.stock_index_change_20d = getattr(macro_data, 'stock_index_change_20d', 0) or 0
+        data.stock_index_change_60d = getattr(macro_data, 'stock_index_change_60d', 0) or 0
         data.stock_index_ma20 = getattr(macro_data, 'stock_index_ma20', 0) or 0
         data.stock_index_ma60 = getattr(macro_data, 'stock_index_ma60', 0) or 0
         # === 新增：从 MacroData V2.1 填充所有先前硬编码的字段 ===
@@ -2542,6 +2544,8 @@ def convert_from_legacy_data(
         0.04 if data.cb_avg_daily_amount > 0 else 0,
         0.04 if data.cb_index_current > 0 else 0,
         0.04 if data.stock_index_current > 0 else 0,
+        0.02 if not math.isnan(data.stock_index_change_20d) and data.stock_index_change_20d != 0 else 0,
+        0.02 if not math.isnan(data.stock_index_change_60d) and data.stock_index_change_60d != 0 else 0,
         0.04 if data.cb_median_price > 0 else 0,
         0.03 if data.cb_count > 0 else 0,
         0.04 if data.shibor_overnight > 0 else 0,

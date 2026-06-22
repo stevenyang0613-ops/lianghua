@@ -159,69 +159,71 @@ export default function App() {
     // 启动后端健康检查（后端断开时自动断WS，恢复时自动重连）
     const healthCleanup = startHealthCheck()
 
-    return () => {
-      networkCleanup()
-      preloadCleanup()
-      healthCleanup()
-      window.removeEventListener('unhandledrejection', rejectionGuard)
-      marketWs.disconnect()
-      signalsWs.disconnect()
-      cleanupWsListeners()
-      indexedDBStorage.stopAutoCleanup()
-      cleanupBackgroundSync()
-      cleanupNetworkMonitor()
-      cancelRefreshWsToken()
-    }
+      return () => {
+        networkCleanup()
+        preloadCleanup()
+        healthCleanup()
+        window.removeEventListener('unhandledrejection', rejectionGuard)
+        try { marketWs.disconnect() } catch { /* isolated */ }
+        try { signalsWs.disconnect() } catch { /* isolated */ }
+        cleanupWsListeners()
+        indexedDBStorage.stopAutoCleanup()
+        cleanupBackgroundSync()
+        cleanupNetworkMonitor()
+        cancelRefreshWsToken()
+      }
   }, [])
 
   return (
     <StartupLoading>
-      <Layout>
-      <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
-        <Routes>
-        <Route path="/" element={<ErrorBoundary><Market /></ErrorBoundary>} />
-        <Route path="/market" element={<ErrorBoundary><Market /></ErrorBoundary>} />
-        <Route path="/exchangeable" element={<ErrorBoundary><ExchangeableBonds /></ErrorBoundary>} />
-        <Route path="/mx-data" element={<ErrorBoundary><MXData /></ErrorBoundary>} />
-        <Route path="/sector-rotation" element={<ErrorBoundary><SectorRotation /></ErrorBoundary>} />
-        <Route path="/sector-rotation-stock" element={<ErrorBoundary><SectorRotationStock /></ErrorBoundary>} />
-        <Route path="/watchlist" element={<ErrorBoundary><Watchlist /></ErrorBoundary>} />
-        <Route path="/backtest" element={<ErrorBoundary><Backtest /></ErrorBoundary>} />
-        <Route path="/trade" element={<ErrorBoundary><Trade /></ErrorBoundary>} />
-        <Route path="/analysis" element={<ErrorBoundary><Analysis /></ErrorBoundary>} />
-        <Route path="/signals" element={<ErrorBoundary><Signals /></ErrorBoundary>} />
-        <Route path="/strategies" element={<ErrorBoundary><Strategies /></ErrorBoundary>} />
-        <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
-        <Route path="/performance" element={<ErrorBoundary><Performance /></ErrorBoundary>} />
-        <Route path="/trade-log" element={<ErrorBoundary><TradeLog /></ErrorBoundary>} />
-        <Route path="/strategy-replay" element={<ErrorBoundary><StrategyReplay /></ErrorBoundary>} />
-        <Route path="/accounts" element={<ErrorBoundary><AccountManager /></ErrorBoundary>} />
-        <Route path="/alerts" element={<ErrorBoundary><AlertManager /></ErrorBoundary>} />
-        <Route path="/reports" element={<ErrorBoundary><ReportCenter /></ErrorBoundary>} />
-        <Route path="/risk" element={<ErrorBoundary><RiskControl /></ErrorBoundary>} />
-        <Route path="/auto-trade" element={<ErrorBoundary><AutoTrade /></ErrorBoundary>} />
-        <Route path="/paper-trade" element={<ErrorBoundary><PaperTrade /></ErrorBoundary>} />
-        <Route path="/data-player" element={<ErrorBoundary><DataPlayer /></ErrorBoundary>} />
-        <Route path="/strategy-market" element={<ErrorBoundary><StrategyMarket /></ErrorBoundary>} />
-        <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
-        <Route path="/messages" element={<ErrorBoundary><MessageCenter /></ErrorBoundary>} />
-        <Route path="/themes" element={<ErrorBoundary><ThemeStore /></ErrorBoundary>} />
-        <Route path="/plugins" element={<ErrorBoundary><PluginManager /></ErrorBoundary>} />
-        <Route path="/score-ranking" element={<ErrorBoundary><ScoreRanking /></ErrorBoundary>} />
-        <Route path="/xibu-score" element={<ErrorBoundary><XibuScore /></ErrorBoundary>} />
-        <Route path="/timing-signal" element={<ErrorBoundary><TimingSignal /></ErrorBoundary>} />
-        <Route path="/xuanji-index" element={<ErrorBoundary><XuanjiIndex /></ErrorBoundary>} />
-        <Route path="/sync" element={<ErrorBoundary><SyncSettings /></ErrorBoundary>} />
-        <Route path="/analytics" element={<ErrorBoundary><AnalyticsDashboard /></ErrorBoundary>} />
-        <Route path="/theme-config" element={<ErrorBoundary><ThemeConfig /></ErrorBoundary>} />
-        <Route path="/data-import-export" element={<ErrorBoundary><DataImportExport /></ErrorBoundary>} />
-        <Route path="/ops" element={<ErrorBoundary><OpsDashboard /></ErrorBoundary>} />
-        <Route path="/data-source-monitor" element={<ErrorBoundary><DataSourceMonitor /></ErrorBoundary>} />
-        <Route path="/enrichment-dashboard" element={<ErrorBoundary><EnrichmentDashboard /></ErrorBoundary>} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-      </Layout>
+      <ErrorBoundary>
+        <Layout>
+          <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
+            <Routes>
+            <Route path="/" element={<ErrorBoundary><Market /></ErrorBoundary>} />
+            <Route path="/market" element={<ErrorBoundary><Market /></ErrorBoundary>} />
+            <Route path="/exchangeable" element={<ErrorBoundary><ExchangeableBonds /></ErrorBoundary>} />
+            <Route path="/mx-data" element={<ErrorBoundary><MXData /></ErrorBoundary>} />
+            <Route path="/sector-rotation" element={<ErrorBoundary><SectorRotation /></ErrorBoundary>} />
+            <Route path="/sector-rotation-stock" element={<ErrorBoundary><SectorRotationStock /></ErrorBoundary>} />
+            <Route path="/watchlist" element={<ErrorBoundary><Watchlist /></ErrorBoundary>} />
+            <Route path="/backtest" element={<ErrorBoundary><Backtest /></ErrorBoundary>} />
+            <Route path="/trade" element={<ErrorBoundary><Trade /></ErrorBoundary>} />
+            <Route path="/analysis" element={<ErrorBoundary><Analysis /></ErrorBoundary>} />
+            <Route path="/signals" element={<ErrorBoundary><Signals /></ErrorBoundary>} />
+            <Route path="/strategies" element={<ErrorBoundary><Strategies /></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+            <Route path="/performance" element={<ErrorBoundary><Performance /></ErrorBoundary>} />
+            <Route path="/trade-log" element={<ErrorBoundary><TradeLog /></ErrorBoundary>} />
+            <Route path="/strategy-replay" element={<ErrorBoundary><StrategyReplay /></ErrorBoundary>} />
+            <Route path="/accounts" element={<ErrorBoundary><AccountManager /></ErrorBoundary>} />
+            <Route path="/alerts" element={<ErrorBoundary><AlertManager /></ErrorBoundary>} />
+            <Route path="/reports" element={<ErrorBoundary><ReportCenter /></ErrorBoundary>} />
+            <Route path="/risk" element={<ErrorBoundary><RiskControl /></ErrorBoundary>} />
+            <Route path="/auto-trade" element={<ErrorBoundary><AutoTrade /></ErrorBoundary>} />
+            <Route path="/paper-trade" element={<ErrorBoundary><PaperTrade /></ErrorBoundary>} />
+            <Route path="/data-player" element={<ErrorBoundary><DataPlayer /></ErrorBoundary>} />
+            <Route path="/strategy-market" element={<ErrorBoundary><StrategyMarket /></ErrorBoundary>} />
+            <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+            <Route path="/messages" element={<ErrorBoundary><MessageCenter /></ErrorBoundary>} />
+            <Route path="/themes" element={<ErrorBoundary><ThemeStore /></ErrorBoundary>} />
+            <Route path="/plugins" element={<ErrorBoundary><PluginManager /></ErrorBoundary>} />
+            <Route path="/score-ranking" element={<ErrorBoundary><ScoreRanking /></ErrorBoundary>} />
+            <Route path="/xibu-score" element={<ErrorBoundary><XibuScore /></ErrorBoundary>} />
+            <Route path="/timing-signal" element={<ErrorBoundary><TimingSignal /></ErrorBoundary>} />
+            <Route path="/xuanji-index" element={<ErrorBoundary><XuanjiIndex /></ErrorBoundary>} />
+            <Route path="/sync" element={<ErrorBoundary><SyncSettings /></ErrorBoundary>} />
+            <Route path="/analytics" element={<ErrorBoundary><AnalyticsDashboard /></ErrorBoundary>} />
+            <Route path="/theme-config" element={<ErrorBoundary><ThemeConfig /></ErrorBoundary>} />
+            <Route path="/data-import-export" element={<ErrorBoundary><DataImportExport /></ErrorBoundary>} />
+            <Route path="/ops" element={<ErrorBoundary><OpsDashboard /></ErrorBoundary>} />
+            <Route path="/data-source-monitor" element={<ErrorBoundary><DataSourceMonitor /></ErrorBoundary>} />
+            <Route path="/enrichment-dashboard" element={<ErrorBoundary><EnrichmentDashboard /></ErrorBoundary>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </Layout>
+      </ErrorBoundary>
     </StartupLoading>
   )
 }

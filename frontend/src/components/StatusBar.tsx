@@ -13,7 +13,7 @@ export default function StatusBar() {
   const wsConnected = useAppStore((s) => s.marketWsConnected)
   const signalWsConnected = useAppStore((s) => s.signalWsConnected)
   const updatedAt = useMarketStore((s) => s.updatedAt)
-  const bondCount = useMarketStore((s) => s.allBonds.length)
+  const bondCount = useMarketStore((s) => Array.isArray(s.allBonds) ? s.allBonds.length : 0)
 
   const handleReconnect = async () => {
     try {
