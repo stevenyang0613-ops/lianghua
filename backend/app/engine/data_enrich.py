@@ -466,11 +466,22 @@ def _with_metrics(fn):
             # 新增：completeness (bond_count / bond_total) 让前端知道数据完整度
             # 例如：north_cache 60s 内只完成 109/854，completeness=0.13
             completeness = round(bond_count / bond_total, 3) if bond_total > 0 else None
+            # 新增：expected_count — 期望的目标条数
+            # - 对于 bond-related maps，期望 = bond_total
+            # - 对于全 A 股 maps，期望 = _name_map 大小（~5500）
+            # - 对于其他 maps，期望 = count（已经达到）
+            if map_name and bond_total > 0:
+                expected_count = bond_total
+            elif map_name and _name_map:
+                expected_count = len(_name_map)
+            else:
+                expected_count = count if count else 0
             extra = {
                 "bond_count": bond_count,
                 "bond_total": bond_total,
                 "completeness": completeness,
-            } if bond_total > 0 else {}
+                "expected_count": expected_count,
+            } if bond_total > 0 or expected_count > 0 else {}
             # 新增：zero_fill 标识，让前端知道"没数据 vs 有数据但为 0"
             if map_name:
                 with _cache_lock:
@@ -3623,7 +3634,7 @@ async def enrich_quotes(bonds: list) -> list:
         ("_load_stock_name_cache", "_name_loaded"),
         ("_load_pledge_cache", "_pledge_loaded"),
         ("_load_fund_flow_cache", "_fund_flow_loaded"),
-        ("_load_main_biz_map", "_main_biz_loaded"),
+        ("_load_main_biz_cache", "_main_biz_loaded"),
     ):
         if not globals().get(_loaded_flag):
             try:
@@ -3722,9 +3733,9 @@ async def enrich_quotes(bonds: list) -> list:
                 b.pb = spot["pb"]
             if spot.get("turnover_rate") is not None:
                 b.turnover_rate = spot["turnover_rate"]
-            if (not b.stock_price or b.stock_price == 0) and spot.get("price"):
+            if b.stock_price is None and spot.get("price") is not None:
                 b.stock_price = spot["price"]
-            if (not b.stock_change_pct or b.stock_change_pct == 0) and spot.get("change_pct"):
+            if b.stock_change_pct is None and spot.get("change_pct") is not None:
                 b.stock_change_pct = spot["change_pct"]
 
         if b.industry is None:
@@ -3756,14 +3767,14 @@ async def enrich_quotes(bonds: list) -> list:
         # PE fallback: if spot pe is None but fin has eps, compute PE = stock_price / EPS
         # Cap at 10000 to match East Money / yfinance fallback limits (line 729).
         # Skip negative EPS (loss-making companies) — negative PE has different meaning.
-        if (b.pe is None or b.pe == 0) and fin.get("eps") and b.stock_price and b.stock_price > 0:
+        if (b.pe is None or b.pe == 0) and fin.get("eps") and b.stock_price is not None and b.stock_price > 0:
             _eps = fin["eps"]
             if _eps > 0:
                 _pe = round(b.stock_price / _eps, 2)
                 if 0 < _pe <= 10000:
                     b.pe = _pe
         # PB fallback: if spot pb is None but fin has bps, compute PB = stock_price / BPS
-        if (b.pb is None or b.pb == 0) and fin.get("bps") and b.stock_price and b.stock_price > 0:
+        if (b.pb is None or b.pb == 0) and fin.get("bps") and b.stock_price is not None and b.stock_price > 0:
             _bps = fin["bps"]
             if _bps > 0:
                 _pb = round(b.stock_price / _bps, 2)
@@ -3866,35 +3877,35 @@ async def enrich_quotes(bonds: list) -> list:
         # ── 集思录(JISILU)债券价格数据 enrichment ──
         bp = bond_price_ref.get(b.code, {})
         if bp:
-            if bp.get("price") is not None and bp.get("price", 0) > 0 and (not b.price or b.price == 0):
+            if bp.get("price") is not None and bp.get("price", 0) > 0 and b.price is None:
                 b.price = bp["price"]
-            if bp.get("change_pct") is not None and (not b.change_pct or b.change_pct == 0):
+            if bp.get("change_pct") is not None and b.change_pct is None:
                 b.change_pct = bp["change_pct"]
-            if bp.get("stock_price") is not None and (not b.stock_price or b.stock_price == 0):
+            if bp.get("stock_price") is not None and b.stock_price is None:
                 b.stock_price = bp["stock_price"]
-            if bp.get("stock_change_pct") is not None and (not b.stock_change_pct or b.stock_change_pct == 0):
+            if bp.get("stock_change_pct") is not None and b.stock_change_pct is None:
                 b.stock_change_pct = bp["stock_change_pct"]
-            if bp.get("conversion_price") is not None and bp.get("conversion_price", 0) > 0 and (not b.conversion_price or b.conversion_price == 0):
+            if bp.get("conversion_price") is not None and bp.get("conversion_price", 0) > 0 and b.conversion_price is None:
                 b.conversion_price = bp["conversion_price"]
-            if bp.get("conversion_value") is not None and bp.get("conversion_value", 0) > 0 and (not b.conversion_value or b.conversion_value == 0):
+            if bp.get("conversion_value") is not None and bp.get("conversion_value", 0) > 0 and b.conversion_value is None:
                 b.conversion_value = bp["conversion_value"]
-            if bp.get("premium_ratio") is not None and (not b.premium_ratio or b.premium_ratio == 0):
+            if bp.get("premium_ratio") is not None and b.premium_ratio is None:
                 b.premium_ratio = bp["premium_ratio"]
-            if bp.get("dual_low") is not None and bp.get("dual_low", 0) > 0 and (not b.dual_low or b.dual_low == 0):
+            if bp.get("dual_low") is not None and bp.get("dual_low", 0) > 0 and b.dual_low is None:
                 b.dual_low = bp["dual_low"]
             # YTM: JSL ytm=0 可能是数据缺失而非真实 0%，
             # 使用 remaining_years > 0 作为启发式判断（未到期债券的 ytm=0 极罕见）
             _bp_ytm = bp.get("ytm")
-            if _bp_ytm is not None and (not b.ytm or b.ytm == 0):
+            if _bp_ytm is not None and b.ytm is None:
                 b.ytm = _bp_ytm
-            elif _bp_ytm == 0 and bp.get("remaining_years", 0) > 0 and (not b.ytm or b.ytm == 0):
+            elif _bp_ytm == 0 and bp.get("remaining_years", 0) > 0 and b.ytm is None:
                 # 未到期债券 ytm=0 可能是有效数据，但标记为不确定
                 b.ytm = 0.0
-            if bp.get("volume") is not None and bp.get("volume", 0) > 0 and (not b.volume or b.volume == 0):
+            if bp.get("volume") is not None and bp.get("volume", 0) > 0 and b.volume is None:
                 b.volume = bp["volume"]
-            if bp.get("turnover_rate") is not None and bp.get("turnover_rate", 0) > 0 and (not b.turnover_rate or b.turnover_rate == 0):
+            if bp.get("turnover_rate") is not None and bp.get("turnover_rate", 0) > 0 and b.turnover_rate is None:
                 b.turnover_rate = bp["turnover_rate"]
-            if bp.get("outstanding_scale") is not None and bp.get("outstanding_scale", 0) > 0 and (not b.outstanding_scale or b.outstanding_scale == 0):
+            if bp.get("outstanding_scale") is not None and bp.get("outstanding_scale", 0) > 0 and b.outstanding_scale is None:
                 b.outstanding_scale = bp["outstanding_scale"]
             if bp.get("bond_rating") and not b.rating:
                 b.rating = bp["bond_rating"]
@@ -4190,23 +4201,41 @@ async def start_background_refresh():
     # 注意：spot / vol / fund_flow / bond_price / coupon_rate 由 data_enrich_runner.py
     # 子进程负责（AKShare C 扩展 segfault 高风险），主进程只加载其输出的缓存文件。
     # 以下仅包含 enrich_quotes 所需、且可在主进程安全运行的核心数据源。
-    # 额外加入 main_biz/analyst_rank/macro_cpi/lpr/m2/ppi 6 个之前只在 runner 里调用的
-    # 数据源，避免它们在主进程永远 pending
+    # 额外加入 main_biz/analyst_rank 2 个之前只在 runner 里调用的数据源
+    # macro_* 5 个在第二批错峰启动（避免 5 个同时跑 + 一次性占用所有线程）
     _core_futures = []
     for fn in (_build_industry_cache, _build_concept_cache, _refresh_fin_cache,
                _refresh_debt_cache, _refresh_buyback_cache, _refresh_mgmt_cache,
                _refresh_pledge_cache, _refresh_momentum_cache, _refresh_event_cache,
                _refresh_bond_outstanding_cache, _refresh_call_status_cache, _refresh_stock_name_cache,
                _refresh_coupon_rate_cache, _refresh_earnings_express_cache,
-               _refresh_main_biz_cache, _refresh_analyst_rank_cache,
-               _refresh_macro_cpi_cache, _refresh_macro_lpr_cache,
-               _refresh_macro_m2_cache, _refresh_macro_ppi_cache):
+               _refresh_main_biz_cache, _refresh_analyst_rank_cache):
         _core_futures.append(loop.run_in_executor(None, fn))
     # 并行等待所有核心缓存刷新，捕获异常避免一个失败影响整体启动
     _core_results = await asyncio.gather(*_core_futures, return_exceptions=True)
     for _idx, _res in enumerate(_core_results):
         if isinstance(_res, Exception):
             logger.warning(f"[DataEnrich] Core cache refresh #{_idx} failed: {_res}")
+
+    # 第二批：宏观数据源错峰启动（5 个 macro_*）
+    # 每个 macro 数据源启动间隔 3 秒，避开 AKShare 信号量拥堵
+    # macro_* 通常只 1-2 次 AKShare 调用，~3-7s 完成，错峰后总耗时约 25s
+    # 用独立 executor 避免阻塞主线程
+    def _refresh_macro_staggered():
+        import time as _t
+        _macro_fns = (
+            (_refresh_macro_cpi_cache, 0),
+            (_refresh_macro_lpr_cache, 3),
+            (_refresh_macro_m2_cache, 6),
+            (_refresh_macro_ppi_cache, 9),
+        )
+        for _fn, _delay in _macro_fns:
+            _t.sleep(_delay)
+            try:
+                _fn()
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Macro refresh {_fn.__name__} failed: {e}")
+    loop.run_in_executor(None, _refresh_macro_staggered)
 
     # 第二批：扩展缓存刷新（7 个，原 data_enrich_runner 子进程，现已移入主进程）
     # 延迟 5 秒执行，避开第一批的 semaphore 拥堵
