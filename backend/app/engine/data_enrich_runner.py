@@ -783,7 +783,17 @@ def _refresh_fund_flow_cache():
             logger.warning(f"[FundFlow] AKShare attempt {attempt+1} failed: {e}")
             _time.sleep(3 * (attempt + 1))
 
-    logger.warning("[FundFlow] All attempts failed, fund flow data will be empty")
+    # All AKShare attempts failed (EM IP 封禁) — 回退到磁盘缓存，
+    # 避免因短暂 API 不可用丢失 5000+ 只历史资金流数据。
+    if cached:
+        real = {k: v for k, v in cached.items() if k != "_ts" and len(k) == 6 and k.isdigit()}
+        if real:
+            logger.warning(
+                f"[FundFlow] All AKShare attempts failed, falling back to stale cache: "
+                f"{len(real)} stocks (cache age: {_time.time() - cached.get('_ts', 0):.0f}s)"
+            )
+            return len(real)
+    logger.warning("[FundFlow] All attempts failed and no cache available, fund flow data will be empty")
     return 0
 
 def _refresh_volatility_cache():

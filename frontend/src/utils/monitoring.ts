@@ -310,3 +310,10 @@ export function trackWebVitals(): void {
 }
 
 export default monitoring
+
+/**
+ * 销毁监控服务（清理定时器和监听器）
+ */
+export function destroyMonitoring(): void {
+  monitoring.destroy()
+}

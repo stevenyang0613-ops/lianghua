@@ -763,6 +763,8 @@ export const dataPrefetchStrategy = new DataPrefetchStrategy()
 /**
  * 初始化性能优化
  */
+let _perfCleanupInterval: ReturnType<typeof setInterval> | null = null
+
 export function initPerformanceOptimization(): void {
   // 预连接关键域名
   resourcePreloader.preconnect([
@@ -772,11 +774,20 @@ export function initPerformanceOptimization(): void {
   ])
 
   // 定期清理缓存
-  setInterval(() => {
-    cacheStrategyManager.cleanExpiredCache()
-  }, 3600000) // 1小时
+  if (!_perfCleanupInterval) {
+    _perfCleanupInterval = setInterval(() => {
+      cacheStrategyManager.cleanExpiredCache()
+    }, 3600000) // 1小时
+  }
 
   console.log('[Performance] Optimization initialized')
+}
+
+export function stopPerformanceOptimization(): void {
+  if (_perfCleanupInterval) {
+    clearInterval(_perfCleanupInterval)
+    _perfCleanupInterval = null
+  }
 }
 
 export default {

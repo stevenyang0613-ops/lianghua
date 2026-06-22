@@ -681,3 +681,10 @@ export function initPredefinedRules(): void {
 }
 
 export default alertManager
+
+/**
+ * 停止告警管理器（清理定时器和监听器）
+ */
+export function stopAlertManager(): void {
+  alertManager.destroy()
+}

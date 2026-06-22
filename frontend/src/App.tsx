@@ -21,11 +21,14 @@ import { initHotkeys } from './utils/hotkeys'
 import { initPrefetchStrategy } from './utils/prefetchStrategy'
 import { onNetworkChange, checkNetworkStatus, isOfflineMode } from './utils/dataCache'
 import { monitoring, trackWebVitals } from './utils/monitoring'
-import { initPerformanceOptimization } from './utils/performanceOptimization'
+import { initPerformanceOptimization, stopPerformanceOptimization } from './utils/performanceOptimization'
 import { logCollector } from './utils/logCollector'
 import { alertManager, initPredefinedRules } from './utils/alertNotification'
 import { startHealthCheck } from './utils/healthCheck'
 import { cleanupWsListeners } from './stores/useAppStore'
+import { initThemeSystem, destroyThemeSystem } from './stores/useThemeStore'
+import { prefetchManager } from './utils/prefetchStrategy'
+import { offlineQueue } from './utils/offlineQueue'
 
 const Market = lazy(() => import('./pages/Market'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
@@ -134,6 +137,7 @@ export default function App() {
     void initOfflineQueue()
     // 初始化国际化
     initLocale()
+    initThemeSystem()
     // 初始化快捷键
     initHotkeys()
     // 初始化预取策略
@@ -171,6 +175,12 @@ export default function App() {
         cleanupBackgroundSync()
         cleanupNetworkMonitor()
         cancelRefreshWsToken()
+        monitoring.destroy()
+        stopPerformanceOptimization()
+        alertManager.destroy()
+        destroyThemeSystem()
+        prefetchManager.destroy()
+        offlineQueue.destroy()
       }
   }, [])
 

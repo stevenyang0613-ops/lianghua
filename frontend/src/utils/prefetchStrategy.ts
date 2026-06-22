@@ -283,6 +283,13 @@ class PrefetchManager {
     this.prefetchCache.clear()
     this.prefetchQueue = []
   }
+
+  /**
+   * 销毁：清理事件监听器和定时器
+   */
+  destroy(): void {
+    this.clearCache()
+  }
 }
 
 // 导出单例

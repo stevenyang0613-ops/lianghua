@@ -77,10 +77,10 @@ class TestConvertFromLegacyNoSubstitution:
         from app.strategies.enhanced_timing_model import convert_from_legacy_data
         from app.services.macro_data import MacroData
         macro = MacroData()
-        macro.pmi_current = 0.0
-        macro.cpi = 0.0
-        macro.m2_growth = 0.0
-        macro.gdp_growth = 0.0
+        macro.pmi_current = float('nan')
+        macro.cpi = float('nan')
+        macro.m2_growth = float('nan')
+        macro.gdp_growth = float('nan')
         result = convert_from_legacy_data(macro_data=macro)
         assert math.isnan(result.pmi)
         assert math.isnan(result.cpi)

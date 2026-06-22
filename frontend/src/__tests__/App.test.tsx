@@ -16,18 +16,21 @@ vi.mock('../utils/indexedDBStorage', () => ({
   indexedDBStorage: { startAutoCleanup: vi.fn(), stopAutoCleanup: vi.fn() },
 }))
 vi.mock('../utils/alertNotification', () => ({
-  alertManager: { addRule: vi.fn(), getRules: vi.fn(() => []), init: vi.fn() },
+  alertManager: { addRule: vi.fn(), getRules: vi.fn(() => []), init: vi.fn(), destroy: vi.fn() },
   initPredefinedRules: vi.fn(),
+  stopAlertManager: vi.fn(),
 }))
 vi.mock('../utils/monitoring', () => ({
-  monitoring: { init: vi.fn() },
+  monitoring: { init: vi.fn(), destroy: vi.fn() },
   trackWebVitals: vi.fn(),
+  destroyMonitoring: vi.fn(),
 }))
 vi.mock('../utils/logCollector', () => ({
   logCollector: { configure: vi.fn() },
 }))
 vi.mock('../utils/performanceOptimization', () => ({
   initPerformanceOptimization: vi.fn(),
+  stopPerformanceOptimization: vi.fn(),
 }))
 vi.mock('../utils/backgroundSync', () => ({
   initBackgroundSync: vi.fn(),
@@ -58,6 +61,8 @@ vi.mock('../utils/routePreload', () => ({
 }))
 vi.mock('../utils/offlineQueue', () => ({
   initOfflineQueue: vi.fn(),
+  offlineQueue: { destroy: vi.fn() },
+  destroyOfflineQueue: vi.fn(),
 }))
 vi.mock('../utils/locales', () => ({
   initLocale: vi.fn(),
@@ -67,6 +72,8 @@ vi.mock('../utils/hotkeys', () => ({
 }))
 vi.mock('../utils/prefetchStrategy', () => ({
   initPrefetchStrategy: vi.fn(),
+  prefetchManager: { destroy: vi.fn() },
+  destroyPrefetchManager: vi.fn(),
 }))
 vi.mock('../utils/dataCache', () => ({
   onNetworkChange: vi.fn(() => vi.fn()),
@@ -76,6 +83,7 @@ vi.mock('../utils/dataCache', () => ({
 // Mock indexedDB for test environment
 vi.mock('../utils/healthCheck', () => ({
   startHealthCheck: vi.fn(() => vi.fn()),
+  stopHealthCheck: vi.fn(),
 }))
 // Mock firstScreenOptimize
 vi.mock('../utils/firstScreenOptimize', () => ({

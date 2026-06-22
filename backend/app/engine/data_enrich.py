@@ -588,7 +588,7 @@ def _load_industry_cache():
     if _industry_loaded:
         return
     cached = _load_cache(_INDUSTRY_CACHE)
-    if _fresh(_INDUSTRY_CACHE_TTL, cached):
+    if cached:
         _set_global_map("_industry_map", {k: v for k, v in cached.items() if k != "_ts"})
     _industry_loaded = True
 
@@ -634,7 +634,7 @@ def _load_debt_cache():
     if _debt_loaded:
         return
     cached = _load_cache(_DEBT_CACHE)
-    if _fresh(_DEBT_CACHE_TTL, cached):
+    if cached:
         _set_global_map("_debt_map", {k: v for k, v in cached.items() if k != "_ts" and isinstance(v, dict)})
     _debt_loaded = True
 
@@ -644,7 +644,7 @@ def _load_vol_cache():
     if _vol_loaded:
         return
     cached = _load_cache(_VOL_CACHE)
-    if _fresh(_VOL_CACHE_TTL, cached):
+    if cached:
         _set_global_map("_vol_map", {k: v for k, v in cached.items() if k != "_ts"})
     _vol_loaded = True
 
@@ -654,7 +654,7 @@ def _load_buyback_cache():
     if _buyback_loaded:
         return
     cached = _load_cache(_BUYBACK_CACHE)
-    if _fresh(_BUYBACK_CACHE_TTL, cached):
+    if cached:
         _set_global_map("_buyback_map", {k: v for k, v in cached.items() if k != "_ts"})
     _buyback_loaded = True
 
@@ -664,7 +664,7 @@ def _load_mgmt_cache():
     if _mgmt_loaded:
         return
     cached = _load_cache(_MGMT_CACHE)
-    if _fresh(_MGMT_CACHE_TTL, cached):
+    if cached:
         _set_global_map("_mgmt_map", {k: v for k, v in cached.items() if k != "_ts"})
     _mgmt_loaded = True
 
@@ -1021,12 +1021,18 @@ def _refresh_spot_cache():
                 f"{'1' if c.startswith('6') else '0'}.{c}" for c in batch
             )
             try:
-                r = _req.get(
-                    'https://push2.eastmoney.com/api/qt/ulist.np/get',
-                    params={'fields': 'f12,f9,f23,f8',
-                            'secids': secids, 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
-                    headers=_headers, timeout=15,
+                r = _run_with_timeout(
+                    lambda: _req.get(
+                        'https://push2.eastmoney.com/api/qt/ulist.np/get',
+                        params={'fields': 'f12,f9,f23,f8,f20,f21',
+                                'secids': secids, 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
+                        headers=_headers, timeout=15,
+                    ),
+                    timeout=20, default=None, op_name="spot_batch",
+                    quiet_errors=True,
                 )
+                if r is None:
+                    return {}
                 data = r.json()
                 result = {}
                 if not isinstance(data, dict):
@@ -1040,6 +1046,8 @@ def _refresh_spot_cache():
                             'pe': item.get('f9', 0),
                             'pb': item.get('f23', 0),
                             'tr': item.get('f8', 0),
+                            'total_mv': item.get('f20', 0),
+                            'circ_mv': item.get('f21', 0),
                         }
                 return result
             except Exception:
@@ -1058,6 +1066,10 @@ def _refresh_spot_cache():
                         pb_map[code] = round(vals['pb'], 2)
                     if vals.get('tr') is not None and vals['tr'] >= 0:
                         tr_map[code] = round(vals['tr'], 2)
+                    if vals.get('total_mv') and vals['total_mv'] > 0:
+                        sina_map.setdefault(code, {})['total_mv'] = round(vals['total_mv'], 2)
+                    if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                        sina_map.setdefault(code, {})['circ_mv'] = round(vals['circ_mv'], 2)
                 if (i + 1) % 5 == 0:
                     _time.sleep(0.3)
 
@@ -1066,11 +1078,17 @@ def _refresh_spot_cache():
             def _fetch_single(code: str) -> dict:
                 secid = f"{'1' if code.startswith('6') else '0'}.{code}"
                 try:
-                    r = _req.get(
-                        'https://push2.eastmoney.com/api/qt/stock/get',
-                        params={'fields': 'f57,f162,f167,f168', 'secid': secid},
-                        headers=_headers, timeout=8,
+                    r = _run_with_timeout(
+                        lambda: _req.get(
+                            'https://push2.eastmoney.com/api/qt/stock/get',
+                            params={'fields': 'f57,f162,f167,f168', 'secid': secid},
+                            headers=_headers, timeout=8,
+                        ),
+                        timeout=12, default=None, op_name="spot_single",
+                        quiet_errors=True,
                     )
+                    if r is None:
+                        return {}
                     d = r.json().get('data') or {}
                     if d:
                         return {code: {
@@ -1279,15 +1297,16 @@ def _refresh_fund_flow_cache():
                     # TDX 只提供成交额，没有主力净流入方向，跳过而非用错误近似值覆盖
                     # 此前 amount * 0.1 的 fallback 导致所有缺失股票被错误标记为净流入
                     merged = dict(_fund_flow_map) if _fund_flow_map else {}
-                    tdx_added = 0
+                    tdx_skipped = 0
                     for code, q in tdx_q.items():
                         if code in merged:
                             continue  # preserve existing (likely better quality) data
                         # TDX 没有 net_main 方向数据，跳过
+                        tdx_skipped += 1
                     if len(merged) > 50:
-                        _set_global_map('_fund_flow_map', merged)
+                        _set_global_map('_fund_flow_map', merged, replace=True)
                         _save_cache(_FUND_FLOW_CACHE, merged)
-                        logger.info(f'[DataEnrich][TDX] Fund flow: merged {tdx_added} TDX estimates into {len(merged)} total stocks')
+                        logger.info(f'[DataEnrich][TDX] Fund flow: skipped {tdx_skipped} stocks (no directional data), total {len(merged)}')
                 except Exception as e:
                     logger.debug(f'[DataEnrich][TDX] Fund flow: adapter failed: {e}')
             else:
@@ -3778,8 +3797,7 @@ async def start_background_refresh():
             _extended_executor.submit(fn)
             for fn in (_refresh_north_cache, _refresh_margin_cache, _refresh_lhb_cache,
                        _refresh_block_trade_cache, _refresh_holder_num_cache,
-                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache,
-                       _refresh_mgmt_cache, _refresh_earnings_express_cache)
+                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache)
         ]
         for f in concurrent.futures.as_completed(futures, timeout=300):
             try:
@@ -4305,6 +4323,15 @@ def _refresh_earnings_express_cache():
                 logger.debug(f"[DataEnrich] EarningsExpress year {year} failed: {e}")
                 continue
 
+        # Zero-fill: 对所有已知股票代码中无数据的股票填充 None
+        for code in _get_bond_or_fallback_codes():
+            if code not in result:
+                result[code] = {
+                    "yoy_change_pct": None,
+                    "year": None,
+                    "_data_source": "zero_fill",
+                }
+
         if result:
             _save_cache(_EARNINGS_EXPRESS_CACHE, result)
             _set_global_map("_earnings_express_map", result, replace=True)
@@ -4527,6 +4554,14 @@ def _refresh_margin_cache():
                 }
 
         if result:
+            # Add summary with total margin balance stats
+            real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_"))]
+            total_balance = sum(v.get("margin_balance", 0) or 0 for v in real_entries)
+            result["_summary"] = {
+                "total_balance": round(total_balance, 2),
+                "stock_count": len(real_entries),
+                "date": datetime.now().strftime("%Y%m%d"),
+            }
             _set_global_map("_margin_map", result, replace=True)
             _save_cache(_MARGIN_CACHE, result)
             logger.info(f"[DataEnrich] Margin: {len(result)} stocks refreshed (含 zero_fill)")
@@ -4900,7 +4935,7 @@ def _refresh_restricted_release_cache():
 def get_concept_sources() -> dict[str, dict[str, bool]]:
     """概念数据源归属：concept_name -> {"em": bool, "ths": bool}"""
     if not _concept_source_map:
-        raw = _load_ext_cache(_CONCEPT_SOURCE_CACHE)
+        status, raw = _load_ext_cache_with_status(_CONCEPT_SOURCE_CACHE)
         _concept_source_map.update(raw)
     return _concept_source_map
 

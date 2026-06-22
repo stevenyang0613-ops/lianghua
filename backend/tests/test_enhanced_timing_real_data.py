@@ -54,12 +54,11 @@ def _make_real_macro_data():
     m.stock_pb_median = 2.1
     m.stock_pe_percentile = 45.0
     m.stock_pb_percentile = 35.0
-    # 以下字段数据源当前不可用，按约定占位值返回（0.0 表示数据缺失，
-    # 因为真实数据不可能恰好为 0；50.0 为行业净流入的中性占位值）
-    m.north_bound_net_flow = 0.0
-    m.main_force_net_flow = 0.0
-    m.industry_net_inflow = 50.0
-    m.new_accounts = 0.0
+    # 以下字段数据源当前不可用，按 NaN 表示缺失
+    m.north_bound_net_flow = float('nan')
+    m.main_force_net_flow = float('nan')
+    m.industry_net_inflow = float('nan')
+    m.new_accounts = float('nan')
     # 真实可获取字段
     m.margin_balance = 15000.0
     m.margin_balance_change = 120.0

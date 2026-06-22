@@ -40,13 +40,25 @@ export function getEffectiveTheme(): 'light' | 'dark' {
   return mode
 }
 
+let _themeMq: MediaQueryList | null = null
+let _themeMqHandler: ((e: MediaQueryListEvent) => void) | null = null
+
 // 模块级：监听 OS 主题变化，自动更新
-if (typeof window !== 'undefined') {
-  const mq = window.matchMedia('(prefers-color-scheme: dark)')
-  const handler = (e: MediaQueryListEvent) => {
+export function initThemeSystem() {
+  if (typeof window === 'undefined') return
+  if (_themeMq) return // already initialized
+  _themeMq = window.matchMedia('(prefers-color-scheme: dark)')
+  _themeMqHandler = (e: MediaQueryListEvent) => {
     useThemeStore.getState()._setSystemDark(e.matches)
   }
-  // 初始化
-  useThemeStore.getState()._setSystemDark(mq.matches)
-  mq.addEventListener('change', handler)
+  useThemeStore.getState()._setSystemDark(_themeMq.matches)
+  _themeMq.addEventListener('change', _themeMqHandler)
+}
+
+export function destroyThemeSystem() {
+  if (_themeMq && _themeMqHandler) {
+    _themeMq.removeEventListener('change', _themeMqHandler)
+    _themeMq = null
+    _themeMqHandler = null
+  }
 }

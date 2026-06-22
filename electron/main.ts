@@ -1871,7 +1871,17 @@ ipcMain.handle('export-diagnostic-logs', () => {
     wsConnections: Array.from(wsConnections.keys()),
     childWindows: Array.from(childWindows.keys()),
   }
-  fs.writeFileSync(logPath, JSON.stringify(diagnosticData, null, 2))
+  try {
+    try {
+    fs.writeFileSync(logPath, JSON.stringify(diagnosticData, null, 2))
+  } catch (e: any) {
+    console.error('[Electron] Failed to export diagnostic logs:', e.message)
+    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + e.message }))
+  }
+  } catch (e: any) {
+    console.error('[Electron] Failed to export diagnostic logs:', e.message)
+    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + e.message }))
+  }
   return { path: logPath }
 })
 

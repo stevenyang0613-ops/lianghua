@@ -902,7 +902,7 @@ class EnhancedTimingModel:
         
         # 4.2 主力资金净流入
         main_flow = data.main_force_net_flow
-        main_available = not math.isnan(main_flow) and main_flow != 0.0
+        main_available = not math.isnan(main_flow)
         main_score = sigmoid_score(main_flow, 0, steepness=0.025) if main_available else 50.0
         main_signal = (
             "bullish" if main_flow > 50 else "bearish" if main_flow < -50 else "neutral"
@@ -921,7 +921,7 @@ class EnhancedTimingModel:
 
         # 4.3 北向资金净流入（聪明钱）
         north = data.north_bound_net_flow
-        north_available = not math.isnan(north) and north != 0.0
+        north_available = not math.isnan(north)
         north_score = sigmoid_score(north, 0, steepness=0.03) if north_available else 50.0
         north_signal = (
             "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
@@ -2368,7 +2368,7 @@ def convert_from_legacy_data(
             if val > 0:
                 data.treasury_10y_yield = val
         val = getattr(macro_data, 'treasury_2y_yield', float('nan'))
-        if val > 0:
+        if not math.isnan(val):
             data.treasury_2y_yield = val
         # 转债市场核心字段（若 legacy_data 未提供，直接从 MacroData 填充）
         for attr in (
@@ -2390,70 +2390,94 @@ def convert_from_legacy_data(
                 data.pmi_prev = val
         # Shibor / 流动性：>0 才有效
         val = getattr(macro_data, 'shibor_overnight', float('nan'))
-        if val > 0:
+        if not math.isnan(val):
             data.shibor_overnight = val
         # 宏观指标：CPI/M2/GDP 等，0 表示缺失
         val = getattr(macro_data, 'cpi', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.cpi = val
         val = getattr(macro_data, 'ppi', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.ppi = val
         val = getattr(macro_data, 'm2_growth', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.m2_growth = val
         val = getattr(macro_data, 'social_financing_growth', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.social_financing_growth = val
         val = getattr(macro_data, 'gdp_growth', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.gdp_growth = val
         val = getattr(macro_data, 'credit_spread_aa', float('nan'))
-        if val != 0:
+        if not math.isnan(val):
             data.credit_spread = val
         # 期限利差：由国债收益率计算，若已获取则计算
         if not math.isnan(data.treasury_10y_yield) and not math.isnan(data.treasury_2y_yield) and data.treasury_10y_yield > 0 and data.treasury_2y_yield > 0:
             data.term_spread = (data.treasury_10y_yield - data.treasury_2y_yield) * 100
         # 市场情绪
-        data.limit_up_count = getattr(macro_data, 'limit_up_count', 0) or 0
-        data.limit_down_count = getattr(macro_data, 'limit_down_count', 0) or 0
-        adv = getattr(macro_data, 'advance_count', 0) or 0
-        dec = getattr(macro_data, 'decline_count', 0) or 0
-        if adv > 0 or dec > 0:
-            data.advance_decline_ratio = adv / max(dec, 1)
-        data.market_turnover = getattr(macro_data, 'market_turnover', 0) or 0
+        val = getattr(macro_data, 'limit_up_count', float('nan'))
+        if not math.isnan(val):
+            data.limit_up_count = val
+        val = getattr(macro_data, 'limit_down_count', float('nan'))
+        if not math.isnan(val):
+            data.limit_down_count = val
+        adv = getattr(macro_data, 'advance_count', float('nan'))
+        dec = getattr(macro_data, 'decline_count', float('nan'))
+        if not math.isnan(adv) or not math.isnan(dec):
+            data.advance_decline_ratio = (adv if not math.isnan(adv) else 0) / max(dec if not math.isnan(dec) else 1, 1)
+        val = getattr(macro_data, 'market_turnover', float('nan'))
+        if not math.isnan(val):
+            data.market_turnover = val
         data.new_high_count = getattr(macro_data, 'new_high_60d', 0) or 0
         data.new_low_count = getattr(macro_data, 'new_low_60d', 0) or 0
         # 股票指数
-        data.stock_index_current = getattr(macro_data, 'stock_index_current', 0) or 0
-        data.stock_index_change = getattr(macro_data, 'stock_index_change', 0) or 0
-        data.stock_index_change_20d = getattr(macro_data, 'stock_index_change_20d', 0) or 0
-        data.stock_index_change_60d = getattr(macro_data, 'stock_index_change_60d', 0) or 0
-        data.stock_index_ma20 = getattr(macro_data, 'stock_index_ma20', 0) or 0
-        data.stock_index_ma60 = getattr(macro_data, 'stock_index_ma60', 0) or 0
+        val = getattr(macro_data, 'stock_index_current', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_current = val
+        val = getattr(macro_data, 'stock_index_change', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_change = val
+        val = getattr(macro_data, 'stock_index_change_20d', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_change_20d = val
+        val = getattr(macro_data, 'stock_index_change_60d', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_change_60d = val
+        val = getattr(macro_data, 'stock_index_ma20', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_ma20 = val
+        val = getattr(macro_data, 'stock_index_ma60', float('nan'))
+        if not math.isnan(val):
+            data.stock_index_ma60 = val
         val = getattr(macro_data, 'max_dd_20d', 0)
         if val != 0:
             data.max_dd_20d = val
         # === 新增：从 MacroData V2.1 填充所有先前硬编码的字段 ===
         # PE/PB
-        val = getattr(macro_data, 'stock_pe_median', 0)
-        if val > 0:
+        val = getattr(macro_data, 'stock_pe_median', float('nan'))
+        if not math.isnan(val):
             data.stock_pe_median = val
-        val = getattr(macro_data, 'stock_pb_median', 0)
-        if val > 0:
+        val = getattr(macro_data, 'stock_pb_median', float('nan'))
+        if not math.isnan(val):
             data.stock_pb_median = val
-        val = getattr(macro_data, 'stock_pe_percentile', 0)
-        if val > 0:
+        val = getattr(macro_data, 'stock_pe_percentile', float('nan'))
+        if not math.isnan(val):
             data.stock_pe_percentile = val
-        val = getattr(macro_data, 'stock_pb_percentile', 0)
-        if val > 0:
+        val = getattr(macro_data, 'stock_pb_percentile', float('nan'))
+        if not math.isnan(val):
             data.stock_pb_percentile = val
         # 资金流向
-        data.north_bound_net_flow = getattr(macro_data, 'north_bound_net_flow', 0) or 0
-        data.main_force_net_flow = getattr(macro_data, 'main_force_net_flow', 0) or 0
-        data.margin_balance_change = getattr(macro_data, 'margin_balance_change', 0) or 0
-        val = getattr(macro_data, 'margin_buy_ratio', 0)
-        if val > 0:
+        val = getattr(macro_data, 'north_bound_net_flow', float('nan'))
+        if not math.isnan(val):
+            data.north_bound_net_flow = val
+        val = getattr(macro_data, 'main_force_net_flow', float('nan'))
+        if not math.isnan(val):
+            data.main_force_net_flow = val
+        val = getattr(macro_data, 'margin_balance_change', float('nan'))
+        if not math.isnan(val):
+            data.margin_balance_change = val
+        val = getattr(macro_data, 'margin_buy_ratio', float('nan'))
+        if not math.isnan(val):
             data.margin_buy_ratio = val
         val = getattr(macro_data, 'industry_net_inflow', float('nan'))
         if not math.isnan(val):
@@ -2469,13 +2493,15 @@ def convert_from_legacy_data(
         if val != 0:
             data.export_growth = val
         # 情绪扩展
-        val = getattr(macro_data, 'pcr_ratio', 0)
-        if val > 0:
+        val = getattr(macro_data, 'pcr_ratio', float('nan'))
+        if not math.isnan(val):
             data.pcr_ratio = val
-        val = getattr(macro_data, 'vix_index', 0)
-        if val > 0:
+        val = getattr(macro_data, 'vix_index', float('nan'))
+        if not math.isnan(val):
             data.vix_index = val
-        data.new_accounts = getattr(macro_data, 'new_accounts', 0) or 0
+        val = getattr(macro_data, 'new_accounts', float('nan'))
+        if not math.isnan(val):
+            data.new_accounts = val
         # 技术指标（从 MacroDataService 自动计算）
         val = getattr(macro_data, 'ma_arrangement', '')
         if val and val != 'neutral':
@@ -2483,21 +2509,21 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'macd_signal', '')
         if val and val != 'neutral':
             data.macd_signal = val
-        val = getattr(macro_data, 'rsi_14', 0)
-        if val > 0:
+        val = getattr(macro_data, 'rsi_14', float('nan'))
+        if not math.isnan(val):
             data.rsi_14 = val
-        val = getattr(macro_data, 'bollinger_position', 0)
-        if val > 0:
+        val = getattr(macro_data, 'bollinger_position', float('nan'))
+        if not math.isnan(val):
             data.bollinger_position = val
-        val = getattr(macro_data, 'volume_ratio', 0)
-        if val > 0:
+        val = getattr(macro_data, 'volume_ratio', float('nan'))
+        if not math.isnan(val):
             data.volume_ratio = val
         # 机构持仓/盈利超预期/消息面
         val = getattr(macro_data, 'institutional_holding_change', 0)
         if val != 0:
             data.institutional_holding_change = val
-        val = getattr(macro_data, 'earnings_surprise_ratio', 0)
-        if val > 0:
+        val = getattr(macro_data, 'earnings_surprise_ratio', float('nan'))
+        if not math.isnan(val):
             data.earnings_surprise_ratio = val
         val = getattr(macro_data, 'policy_signal_score', 0)
         if val > 0:

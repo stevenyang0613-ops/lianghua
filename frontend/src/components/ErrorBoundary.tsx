@@ -59,9 +59,11 @@ function shouldReportError(fingerprint: string): boolean {
   return true
 }
 
-// Periodic cleanup of old error fingerprints
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
+let _errorDedupInterval: ReturnType<typeof setInterval> | null = null
+
+function startErrorDedupCleanup() {
+  if (_errorDedupInterval) return
+  _errorDedupInterval = setInterval(() => {
     const now = Date.now()
     for (const [key, entry] of _recentErrors) {
       if (now - entry.lastTs > ERROR_DEDUP_WINDOW) {
@@ -69,6 +71,13 @@ if (typeof setInterval !== 'undefined') {
       }
     }
   }, 120000)
+}
+
+function stopErrorDedupCleanup() {
+  if (_errorDedupInterval) {
+    clearInterval(_errorDedupInterval)
+    _errorDedupInterval = null
+  }
 }
 // DEPRECATED: This global singleton guard is no longer used.
 // Each ErrorBoundary instance now installs its own per-instance handler in
@@ -102,6 +111,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidMount(): void {
+    startErrorDedupCleanup()
     // 实例级 rejection handler：每个 ErrorBoundary 维护自己的 listener，避免全局单例问题
     this.rejectionHandler = (event: PromiseRejectionEvent) => {
       console.warn('[ErrorBoundary] Unhandled promise rejection (isolated):', event.reason)
@@ -243,6 +253,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       window.removeEventListener('unhandledrejection', this.rejectionHandler)
       this.rejectionHandler = null
     }
+    stopErrorDedupCleanup()
   }
 
   render(): ReactNode {

@@ -315,6 +315,10 @@ class OfflineQueueManager {
   }
 }
 
+export function destroyOfflineQueue(): void {
+  offlineQueue.destroy()
+}
+
 // 导出单例
 export const offlineQueue = new OfflineQueueManager()
 

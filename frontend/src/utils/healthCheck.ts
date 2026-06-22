@@ -18,6 +18,14 @@ function checkBackend() {
   _lastBackendOnline = backendConnected
 }
 
+export function stopHealthCheck() {
+  if (_intervalId) {
+    clearInterval(_intervalId)
+    _intervalId = null
+  }
+  _lastBackendOnline = false
+}
+
 export function startHealthCheck() {
   if (_intervalId) return () => clearInterval(_intervalId!)
   _lastBackendOnline = useAppStore.getState().backendConnected

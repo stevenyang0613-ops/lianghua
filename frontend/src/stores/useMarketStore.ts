@@ -60,14 +60,18 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
       return
     }
     bondsCache.clear()
-    for (const b of bonds) bondsCache.set(b.code, b)
+    for (const b of bonds) {
+      if (b && b.code) {
+        bondsCache.set(b.code, b)
+      }
+    }
     // Flush any pending debounced update
     if (bondsUpdateTimer) {
       clearTimeout(bondsUpdateTimer)
       bondsUpdateTimer = null
       pendingBondsUpdate = null
     }
-    set({ allBonds: bonds })
+    set({ allBonds: Array.from(bondsCache.values()) })
   },
 
   destroy: () => {
