@@ -104,7 +104,10 @@ export function refreshWsToken(): void {
 
   try {
     const newToken = getToken()
-    if (newToken === _lastToken && marketWs.isConnected()) return
+    if (newToken === _lastToken && marketWs.isConnected()) {
+      _refreshing = false
+      return
+    }
     _lastToken = newToken
     const marketUrl = buildUrl(`${WS_BASE}/api/v1/ws/market`)
     const signalsUrl = buildUrl(`${WS_BASE}/api/v1/ws/signals`)

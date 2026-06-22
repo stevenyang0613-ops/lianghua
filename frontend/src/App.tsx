@@ -7,12 +7,12 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { initDefaultUser } from './stores/useUserStore'
 import { useAccountStore } from './stores/useAccountStore'
 import { useAppStore } from './stores/useAppStore'
-import { initBackgroundSync } from './utils/backgroundSync'
-import { initNetworkMonitor } from './utils/smartSync'
+import { initBackgroundSync, cleanupBackgroundSync } from './utils/backgroundSync'
+import { initNetworkMonitor, cleanupNetworkMonitor } from './utils/smartSync'
 import { initWarmup } from './utils/cacheWarmup'
 import { notificationService } from './utils/notifications'
 import { setupGlobalErrorHandler } from './utils/errorLogger'
-import { marketWs, signalsWs } from './utils/wsInstances'
+import { marketWs, signalsWs, cancelRefreshWsToken } from './utils/wsInstances'
 import { preloadByPriority, setupSmartPreload } from './utils/routePreload'
 import { initDB, indexedDBStorage } from './utils/indexedDBStorage'
 import { initOfflineQueue } from './utils/offlineQueue'
@@ -167,6 +167,10 @@ export default function App() {
       marketWs.disconnect()
       signalsWs.disconnect()
       cleanupWsListeners()
+      indexedDBStorage.stopAutoCleanup()
+      cleanupBackgroundSync()
+      cleanupNetworkMonitor()
+      cancelRefreshWsToken()
     }
   }, [])
 

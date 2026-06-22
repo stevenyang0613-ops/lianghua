@@ -66,25 +66,32 @@ async function requestAPI<T>(
   // 因为 isElectron 可能因 preload 加载时序问题返回 false
   if (window.electronAPI?.httpRequest) {
     const ipcPromise = window.electronAPI.httpRequest(method, url, body)
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('IPC timeout')), 30000)
-    )
-    const result = await Promise.race([ipcPromise, timeoutPromise])
-    if (!result.ok) {
-      if (result.status === 401) {
-        console.warn('[API] IPC proxy got 401, requesting token refresh...')
-        try {
-          const refreshResult = await window.electronAPI.httpRequest('GET', getApiBase() + '/health')
-          if (refreshResult.ok && refreshResult.data?.ws_auth_token) {
-            setWsAuthToken(refreshResult.data.ws_auth_token)
-            const retryResult = await window.electronAPI.httpRequest(method, url, body)
-            if (retryResult.ok) return retryResult.data as T
-          }
-        } catch { /* retry failed */ }
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('IPC timeout')), 30000)
+    })
+    try {
+      const result = await Promise.race([ipcPromise, timeoutPromise])
+      if (timeoutId) clearTimeout(timeoutId)
+      if (!result.ok) {
+        if (result.status === 401) {
+          console.warn('[API] IPC proxy got 401, requesting token refresh...')
+          try {
+            const refreshResult = await window.electronAPI.httpRequest('GET', getApiBase() + '/health')
+            if (refreshResult.ok && refreshResult.data?.ws_auth_token) {
+              setWsAuthToken(refreshResult.data.ws_auth_token)
+              const retryResult = await window.electronAPI.httpRequest(method, url, body)
+              if (retryResult.ok) return retryResult.data as T
+            }
+          } catch { /* retry failed */ }
+        }
+        throw new ApiError(result.status, result.error || `HTTP ${result.status}`)
       }
-      throw new ApiError(result.status, result.error || `HTTP ${result.status}`)
+      return result.data as T
+    } catch (err) {
+      if (timeoutId) clearTimeout(timeoutId)
+      throw err
     }
-    return result.data as T
   }
 
   // Web 环境使用 fetch —— 注入 ws_auth_token 作为 Bearer 以通过后端鉴权
