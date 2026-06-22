@@ -599,6 +599,27 @@ def get_all_stock_change_pct() -> dict[str, float]:
     }
 
 
+def get_all_spot_data() -> dict:
+    """返回所有股票 spot 数据的快照（只读副本）。
+    供策略模块批量遍历使用，避免直接访问内部 _spot_map。"""
+    with _cache_lock:
+        return dict(_spot_map)
+
+
+def get_all_fin_data() -> dict:
+    """返回所有股票财务数据的快照（只读副本）。
+    供策略模块批量遍历使用，避免直接访问内部 _fin_map。"""
+    with _cache_lock:
+        return dict(_fin_map)
+
+
+def get_all_industry_map() -> dict[str, str]:
+    """返回所有股票行业映射的快照（只读副本）。
+    供策略模块批量遍历使用，避免直接访问内部 _industry_map。"""
+    with _cache_lock:
+        return dict(_industry_map)
+
+
 def get_financial(code: str) -> dict:
     return _fin_map.get(code, {})
 
@@ -779,7 +800,20 @@ def _build_industry_cache():
                 logger.debug(f'[DataEnrich][TDX] Industry fallback failed: {tdx_e}')
     except Exception as e:
         logger.warning(f"[DataEnrich] Industry build failed: {e}")
+        # [macOS fallback] EM industry APIs blocked on macOS; load existing cache
+        if not _industry_map:
+            _load_industry_cache()
+        if _industry_map:
+            logger.info(f"[DataEnrich] Industry: loaded {len(_industry_map)} from existing cache")
     return len(_industry_map) if _industry_map else 0
+
+
+def _build_industry_from_cninfo():
+    """[DEPRECATED] cninfo fallback removed — py_mini_racer causes segfault on macOS.
+    Keep function stub to avoid import errors in any legacy callers.
+    """
+    logger.warning("[DataEnrich] Industry cninfo fallback deprecated (macOS segfault risk)")
+    return 0
 
 
 def _fill_pe_pb_from_baidu(codes: list[str], pe_map: dict, pb_map: dict):
@@ -1326,6 +1360,7 @@ def _refresh_spot_cache():
     except Exception as e:
         logger.warning(f"[DataEnrich] Stock spot refresh failed: {e}")
         _load_spot_cache()
+        return len(_spot_map) if _spot_map else 0
 
 
 @_with_metrics
@@ -1732,19 +1767,23 @@ def _refresh_volatility_cache():
             # AGENTS.md fix: as_completed 无 timeout 时，如果 AKShare 接口 hang 住，
             # 线程池会无限等待。添加 60s 总超时（让 metrics 在合理时间内完成），
             # 60s 后保留已完成的结果，periodic runner 后续补充剩余股票。
-            done, pending = concurrent.futures.wait(
-                futures, timeout=60, return_when=concurrent.futures.FIRST_COMPLETED
-            )
-            # 处理已完成的部分
-            for future in done:
-                code, vol, em_failed = future.result()
-                if vol is not None:
-                    result[code] = round(vol, 2)
-                if em_failed:
-                    em_fail_count += 1
-            if pending:
-                logger.warning(f"[DataEnrich] Volatility: {len(pending)} (of {len(futures)}) futures unfinished after 60s, keeping {len(done)}")
-                for fut in pending:
+            # Bug fix: 使用循环 wait 模式，处理所有在 60s 内完成的 future，而非只处理第一个。
+            deadline = time.time() + 60
+            while futures and time.time() < deadline:
+                done, futures = concurrent.futures.wait(
+                    futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for future in done:
+                    code, vol, em_failed = future.result()
+                    if vol is not None:
+                        result[code] = round(vol, 2)
+                    if em_failed:
+                        em_fail_count += 1
+                if done:
+                    logger.debug(f"[DataEnrich] Volatility: {len(result)}/{len(sorted_stocks)} done, {len(futures)} pending")
+            if futures:
+                logger.warning(f"[DataEnrich] Volatility: {len(futures)} (of {len(sorted_stocks)}) futures unfinished after 60s, keeping {len(result)}")
+                for fut in futures:
                     fut.cancel()
 
         # [TDX] fallback: 补充 EM/TX 均未覆盖的波动率（先于最终 save）
@@ -3286,7 +3325,7 @@ def _refresh_main_biz_cache():
                     if not any(c in cols for c in expected_cols):
                         logger.warning(f'[DataEnrich] Main biz THS columns mismatch: got {list(cols)[:10]}, expected any of {expected_cols}')
                     for _, r in df.iterrows():
-                        code = str(r.get('代码', '')).strip()
+                        code = str(r.get('代码', '')).strip().zfill(6)
                         biz = str(r.get('主营业务', '') or r.get('行业', '') or r.get('板块名称', '')).strip()
                         if code and biz and code not in result:
                             result[code] = biz
@@ -3363,8 +3402,8 @@ def _refresh_macro_cpi_cache():
                     yoy = r.get('全国-同比增长', None)
                     if month:
                         result[month] = {
-                            'value': float(val) if val is not None and not (isinstance(val, float) and math.isnan(val)) else None,
-                            'yoy': float(yoy) if yoy is not None and not (isinstance(yoy, float) and math.isnan(yoy)) else None,
+                            'value': _sf(val),
+                            'yoy': _sf(yoy),
                         }
                 logger.info(f'[DataEnrich] Macro CPI: {len(result)} months')
         except Exception as cpi_e:
@@ -3400,8 +3439,8 @@ def _refresh_macro_ppi_cache():
                     yoy = r.get('当月同比增长', None)
                     if month:
                         result[month] = {
-                            'value': float(val) if val is not None and not (isinstance(val, float) and math.isnan(val)) else None,
-                            'yoy': float(yoy) if yoy is not None and not (isinstance(yoy, float) and math.isnan(yoy)) else None,
+                            'value': _sf(val),
+                            'yoy': _sf(yoy),
                         }
                 logger.info(f'[DataEnrich] Macro PPI: {len(result)} months')
         except Exception as ppi_e:
@@ -3438,9 +3477,9 @@ def _refresh_macro_m2_cache():
                     prev = r.get('前值', None)
                     if date:
                         result[date] = {
-                            'value': float(val) if val is not None and not (isinstance(val, float) and math.isnan(val)) else None,
-                            'predicted': float(pred) if pred is not None and not (isinstance(pred, float) and math.isnan(pred)) else None,
-                            'previous': float(prev) if prev is not None and not (isinstance(prev, float) and math.isnan(prev)) else None,
+                            'value': _sf(val),
+                            'predicted': _sf(pred),
+                            'previous': _sf(prev),
                         }
                 logger.info(f'[DataEnrich] Macro M2: {len(result)} months')
         except Exception as m2_e:
@@ -3542,6 +3581,9 @@ def _populate_field_loader_map():
         "buyback_amount": _load_buyback_cache,
         "iv": _load_vol_cache,
         "net_capital_flow": _load_fund_flow_cache,
+        "net_capital_flow_pct": _load_fund_flow_cache,
+        "net_super_flow": _load_fund_flow_cache,
+        "net_big_flow": _load_fund_flow_cache,
         "debt_ratio": _load_debt_cache,
         "current_ratio": _load_debt_cache,
         "stock_name": _load_stock_name_cache,
@@ -3584,6 +3626,7 @@ def _compute_field_coverage() -> dict[str, float]:
         "north_net", "margin_balance", "lhb_count", "block_trade_amount",
         "restricted_release_amount", "pledge_ratio", "holder_num_change",
         "eps_forecast", "revenue_yoy", "profit_yoy",
+        "turnover_rate",  # 0% 是停牌/不活跃股票的合法值
     }
     empty_string_valid = {"call_status", "concepts", "industry"}  # 空字符串/空列表也算缺失
     gpm_field = "gpm"  # -1 是银行标记，不算缺失
@@ -3927,9 +3970,7 @@ async def enrich_quotes(bonds: list) -> list:
             _bp_ytm = bp.get("ytm")
             if _bp_ytm is not None and b.ytm is None:
                 b.ytm = _bp_ytm
-            elif _bp_ytm == 0 and bp.get("remaining_years", 0) > 0 and b.ytm is None:
-                # 未到期债券 ytm=0 可能是有效数据，但标记为不确定
-                b.ytm = 0.0
+            # JSL ytm=0 可能是数据缺失，但 remaining_years>0 时作为有效数据保留
             if bp.get("volume") is not None and bp.get("volume", 0) > 0 and b.volume is None:
                 b.volume = bp["volume"]
             if bp.get("turnover_rate") is not None and bp.get("turnover_rate", 0) > 0 and b.turnover_rate is None:
@@ -3953,101 +3994,111 @@ async def enrich_quotes(bonds: list) -> list:
         # 标准化为"持股市值（亿元）"——这是横向比较股票最有意义的金融指标。
         # 优先级：hold_market_cap（直接）> hold_shares（×price 估算）> add_capital（0 fallback）
         # 字段模型语义统一为"北向资金持股市值(亿元)"
-        north = north_ref.get(stock_code)
-        if north is not None:
-            if isinstance(north, dict):
-                _hold_mc = north.get("hold_market_cap")
-                _hold_shares = north.get("hold_shares")
-                if _hold_mc is not None and _hold_mc > 0:
-                    b.north_net = round(_hold_mc / 1e8, 4)
-                elif _hold_shares is not None and _hold_shares > 0 and b.stock_price and b.stock_price > 0:
-                    # hold_market_cap 缺失时用 stock_price × hold_shares 估算
-                    b.north_net = round(_hold_shares * b.stock_price / 1e8, 4)
-                elif "add_capital" in north and north["add_capital"] is not None:
-                    # 仅作 fallback（变动资金本身无法精确转换为市值）
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if north_ref:
+            north = north_ref.get(stock_code)
+            if north is not None:
+                if isinstance(north, dict):
+                    _hold_mc = north.get("hold_market_cap")
+                    _hold_shares = north.get("hold_shares")
+                    if _hold_mc is not None and _hold_mc > 0:
+                        b.north_net = round(_hold_mc / 1e8, 4)
+                    elif _hold_shares is not None and _hold_shares > 0 and b.stock_price and b.stock_price > 0:
+                        # hold_market_cap 缺失时用 stock_price × hold_shares 估算
+                        b.north_net = round(_hold_shares * b.stock_price / 1e8, 4)
+                    elif "add_capital" in north and north["add_capital"] is not None:
+                        # 仅作 fallback（变动资金本身无法精确转换为市值）
+                        b.north_net = 0
+                elif isinstance(north, (int, float)) and north > 0:
+                    # Legacy bare numeric — assume already in 亿元
+                    b.north_net = float(north)
+                else:
                     b.north_net = 0
-            elif isinstance(north, (int, float)) and north > 0:
-                # Legacy bare numeric — assume already in 亿元
-                b.north_net = float(north)
             else:
                 b.north_net = 0
-        else:
-            b.north_net = 0
 
         # Margin trading enrichment
         # 非融资融券标的 stock 不在 margin cache 中，margin_balance = 0
-        margin = margin_ref.get(stock_code, {})
-        if margin:
-            if isinstance(margin, dict):
-                val = margin.get("margin_balance")
-                if val is not None and val > 0:
-                    b.margin_balance = round(val / 1e8, 2) if val > 1e6 else val
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if margin_ref:
+            margin = margin_ref.get(stock_code, {})
+            if margin:
+                if isinstance(margin, dict):
+                    val = margin.get("margin_balance")
+                    if val is not None and val > 0:
+                        b.margin_balance = round(val / 1e8, 2) if val > 1e6 else val
+                    else:
+                        # Fallback: 估算融资余额 = 融资比例 * 流通市值 / 100
+                        rz_ratio = margin.get("rz_ratio")
+                        if rz_ratio is not None and rz_ratio > 0:
+                            sp = spot_ref.get(stock_code, {})
+                            if isinstance(sp, dict):
+                                # Prefer precise circ_mv from EM (f21), fallback to volume/turnover estimate
+                                circ_mv = sp.get("circ_mv")
+                                if not circ_mv:
+                                    if sp.get("volume") and sp.get("turnover_rate"):
+                                        turnover_rate = sp["turnover_rate"]
+                                        if turnover_rate and turnover_rate > 0:
+                                            # 流通市值 ≈ 成交额 / (换手率/100)
+                                            vol_val = sp["volume"]
+                                            circ_mv = vol_val / (turnover_rate / 100)
+                                if circ_mv and circ_mv > 0:
+                                    est_rzye = circ_mv * rz_ratio / 100
+                                    if est_rzye > 0:
+                                        b.margin_balance = round(est_rzye / 1e8, 2)
                 else:
-                    # Fallback: 估算融资余额 = 融资比例 * 流通市值 / 100
-                    rz_ratio = margin.get("rz_ratio")
-                    if rz_ratio is not None and rz_ratio > 0:
-                        sp = spot_ref.get(stock_code, {})
-                        if isinstance(sp, dict):
-                            # Prefer precise circ_mv from EM (f21), fallback to volume/turnover estimate
-                            circ_mv = sp.get("circ_mv")
-                            if not circ_mv:
-                                if sp.get("volume") and sp.get("turnover_rate"):
-                                    turnover_rate = sp["turnover_rate"]
-                                    if turnover_rate and turnover_rate > 0:
-                                        # 流通市值 ≈ 成交额 / (换手率/100)
-                                        vol_val = sp["volume"]
-                                        circ_mv = vol_val / (turnover_rate / 100)
-                            if circ_mv and circ_mv > 0:
-                                est_rzye = circ_mv * rz_ratio / 100
-                                if est_rzye > 0:
-                                    b.margin_balance = round(est_rzye / 1e8, 2)
+                    b.margin_balance = margin
             else:
-                b.margin_balance = margin
-        else:
-            b.margin_balance = 0
+                b.margin_balance = 0
 
         # Long-Hu-Bang enrichment
         # 非龙虎榜股票不在 cache 中，lhb_count = 0
-        lhb = lhb_ref.get(stock_code)
-        if lhb is not None:
-            if isinstance(lhb, dict):
-                b.lhb_count = lhb.get("lhb_count", 0)
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if lhb_ref:
+            lhb = lhb_ref.get(stock_code)
+            if lhb is not None:
+                if isinstance(lhb, dict):
+                    b.lhb_count = lhb.get("lhb_count", 0)
+                else:
+                    b.lhb_count = lhb
             else:
-                b.lhb_count = lhb
-        else:
-            b.lhb_count = 0
+                b.lhb_count = 0
 
         # Block trade enrichment
         # 无大宗交易的股票不在 cache 中，block_trade_amount = 0
-        bt = block_trade_ref.get(stock_code)
-        if bt is not None:
-            if isinstance(bt, dict):
-                b.block_trade_amount = bt.get("block_trade_amount")
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if block_trade_ref:
+            bt = block_trade_ref.get(stock_code)
+            if bt is not None:
+                if isinstance(bt, dict):
+                    b.block_trade_amount = bt.get("block_trade_amount")
+                else:
+                    b.block_trade_amount = bt
             else:
-                b.block_trade_amount = bt
-        else:
-            b.block_trade_amount = 0
+                b.block_trade_amount = 0
 
         # Holder number change enrichment
         # 0 is a valid value (股东户数无变化), not "missing"
-        # 默认 0（与 sibling pledge_ratio/north_net/margin_balance 一致）
-        hn = holder_num_ref.get(stock_code)
-        if isinstance(hn, dict):
-            b.holder_num_change = hn.get("holder_num_change") if hn.get("holder_num_change") is not None else 0
-        elif hn is not None:
-            b.holder_num_change = hn
-        else:
-            b.holder_num_change = 0  # 缺失时也默认为 0，与其他资金类字段一致
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if holder_num_ref:
+            hn = holder_num_ref.get(stock_code)
+            if isinstance(hn, dict):
+                b.holder_num_change = hn.get("holder_num_change") if hn.get("holder_num_change") is not None else 0
+            elif hn is not None:
+                b.holder_num_change = hn
+            else:
+                b.holder_num_change = 0  # 缓存已加载但股票不在其中 = 无变化
 
         # Earnings forecast enrichment
-        # 默认 0（与 sibling pledge_ratio/north_net 一致）
-        ef = earnings_forecast_ref.get(stock_code)
-        if isinstance(ef, dict):
-            b.eps_forecast = ef.get("yoy_change_pct", 0)
-        elif ef is not None:
-            b.eps_forecast = ef
-        else:
-            b.eps_forecast = 0  # 缺失时默认为 0，与其他资金类字段一致
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if earnings_forecast_ref:
+            ef = earnings_forecast_ref.get(stock_code)
+            if isinstance(ef, dict):
+                b.eps_forecast = ef.get("yoy_change_pct", 0)
+            elif ef is not None:
+                b.eps_forecast = ef
+            else:
+                b.eps_forecast = 0  # 缓存已加载但股票不在其中 = 无预测
 
         # Earnings express enrichment (业绩快报: 实际报告数据,补全 eps/bps/roe/revenue_yoy)
         # AGENTS.md 要求所有 loaded cache 必须在 enrich_quotes 中消费
@@ -4055,12 +4106,12 @@ async def enrich_quotes(bonds: list) -> list:
             _ee = earnings_express_ref.get(stock_code)
             if isinstance(_ee, dict):
                 # eps: 优先快报数据，已有值不覆盖
-                if _ee.get("eps") is not None and (b.eps is None or b.eps == 0):
+                if _ee.get("eps") is not None and b.eps is None:
                     b.eps = _ee["eps"]
                 # bps: 每股净资产（兼容 net_assets 字段名）
-                if _ee.get("bps") is not None and (b.bps is None or b.bps == 0):
+                if _ee.get("bps") is not None and b.bps is None:
                     b.bps = _ee["bps"]
-                elif _ee.get("net_assets") is not None and (b.bps is None or b.bps == 0):
+                elif _ee.get("net_assets") is not None and b.bps is None:
                     b.bps = _ee["net_assets"]
                 # roe: 净资产收益率（快报数据比 enrich cache 更及时）
                 if _ee.get("roe") is not None:
@@ -4075,15 +4126,17 @@ async def enrich_quotes(bonds: list) -> list:
 
         # Restricted release enrichment
         # 无限售解禁的股票不在 cache 中，restricted_release_amount = 0
-        rr = restricted_release_ref.get(stock_code)
-        if rr is not None:
-            if isinstance(rr, dict):
-                amt = rr.get("restricted_release_amount")
-                b.restricted_release_amount = amt
+        # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
+        if restricted_release_ref:
+            rr = restricted_release_ref.get(stock_code)
+            if rr is not None:
+                if isinstance(rr, dict):
+                    amt = rr.get("restricted_release_amount")
+                    b.restricted_release_amount = amt
+                else:
+                    b.restricted_release_amount = rr
             else:
-                b.restricted_release_amount = rr
-        else:
-            b.restricted_release_amount = 0
+                b.restricted_release_amount = 0
 
         # Bond value (纯债价值) computation
         # 使用 PV(未来现金流) 方法：纯债价值 = Σ(票息/(1+ytm)^t) + 面值/(1+ytm)^T
@@ -4139,7 +4192,7 @@ async def enrich_quotes(bonds: list) -> list:
             b.rating_score = RATING_SCORE_DEFAULT
 
         # 3. pure_bond_premium_ratio = (price - bond_value) / bond_value * 100
-        if b.price and getattr(b, "bond_value", None) and b.bond_value and b.bond_value > 0:
+        if b.price is not None and getattr(b, "bond_value", None) and b.bond_value and b.bond_value > 0:
             b.pure_bond_premium_ratio = round((b.price - b.bond_value) / b.bond_value * 100, 2)
 
         # 4. forced_call_days / is_called 从 call_status 解析
@@ -4271,8 +4324,10 @@ async def start_background_refresh():
     # 延迟 5 秒执行，避开第一批的 semaphore 拥堵
     # 使用独立 ThreadPoolExecutor 而非默认 executor，避免与第一批竞争 worker 槽位
     # 默认 executor 池大小 = min(32, os.cpu_count()+4)，若主线程繁忙会阻塞
+    # max_workers=6：6 个核心数据源可以同时跑（north/margin/lhb/block_trade/holder_num/earnings_forecast）
+    # restricted_release/bond_price 等 5s sleep 后启动
     _extended_executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=4, thread_name_prefix="ext_refresh",
+        max_workers=6, thread_name_prefix="ext_refresh",
     )
     # 优雅关闭：进程退出时给 3s 等待完成（uvicorn 默认 5s 超时，留 2s buffer）
     # wait=True + timeout=3 比单纯 wait=False 更安全，能保存部分未完成任务结果
@@ -4307,7 +4362,8 @@ async def start_background_refresh():
 
     def _refresh_extended_batch():
         import time as _t
-        _t.sleep(5)
+        # 不再 sleep 5s，让扩展执行器立即启动，避免延迟 5s+
+        # sync batch 已经异步 dispatch，主进程不会被阻塞
         futures = [
             _extended_executor.submit(fn)
             for fn in (_refresh_north_cache, _refresh_margin_cache, _refresh_lhb_cache,
@@ -4317,19 +4373,33 @@ async def start_background_refresh():
                        # 全部完成），单独加到扩展执行器里并行执行，可让 bond_price 提前 ~5 分钟可用
                        _refresh_bond_price_cache)
         ]
-        # 使用 wait() 替代 as_completed(timeout)，避免 TimeoutError 丢失已完成结果
-        done, pending = concurrent.futures.wait(
-            futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
-        )
-        if pending:
-            logger.warning(f"[DataEnrich] Extended batch: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
-            for fut in pending:
+        # 用 FIRST_COMPLETED 模式按批处理，让每个完成的 future 立即更新 metrics
+        # 不需要等待 ALL_COMPLETED (300s 上限)，因为每个函数内部都有自己的超时保护
+        # 总超时 90s：90s 后取消剩余 futures，避免扩展执行器无限阻塞
+        deadline = _t.time() + 90
+        all_done = []
+        while futures:
+            remaining = max(1, deadline - _t.time())
+            done, futures = concurrent.futures.wait(
+                futures, timeout=min(remaining, 10),
+                return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for f in done:
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.debug(f"[DataEnrich] Extended refresh future failed: {e}")
+                all_done.extend(done)
+            if _t.time() >= deadline:
+                break
+        # 超时后取消剩余 futures
+        if futures:
+            logger.warning(
+                f"[DataEnrich] Extended batch: {len(futures)} (of {len(all_done)+len(futures)}) "
+                f"unfinished after 90s, cancelling"
+            )
+            for fut in futures:
                 fut.cancel()
-        for f in done:
-            try:
-                f.result()
-            except Exception as e:
-                logger.debug(f"[DataEnrich] Extended refresh future failed: {e}")
 
     loop.run_in_executor(None, _refresh_extended_batch)
 
@@ -5608,7 +5678,7 @@ def reset_module_state_for_testing() -> None:
     global _earnings_express_map, _earnings_express_loaded
     global _restricted_release_map, _restricted_release_loaded
     global _bond_stock_codes, _bond_codes
-    global _stock_name_map, _name_loaded
+    global _name_map, _name_loaded
 
     # 重置所有 dict 与 _loaded 标记
     for name, val in list(globals().items()):
@@ -5618,4 +5688,4 @@ def reset_module_state_for_testing() -> None:
             globals()[name] = False
     _bond_stock_codes = set()
     _bond_codes = set()
-    _stock_name_map = {}
+    _name_map = {}
