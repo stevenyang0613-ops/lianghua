@@ -383,7 +383,7 @@ def _flush_metrics():
 
 
 def _get_bond_or_fallback_codes() -> frozenset:
-    """获取可转债正股代码集合，若 THS 不可用则回退到已加载的 stock_name_map 键。
+    """获取可转债正股代码集合，若 THS 不可用则回退到已加载的 _name_map 键。
 
     确保零填充和数据源覆盖率统计始终有可用的股票代码列表，
     即使在启动阶段 AKShare 信号量被争用导致 _ensure_bond_stock_codes 超时。
@@ -391,11 +391,11 @@ def _get_bond_or_fallback_codes() -> frozenset:
     if _bond_stock_codes:
         with _cache_lock:
             return frozenset(_bond_stock_codes)
-    # 回退：使用已从磁盘缓存加载的 stock_name_map 键
-    if _stock_name_map:
+    # 回退：使用已从磁盘缓存加载的 _name_map 键
+    if _name_map:
         with _cache_lock:
             codes = frozenset(
-                k for k in _stock_name_map.keys()
+                k for k in _name_map.keys()
                 if k and len(k) == 6 and k.isdigit()
             )
             if codes:
@@ -722,6 +722,7 @@ def _build_industry_cache():
                 logger.debug(f'[DataEnrich][TDX] Industry fallback failed: {tdx_e}')
     except Exception as e:
         logger.warning(f"[DataEnrich] Industry build failed: {e}")
+    return len(_industry_map) if _industry_map else 0
 
 
 def _fill_pe_pb_from_baidu(codes: list[str], pe_map: dict, pb_map: dict):
@@ -1158,7 +1159,8 @@ def _refresh_spot_cache():
             if _bond_stock_codes:
                 bond_missing = [c for c in _bond_stock_codes if c not in pe_map or c not in pb_map]
             else:
-                bond_missing = [c for c in all_codes if c not in pe_map or c not in pb_map] if len(pe_map) < len(all_codes) * 0.3 else []
+                bond_missing = []
+                logger.warning("[DataEnrich] _bond_stock_codes empty, skipping Baidu fallback")
 
         if bond_missing:
             logger.info(f"[DataEnrich] {len(bond_missing)} bond stocks missing PE/PB, trying Baidu fallback")
@@ -1210,6 +1212,7 @@ def _refresh_spot_cache():
             _set_global_map("_spot_map", result, replace=True)
             _save_cache(_SPOT_CACHE, result)
             logger.info(f"[DataEnrich] Stock spot: {len(result)} stocks, {len(pe_map)} PE, {len(pb_map)} PB, {len(tr_map)} turnover")
+            return len(result)
         else:
             logger.warning(f"[DataEnrich] Stock spot refresh poor quality ({len(pe_map)} PE / {len(all_codes)} stocks), merging with existing cache")
             if not _spot_map:
@@ -1234,6 +1237,7 @@ def _refresh_spot_cache():
             _save_cache(_SPOT_CACHE, merged)
             merged_pe = sum(1 for v in merged.values() if isinstance(v, dict) and v.get("pe") is not None)
             logger.info(f"[DataEnrich] Stock spot merged: {len(merged)} stocks, {merged_pe} PE (from cache)")
+            return len(merged)
     except Exception as e:
         logger.warning(f"[DataEnrich] Stock spot refresh failed: {e}")
         _load_spot_cache()
@@ -1261,71 +1265,44 @@ def _refresh_fund_flow_cache():
             _set_global_map("_fund_flow_map", result, replace=True)
             _save_cache(_FUND_FLOW_CACHE, result)
             logger.info(f"[DataEnrich] Fund flow: {len(result)} stocks")
-            return
+            return len(result)
         except Exception as e:
             logger.warning(f"[DataEnrich] Fund flow attempt {attempt+1} failed: {e}")
             time.sleep(5 * (attempt + 1))
+    # All 3 attempts failed; fallbacks below
     if not _fund_flow_map:
         _load_fund_flow_cache()
-        if _fund_flow_map:
-            logger.warning(f"[DataEnrich] Fund flow: using expired cache ({len(_fund_flow_map)} stocks)")
-        else:
-            logger.warning("[DataEnrich] Fund flow: trying stock_zh_a_spot_em fallback...")
-            spot_em_result = _refresh_fund_flow_from_spot_em()
-            if spot_em_result:
-                merged = {**_fund_flow_map, **spot_em_result}
-                _set_global_map("_fund_flow_map", merged)
-                _save_cache(_FUND_FLOW_CACHE, merged)
-                logger.info(f"[DataEnrich] Fund flow: spot_em merged {len(spot_em_result)} → total {len(merged)}")
-
-        # [Individual] fallback: 用单只股票接口补充缺失的资金流向 (仅债券正股)
-        if not _fund_flow_map or len(_fund_flow_map) < 50:
-            ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-            if not ff_codes:
-                _ensure_bond_stock_codes()
-                ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-            if ff_codes:
-                logger.info(f"[DataEnrich] Fund flow: trying individual fallback for {len(ff_codes)} bond stocks")
-                individual_result = _refresh_fund_flow_individual(ff_codes)
-                if individual_result:
-                    merged = dict(_fund_flow_map) if _fund_flow_map else {}
-                    for code, entry in individual_result.items():
-                        if code not in merged:
-                            merged[code] = entry
-                    _set_global_map('_fund_flow_map', merged)
-                    _save_cache(_FUND_FLOW_CACHE, merged)
-                    logger.info(f"[DataEnrich] Fund flow: individual merged {len(individual_result)} → total {len(merged)}")
-
-        # [TDX] fallback: 用 TDX 行情数据补充缺失的资金流向 (不覆盖已有缓存)
-        if not _fund_flow_map or len(_fund_flow_map) < 50:
-            ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-            if not ff_codes:
-                _ensure_bond_stock_codes()
-                ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-            if ff_codes:
-                try:
-                    adapter = get_tdx_adapter()
-                    logger.info(f'[DataEnrich][TDX] Fund flow: fetching TDX spot for {len(ff_codes)} stocks')
-                    tdx_q = adapter.fetch_quotes(ff_codes)
-                    # Merge: only add codes missing from existing cache, never overwrite
-                    # TDX 只提供成交额，没有主力净流入方向，跳过而非用错误近似值覆盖
-                    # 此前 amount * 0.1 的 fallback 导致所有缺失股票被错误标记为净流入
-                    merged = dict(_fund_flow_map) if _fund_flow_map else {}
-                    tdx_skipped = 0
-                    for code, q in tdx_q.items():
-                        if code in merged:
-                            continue  # preserve existing (likely better quality) data
-                        # TDX 没有 net_main 方向数据，跳过
-                        tdx_skipped += 1
-                    if len(merged) > 50:
-                        _set_global_map('_fund_flow_map', merged, replace=True)
-                        _save_cache(_FUND_FLOW_CACHE, merged)
-                        logger.info(f'[DataEnrich][TDX] Fund flow: skipped {tdx_skipped} stocks (no directional data), total {len(merged)}')
-                except Exception as e:
-                    logger.debug(f'[DataEnrich][TDX] Fund flow: adapter failed: {e}')
-            else:
-                logger.debug('[DataEnrich][TDX] Fund flow: no codes available')
-
+    if _fund_flow_map:
+        logger.warning(f"[DataEnrich] Fund flow: using expired cache ({len(_fund_flow_map)} stocks)")
+        return len(_fund_flow_map)
+    # spot_em fallback
+    logger.warning("[DataEnrich] Fund flow: trying stock_zh_a_spot_em fallback...")
+    spot_em_result = _refresh_fund_flow_from_spot_em()
+    if spot_em_result:
+        merged = {**_fund_flow_map, **spot_em_result}
+        _set_global_map("_fund_flow_map", merged)
+        _save_cache(_FUND_FLOW_CACHE, merged)
+        logger.info(f"[DataEnrich] Fund flow: spot_em merged {len(spot_em_result)} → total {len(merged)}")
+        return len(merged)
+    # Individual fallback
+    ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
+    if not ff_codes:
+        _ensure_bond_stock_codes()
+        ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
+    if ff_codes:
+        logger.info(f"[DataEnrich] Fund flow: trying individual fallback for {len(ff_codes)} bond stocks")
+        individual_result = _refresh_fund_flow_individual(ff_codes)
+        if individual_result:
+            merged = dict(_fund_flow_map) if _fund_flow_map else {}
+            for code, entry in individual_result.items():
+                if code not in merged:
+                    merged[code] = entry
+            _set_global_map('_fund_flow_map', merged)
+            _save_cache(_FUND_FLOW_CACHE, merged)
+            logger.info(f"[DataEnrich] Fund flow: individual merged {len(individual_result)} → total {len(merged)}")
+            return len(merged)
+    # TDX fallback (skipped - no directional data)
+    return len(_fund_flow_map) if _fund_flow_map else 0
 
 
 def _refresh_fund_flow_from_spot_em():
@@ -1560,10 +1537,12 @@ def _refresh_debt_cache():
         dr = sum(1 for v in result.values() if isinstance(v, dict) and "debt_ratio" in v)
         cr = sum(1 for v in result.values() if isinstance(v, dict) and "current_ratio" in v)
         logger.info(f"[DataEnrich] Debt: {len(result)} stocks, {dr} dr, {cr} cr")
+        return len(result)
     except Exception as e:
         logger.warning(f"[DataEnrich] Debt refresh failed: {e}", exc_info=True)
         if not _debt_map:
             _load_debt_cache()
+        return len(_debt_map) if _debt_map else 0
 
 
 @_with_metrics
@@ -4784,48 +4763,56 @@ def _refresh_holder_num_cache():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, c): c for c in all_codes}
             processed = 0
-            # AGENTS.md fix: use wait() instead of as_completed(timeout) to handle
-            # partial completion gracefully.
-            done, pending = concurrent.futures.wait(
-                futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+            # 用 wait() 配合 FIRST_COMPLETED，按批处理 done futures。
+            # 避免 ALL_COMPLETED 让少量卡死的 future 拖慢整体。
+            # 总超时 = 60s（远小于扩展执行器的 300s 限制），超时后保留已完成的
+            # 缓存值，让 periodic runner 在下次循环继续补充。
+            deadline = time.time() + 60
+            while futures and time.time() < deadline:
+                done, futures = concurrent.futures.wait(
+                    futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for fut in done:
+                    try:
+                        r = fut.result()
+                        if r:
+                            code, holders = r
+                            if holders and holders > 0:
+                                # 用上一次缓存的 holder_num 计算真实 change
+                                prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
+                                prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
+                                if isinstance(prev_count, (int, float)) and prev_count > 0:
+                                    holder_num_change = holders - prev_count
+                                else:
+                                    holder_num_change = None
+                                result[code] = {
+                                    "holder_num": holders,
+                                    "holder_num_change": holder_num_change,
+                                    "_data_source": "estimated",
+                                }
+                            processed += 1
+                    except Exception:
+                        pass
+                    if processed % 100 == 0:
+                        _save_cache(_HOLDER_NUM_CACHE, result)
+            # 超时后：剩余 futures 取消（让线程退出），保留已完成的
+            if futures:
+                logger.warning(
+                    f"[DataEnrich] HolderNum: {len(futures)} (of {len(all_codes)}) "
+                    f"futures unfinished after 60s, keeping {len(result)} completed"
+                )
+                for fut in futures:
+                    fut.cancel()
+
+        # 若 result 为空（API 全部失败），回退到磁盘缓存
+        # holder_num=0 在物理上不可能（任何公司都有股东），
+        # 所以 zero_fill 没有意义，但缓存中的旧数据仍可作为 "上次成功值" 使用
+        if not result and _holder_num_map:
+            logger.warning(
+                f"[DataEnrich] HolderNum: API returned empty, keeping existing cache "
+                f"({len(_holder_num_map)} stocks)"
             )
-            if pending:
-                logger.warning(f"[DataEnrich] HolderNum: {len(pending)} (of {len(futures)}) futures unfinished after 300s, keeping {len(done)} completed")
-            for fut in done:
-                try:
-                    r = fut.result()
-                    if r:
-                        code, holders = r
-                        if holders and holders > 0:
-                            # 用上一次缓存的 holder_num 计算真实 change（None 表示无基线）
-                            prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                            prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                            if isinstance(prev_count, (int, float)) and prev_count > 0:
-                                holder_num_change = holders - prev_count
-                            else:
-                                holder_num_change = None  # 三态：未测量 vs 真的无变化
-                            result[code] = {
-                                "holder_num": holders,
-                                "holder_num_change": holder_num_change,
-                                "_data_source": "estimated",
-                            }
-                        processed += 1
-                except Exception:
-                    pass
-                if processed % 200 == 0:
-                    _save_cache(_HOLDER_NUM_CACHE, result)
-
-        # Zero-fill: 对所有已知股票代码中无数据的股票填充 0
-        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
-        # 避免启动阶段 AKShare 信号量争用导致超时
-        for code in _get_bond_or_fallback_codes():
-            if code not in result:
-                result[code] = {
-                    "holder_num": 0,
-                    "holder_num_change": None,
-                    "_data_source": "zero_fill",
-                }
-
+            return len(_holder_num_map)
         if result:
             _set_global_map("_holder_num_map", result, replace=True)
             _save_cache(_HOLDER_NUM_CACHE, result)
@@ -4948,16 +4935,18 @@ def _refresh_restricted_release_cache():
         )
         if df is None or len(df) == 0:
             logger.warning("[DataEnrich] RestrictedRelease: empty result")
-            return 0
-        result = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
-            if not code or len(code) != 6:
-                continue
-            amount = _sf(r.get("解禁数量")) or _sf(r.get("实际解禁市值"))
-            if amount and amount > 0:
-                entry = result.setdefault(code, {"restricted_release_amount": 0})
-                entry["restricted_release_amount"] += amount
+            # 即使 API 返回空，也使用空 result 进行零填充
+            result = {}
+        else:
+            result = {}
+            for _, r in df.iterrows():
+                code = str(r.get("股票代码", "")).strip()
+                if not code or len(code) != 6:
+                    continue
+                amount = _sf(r.get("解禁数量")) or _sf(r.get("实际解禁市值"))
+                if amount and amount > 0:
+                    entry = result.setdefault(code, {"restricted_release_amount": 0})
+                    entry["restricted_release_amount"] += amount
         # Zero-fill: 对所有已知股票代码中无数据的股票填充 0
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
         # 避免启动阶段 AKShare 信号量争用导致超时
@@ -4967,7 +4956,6 @@ def _refresh_restricted_release_cache():
                     "restricted_release_amount": 0,
                     "_data_source": "zero_fill",
                 }
-
         if result:
             _set_global_map("_restricted_release_map", result, replace=True)
             _save_cache(_RESTRICTED_RELEASE_CACHE, result)

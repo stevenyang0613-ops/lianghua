@@ -13,6 +13,8 @@ from typing import Optional, Dict, List, Set, Any, Callable
 from enum import Enum
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.strategies.enhanced_timing_model import clean_numpy_types
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,11 +37,11 @@ class WSMessage:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_json(self) -> str:
-        return json.dumps({
+        return json.dumps(clean_numpy_types({
             'type': self.type.value,
             'data': self.data,
             'timestamp': self.timestamp,
-        })
+        }))
 
 
 @dataclass

@@ -1174,7 +1174,8 @@ class XibuSevenDimensionStrategy(Strategy):
 
         # 改进 (2025-06-15af): 使用模块级 _detect_market_env，传入当前时间戳和策略参数 cache_ttl
         # 改进 (2025-06-15ag): 区分 None 和 0，尊重用户显式设置的 0 值
-        current_ts = pd.Timestamp.now()
+        # 回测中使用回测日期而非实时时间，确保市场环境基于历史数据
+        current_ts = pd.Timestamp(current_date) if current_date else pd.Timestamp.now()
         _cache_ttl_raw = self.get_param('market_env_cache_ttl')
         _cache_ttl = 300 if _cache_ttl_raw is None else int(_cache_ttl_raw)
         market_env, self._market_env_ts = _detect_market_env(

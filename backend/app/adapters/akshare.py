@@ -380,6 +380,23 @@ class AKShareAdapter(DataSourceAdapter):
             return 0.0
 
     @staticmethod
+    def _safe_float_opt(value) -> Optional[float]:
+        """区别于 _safe_float: 缺失值返回 None 而非 0.0
+
+        用于价格/转股价/正股价等"0 是非法值"的字段，
+        让下游 safe_score / has_data 优先级能正确区分"真实 0"和"缺失"。
+        """
+        if value is None or value == '':
+            return None
+        try:
+            v = float(value)
+            if math.isnan(v) or math.isinf(v):
+                return None
+            return v
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _calc_ytm(price: float, remaining_years: float) -> float:
         """
         估算到期收益率(YTM)
@@ -407,7 +424,7 @@ class AKShareAdapter(DataSourceAdapter):
         try:
             s = str(maturity_date)[:10]
             maturity = datetime.strptime(s, '%Y-%m-%d')
-            delta = maturity - datetime.now()
+            delta = maturity - datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             return max(0.0, round(delta.days / 365, 2))
         except (ValueError, TypeError):
             return 0.0
@@ -549,7 +566,7 @@ class AKShareAdapter(DataSourceAdapter):
             if conversion_value == 0 and stock_price > 0 and conversion_price > 0:
                 conversion_value = round(stock_price / conversion_price * 100, 2)
 
-            dual_low = round(price + premium_ratio, 2) if price > 0 and premium_ratio > 0 else 0.0
+            dual_low = round(price + premium_ratio, 2) if price > 0 else 0.0
 
             # 从实时行情补充涨跌幅和成交额
             change_pct = spot.get("change_pct", 0.0)

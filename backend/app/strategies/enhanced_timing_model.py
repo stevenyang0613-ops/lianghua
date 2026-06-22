@@ -224,10 +224,10 @@ class EnhancedMarketData:
 
     # === 情绪 ===
     advance_decline_ratio: float = float('nan')            # 涨跌比
-    limit_up_count: int = 0              # 涨停数
-    limit_down_count: int = 0            # 跌停数
-    new_high_count: int = 0              # 60日新高数
-    new_low_count: int = 0               # 60日新低数
+    limit_up_count: float = float('nan')              # 涨停数
+    limit_down_count: float = float('nan')            # 跌停数
+    new_high_count: float = float('nan')               # 60日新高数
+    new_low_count: float = float('nan')                # 60日新低数
     pcr_ratio: float = float('nan')                        # 认沽/认购比
     vix_index: float = float('nan')                        # 波动率指数
     new_accounts: float = float('nan')                     # 新增开户数(万)
@@ -707,7 +707,7 @@ class EnhancedTimingModel:
             name="GDP增速", score=gdp_score, weight=0.20,
             category="fundamental", raw_value=gdp,
             signal="bullish" if gdp > 5.5 else "bearish" if gdp < 4.5 else "neutral",
-            description=f"GDP同比增速{gdp:.1f}%" if gdp != 0 else "无数据",
+            description=f"GDP同比增速{gdp:.1f}%" if not math.isnan(gdp) else "无数据",
         ))
         
         # 2.3 工业增加值
@@ -717,7 +717,7 @@ class EnhancedTimingModel:
             name="工业增加值增速", score=ind_score, weight=0.20,
             category="fundamental", raw_value=industrial,
             signal="bullish" if industrial > 6 else "bearish" if industrial < 4 else "neutral",
-            description=f"工业增加值同比{industrial:.1f}%" if industrial != 0 else "无数据",
+            description=f"工业增加值同比{industrial:.1f}%" if not math.isnan(industrial) else "无数据",
         ))
         
         # 2.4 PE/PB综合估值得分
@@ -757,7 +757,7 @@ class EnhancedTimingModel:
             name="股息吸引力", score=dividend_signal, weight=0.10,
             category="fundamental", raw_value=data.stock_pe_median,
             signal=div_signal_str,
-            description=f"基于PE推断股息吸引力，PE={data.stock_pe_median:.1f}",
+            description=f"基于PE推断股息吸引力，PE={data.stock_pe_median:.1f}" if not math.isnan(data.stock_pe_median) else "无PE数据",
         ))
         
         # 2.6 社零增速
@@ -767,7 +767,7 @@ class EnhancedTimingModel:
             name="社零增速", score=retail_score, weight=0.10,
             category="fundamental", raw_value=retail,
             signal="bullish" if retail > 6 else "bearish" if retail < 4 else "neutral",
-            description=f"社会消费品零售同比{retail:.1f}%" if retail != 0 else "无数据",
+            description=f"社会消费品零售同比{retail:.1f}%" if not math.isnan(retail) else "无数据",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -1063,12 +1063,16 @@ class EnhancedTimingModel:
         
         # 5.4 期限利差（长-短，center=50 使50bp得中性分）
         ts = data.term_spread
-        if ts != 0:
+        if not math.isnan(ts) and ts != 0:
             ts_score = sigmoid_score(ts, 50, steepness=0.03)
             ts_signal = "bullish" if ts > 100 else "bearish" if ts < 20 else "neutral"
             ts_desc = f"期限利差{ts:.0f}bp，{'陡峭化(宽货币)' if ts>100 else '平坦化(紧货币)' if ts<20 else '正常'}"
-        else:
+        elif ts == 0:
             ts_score = 50.0
+            ts_signal = "neutral"
+            ts_desc = "期限利差正常"
+        else:
+            ts_score = float('nan')
             ts_signal = "neutral"
             ts_desc = "无期限利差数据"
         sub_factors.append(FactorScore(
@@ -1102,7 +1106,7 @@ class EnhancedTimingModel:
             name="M2增速", score=m2_score, weight=0.12,
             category="liquidity", raw_value=m2,
             signal="bullish" if m2 > 10 else "bearish" if m2 < 6 else "neutral",
-            description=f"M2同比{m2:.1f}%，{'货币宽松' if m2>10 else '正常' if m2>6 else '货币收紧'}" if m2 > 0 else "无数据",
+            description=f"M2同比{m2:.1f}%，{'货币宽松' if m2>10 else '正常' if m2>6 else '货币收紧'}" if not math.isnan(m2) else "无数据",
         ))
         
         # 5.7 社融增速（center=8 使正常社融增速得中性分，steepness=0.5 避免极端）
@@ -1112,7 +1116,7 @@ class EnhancedTimingModel:
             name="社融增速", score=sf_score, weight=0.10,
             category="liquidity", raw_value=sf,
             signal="bullish" if sf > 10 else "bearish" if sf < 6 else "neutral",
-            description=f"社融同比{sf:.1f}%，{'信贷扩张' if sf>10 else '信贷收缩' if sf<6 else '正常'}" if sf != 0 else "无数据",
+            description=f"社融同比{sf:.1f}%，{'信贷扩张' if sf>10 else '信贷收缩' if sf<6 else '正常'}" if not math.isnan(sf) else "无数据",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -1304,13 +1308,13 @@ class EnhancedTimingModel:
         
         # 6.2 涨停跌停比（均值回归：涨停多=超买=风险，跌停多=超卖=机会）
         # A股常态涨停50-100只、跌停5-20只，ratio常在5-20之间，center=5使常态下中性
-        if data.limit_up_count >= 0 or data.limit_down_count >= 0:
-            up = max(data.limit_up_count, 1)
-            down = max(data.limit_down_count, 1)
+        if not math.isnan(data.limit_up_count) or not math.isnan(data.limit_down_count):
+            up = max(int(data.limit_up_count) if not math.isnan(data.limit_up_count) else 0, 1)
+            down = max(int(data.limit_down_count) if not math.isnan(data.limit_down_count) else 0, 1)
             ld_ratio = up / down
             ld_score = safe_score(ld_ratio, lambda v: sigmoid_score(v, 1, steepness=1.5, invert=True), treat_zero_as_missing=False)
             ld_signal = "bearish" if ld_ratio > 10 else "bullish" if ld_ratio < 2 else "neutral"
-            ld_desc = f"涨停{data.limit_up_count} vs 跌停{data.limit_down_count}，{'过热=风险' if ld_ratio>10 else '恐慌=机会' if ld_ratio<2 else '正常'}"
+            ld_desc = f"涨停{int(data.limit_up_count) if not math.isnan(data.limit_up_count) else 0} vs 跌停{int(data.limit_down_count) if not math.isnan(data.limit_down_count) else 0}，{'过热=风险' if ld_ratio>10 else '恐慌=机会' if ld_ratio<2 else '正常'}"
         else:
             ld_score = 50.0
             ld_signal = "neutral"
@@ -1400,7 +1404,7 @@ class EnhancedTimingModel:
         # 使用 sigmoid_score 替代阶梯式评分，使正常增长率得到合理分数
         # 改进 (2025-06-15av): 0.0 视为不可用（与测试约定一致，真实数据不可能恰好为 0）
         new_acc = data.new_accounts if not math.isnan(data.new_accounts) else float('nan')
-        new_acc_available = not math.isnan(new_acc) and new_acc != 0.0
+        new_acc_available = not math.isnan(new_acc)
         if new_acc_available:
             acc_score = sigmoid_score(new_acc, 0, steepness=0.1)
             acc_signal = "bullish" if 50 < new_acc < 200 else "bearish" if new_acc < -20 else "neutral"
@@ -1438,7 +1442,7 @@ class EnhancedTimingModel:
         # 6.9 北向资金情绪（趋势跟踪：流入=看多，流出=看空）
         # 与资金面一致，使用 sigmoid_score 无 invert
         north = data.north_bound_net_flow
-        north_available = north != 0.0 and not math.isnan(north)
+        north_available = not math.isnan(north)
         if north_available:
             north_score = sigmoid_score(north, 0, steepness=0.03)
             north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
@@ -1590,7 +1594,7 @@ class EnhancedTimingModel:
             name="出口增速", score=export_score, weight=0.15,
             category="macro", raw_value=export,
             signal="bullish" if export > 8 else "bearish" if export < 2 else "neutral",
-            description=f"出口同比{export:.1f}%" if export != 0 else "无数据",
+            description=f"出口同比{export:.1f}%" if not math.isnan(export) else "无数据",
         ))
         
         # 8.4 GDP增速
@@ -1600,7 +1604,7 @@ class EnhancedTimingModel:
             name="GDP增速", score=gdp_score, weight=0.20,
             category="macro", raw_value=gdp,
             signal="bullish" if gdp > 5.5 else "bearish" if gdp < 4.5 else "neutral",
-            description=f"GDP同比{gdp:.1f}%" if gdp != 0 else "无数据",
+            description=f"GDP同比{gdp:.1f}%" if not math.isnan(gdp) else "无数据",
         ))
         
         # 8.5 工业增加值
@@ -1610,7 +1614,7 @@ class EnhancedTimingModel:
             name="工业增加值", score=io_score, weight=0.15,
             category="macro", raw_value=io,
             signal="bullish" if io > 6 else "bearish" if io < 4 else "neutral",
-            description=f"工业增加值同比{io:.1f}%" if io != 0 else "无数据",
+            description=f"工业增加值同比{io:.1f}%" if not math.isnan(io) else "无数据",
         ))
         
         # 8.6 社零
@@ -1620,7 +1624,7 @@ class EnhancedTimingModel:
             name="社零增速", score=retail_score, weight=0.10,
             category="macro", raw_value=retail,
             signal="bullish" if retail > 6 else "bearish" if retail < 4 else "neutral",
-            description=f"社零同比{retail:.1f}%" if retail != 0 else "无数据",
+            description=f"社零同比{retail:.1f}%" if not math.isnan(retail) else "无数据",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -2428,8 +2432,8 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'market_turnover', float('nan'))
         if not math.isnan(val):
             data.market_turnover = val
-        data.new_high_count = getattr(macro_data, 'new_high_60d', 0) or 0
-        data.new_low_count = getattr(macro_data, 'new_low_60d', 0) or 0
+        data.new_high_count = getattr(macro_data, 'new_high_60d', float('nan'))
+        data.new_low_count = getattr(macro_data, 'new_low_60d', float('nan'))
         # 股票指数
         val = getattr(macro_data, 'stock_index_current', float('nan'))
         if not math.isnan(val):
@@ -2449,8 +2453,8 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'stock_index_ma60', float('nan'))
         if not math.isnan(val):
             data.stock_index_ma60 = val
-        val = getattr(macro_data, 'max_dd_20d', 0)
-        if val != 0:
+        val = getattr(macro_data, 'max_dd_20d', float('nan'))
+        if not math.isnan(val):
             data.max_dd_20d = val
         # === 新增：从 MacroData V2.1 填充所有先前硬编码的字段 ===
         # PE/PB
@@ -2483,14 +2487,14 @@ def convert_from_legacy_data(
         if not math.isnan(val):
             data.industry_net_inflow_ratio = val
         # 宏观扩展
-        val = getattr(macro_data, 'industrial_output', 0)
-        if val != 0:
+        val = getattr(macro_data, 'industrial_output', float('nan'))
+        if not math.isnan(val):
             data.industrial_output = val
-        val = getattr(macro_data, 'retail_sales', 0)
-        if val != 0:
+        val = getattr(macro_data, 'retail_sales', float('nan'))
+        if not math.isnan(val):
             data.retail_sales = val
-        val = getattr(macro_data, 'export_growth', 0)
-        if val != 0:
+        val = getattr(macro_data, 'export_growth', float('nan'))
+        if not math.isnan(val):
             data.export_growth = val
         # 情绪扩展
         val = getattr(macro_data, 'pcr_ratio', float('nan'))
@@ -2519,8 +2523,8 @@ def convert_from_legacy_data(
         if not math.isnan(val):
             data.volume_ratio = val
         # 机构持仓/盈利超预期/消息面
-        val = getattr(macro_data, 'institutional_holding_change', 0)
-        if val != 0:
+        val = getattr(macro_data, 'institutional_holding_change', float('nan'))
+        if not math.isnan(val):
             data.institutional_holding_change = val
         val = getattr(macro_data, 'earnings_surprise_ratio', float('nan'))
         if not math.isnan(val):
@@ -2568,7 +2572,7 @@ def convert_from_legacy_data(
     
     data.data_completeness = min(1.0, sum([
         0.05 if data.cb_median_premium > 0 else 0,
-        0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and data.cb_ytm_median != 0)) else 0,  # 三态: True/推断/False
+        0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and not math.isnan(data.cb_ytm_median) and data.cb_ytm_median != 0)) else 0,  # 三态: True/推断/False
         0.05 if data.treasury_10y_yield > 0 else 0,
         0.04 if 0 < data.pmi < 100 else 0,
         0.04 if data.cb_avg_daily_amount > 0 else 0,
@@ -2580,18 +2584,18 @@ def convert_from_legacy_data(
         0.03 if data.cb_count > 0 else 0,
         0.04 if data.shibor_overnight > 0 else 0,
         0.04 if data.m2_growth > 0 else 0,
-        0.04 if data.cpi > 0 or data.ppi != 0 else 0,
-        0.03 if data.social_financing_growth > 0 else 0,
-        0.03 if data.gdp_growth > 0 else 0,
+        0.04 if (not math.isnan(data.cpi) and data.cpi > 0) or (not math.isnan(data.ppi) and data.ppi != 0) else 0,
+        0.03 if not math.isnan(data.social_financing_growth) else 0,
+        0.03 if not math.isnan(data.gdp_growth) else 0,
         0.04 if data.credit_spread > 0 else 0,
         0.03 if data.term_spread > 0 else 0,
         # 以下字段数据源当前不可用，按中性值返回；不扣减完整度也不额外加分
         0.03 if data.margin_buy_ratio > 0 else 0,
         0.04 if data.stock_pe_median > 0 and data.stock_pb_median > 0 else 0,
         0.03 if data.stock_pe_percentile > 0 and data.stock_pb_percentile > 0 else 0,
-        0.03 if data.industrial_output != 0 else 0,
-        0.03 if data.retail_sales != 0 else 0,
-        0.03 if data.export_growth != 0 else 0,
+        0.03 if not math.isnan(data.industrial_output) else 0,
+        0.03 if not math.isnan(data.retail_sales) else 0,
+        0.03 if not math.isnan(data.export_growth) else 0,
         0.02 if data.pcr_ratio > 0 else 0,
         0.02 if data.vix_index > 0 else 0,
         0.03 if data.rsi_14 > 0 else 0,

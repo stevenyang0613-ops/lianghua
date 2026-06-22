@@ -4,6 +4,35 @@
 
 import { safeJsonParse } from './safeJson'
 
+const MESSAGES_KEY = 'messages'
+const MAX_MESSAGES = 500
+
+// Debounced localStorage write to avoid hammering on every add/read/star
+let _pendingMessages: Message[] | null = null
+let _msgFlushTimer: ReturnType<typeof setTimeout> | null = null
+const MSG_FLUSH_DELAY = 500
+
+function _flushMessages(): void {
+  if (_msgFlushTimer) {
+    clearTimeout(_msgFlushTimer)
+    _msgFlushTimer = null
+  }
+  if (_pendingMessages === null) return
+  try {
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(_pendingMessages))
+  } catch (e) {
+    console.warn('[MessageCenter] localStorage write failed:', e)
+  }
+  _pendingMessages = null
+}
+
+function _scheduleMessagesFlush(messages: Message[]): void {
+  _pendingMessages = messages
+  if (!_msgFlushTimer) {
+    _msgFlushTimer = setTimeout(_flushMessages, MSG_FLUSH_DELAY)
+  }
+}
+
 export interface Message {
   id: string
   type: 'system' | 'trade' | 'signal' | 'alert' | 'update' | 'notification'
@@ -24,9 +53,6 @@ export interface MessageCategory {
   icon: string
   unreadCount: number
 }
-
-const MESSAGES_KEY = 'messages'
-const MAX_MESSAGES = 500
 
 // 生成唯一 ID
 function generateId(): string {
@@ -78,7 +104,7 @@ export function getMessages(options?: {
         createdAt: Date.now() - 7200000,
       },
     ]
-    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+    _scheduleMessagesFlush(messages)
   }
 
   if (options) {
@@ -124,7 +150,7 @@ export function addMessage(message: Omit<Message, 'id' | 'read' | 'starred' | 'c
     messages.splice(MAX_MESSAGES)
   }
 
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+  _scheduleMessagesFlush(messages)
 
   // 触发通知
   dispatchMessageEvent(newMessage)
@@ -139,7 +165,7 @@ export function markAsRead(id: string): Message | null {
   if (index === -1) return null
 
   messages[index].read = true
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+  _scheduleMessagesFlush(messages)
   return messages[index]
 }
 
@@ -155,7 +181,7 @@ export function markAllAsRead(type?: Message['type']): number {
     }
   })
 
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+  _scheduleMessagesFlush(messages)
   return count
 }
 
@@ -166,7 +192,7 @@ export function toggleStar(id: string): Message | null {
   if (index === -1) return null
 
   messages[index].starred = !messages[index].starred
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages))
+  _scheduleMessagesFlush(messages)
   return messages[index]
 }
 

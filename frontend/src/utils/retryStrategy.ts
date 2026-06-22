@@ -63,15 +63,15 @@ export class RetryStrategy {
     // 自定义检查优先
     if (customCheck?.(error)) return true
 
-    // 检查错误码
-    const errorCode = (error as any).code
-    if (this.config.retryableErrors.includes(errorCode)) {
+    // 检查错误码 / HTTP 状态码（用 unknown narrowing 替代 as any）
+    const errorAny = error as unknown as Record<string, unknown>
+    const errorCode = errorAny.code
+    if (typeof errorCode === 'string' && this.config.retryableErrors.includes(errorCode)) {
       return true
     }
 
-    // 检查 HTTP 状态码
-    const statusCode = (error as any).status || (error as any).statusCode
-    if (this.config.retryableStatusCodes.includes(statusCode)) {
+    const statusCode = errorAny.status ?? errorAny.statusCode
+    if (typeof statusCode === 'number' && this.config.retryableStatusCodes.includes(statusCode)) {
       return true
     }
 
@@ -131,16 +131,18 @@ export async function fetchWithRetry(
       const response = await fetch(url, options)
 
       if (!response.ok && strategy['config'].retryableStatusCodes.includes(response.status)) {
-        const error = new Error(`HTTP ${response.status}`) as any
-        error.status = response.status
+        const error: Error & { status: number } = Object.assign(
+          new Error(`HTTP ${response.status}`),
+          { status: response.status }
+        )
         throw error
       }
 
       return response
     },
     (error) => {
-      const status = (error as any).status
-      return strategy['config'].retryableStatusCodes.includes(status)
+      const status = (error as unknown as { status?: number }).status
+      return typeof status === 'number' && strategy['config'].retryableStatusCodes.includes(status)
     }
   )
 }

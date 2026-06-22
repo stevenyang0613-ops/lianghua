@@ -16,6 +16,8 @@ import asyncio
 import json
 import logging
 
+from app.strategies.enhanced_timing_model import clean_numpy_types
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +43,7 @@ class TimingSignal:
     ts: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return clean_numpy_types(asdict(self))
 
 
 @dataclass
@@ -55,7 +57,7 @@ class PositionChange:
     ts: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return clean_numpy_types(asdict(self))
 
 
 @dataclass
@@ -69,7 +71,7 @@ class MarketSwitch:
     ts: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return clean_numpy_types(asdict(self))
 
 
 @dataclass
@@ -82,7 +84,7 @@ class HedgeTrigger:
     ts: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return clean_numpy_types(asdict(self))
 
 
 class TimingSignalBroadcaster:

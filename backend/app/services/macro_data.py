@@ -125,12 +125,12 @@ class MacroData:
     policy_signal_score: float = 50.0
     event_impact_score: float = 50.0
     industry_cycle_score: float = 50.0
-    limit_up_count: int = 0
-    limit_down_count: int = 0
-    advance_count: int = 0
-    decline_count: int = 0
-    new_high_60d: int = 0
-    new_low_60d: int = 0
+    limit_up_count: float = float('nan')
+    limit_down_count: float = float('nan')
+    advance_count: float = float('nan')
+    decline_count: float = float('nan')
+    new_high_60d: float = float('nan')
+    new_low_60d: float = float('nan')
     market_turnover: float = 0.0
 
     updated_at: Optional[datetime] = None
@@ -313,9 +313,9 @@ class MacroDataService:
         checks = [
             ("treasury_10y", data.treasury_10y_yield > 0, 0.06),
             ("pmi", 0 < data.pmi_current < 100, 0.06),
-            ("cpi_ppi", data.cpi > 0 or data.ppi != 0.0, 0.04),
+            ("cpi_ppi", (not math.isnan(data.cpi) and data.cpi > 0) or (not math.isnan(data.ppi) and data.ppi != 0.0), 0.04),
             ("m2", data.m2_growth > 0, 0.05),
-            ("social_fin", data.social_financing_growth != 0, 0.04),
+            ("social_fin", not math.isnan(data.social_financing_growth), 0.04),
             ("gdp", data.gdp_growth > 0, 0.04),
             ("shibor", data.shibor_overnight > 0, 0.04),
             ("credit_spread", data.credit_spread_aa > 0, 0.04),
@@ -331,9 +331,9 @@ class MacroDataService:
             ("main_force", not math.isnan(data.main_force_net_flow), 0.02),
             ("industry_flow", not math.isnan(data.industry_net_inflow), 0.02),
             ("pe_pb", data.stock_pe_median > 0 and data.stock_pb_median > 0, 0.06),
-            ("industrial", data.industrial_output != 0, 0.04),
-            ("retail", data.retail_sales != 0, 0.04),
-            ("export", data.export_growth != 0, 0.04),
+            ("industrial", not math.isnan(data.industrial_output), 0.04),
+            ("retail", not math.isnan(data.retail_sales), 0.04),
+            ("export", not math.isnan(data.export_growth), 0.04),
             ("pcr", data.pcr_ratio > 0, 0.03),
             ("vix", data.vix_index > 0, 0.03),
             ("technical", data.rsi_14 > 0, 0.05),
@@ -509,17 +509,17 @@ class MacroDataService:
             logger.warning(f"[MacroData] Credit spread fetch failed: {e}")
             return float('nan')
 
-    def _fetch_market_stats(self) -> Tuple[int, int, int, int, int, int]:
+    def _fetch_market_stats(self) -> Tuple[float, float, float, float, float, float]:
         try:
             if ak is None:
-                return 0, 0, 0, 0, 0, 0
+                return tuple(float('nan') for _ in range(6))  # type: ignore
             df = ak.stock_zh_a_spot()
             if df is None or df.empty:
-                return 0, 0, 0, 0, 0, 0
+                return tuple(float('nan') for _ in range(6))  # type: ignore
             chg = pd.to_numeric(df.get('涨跌幅'), errors='coerce')
             valid = chg.dropna()
             if valid.empty:
-                return 0, 0, 0, 0, 0, 0
+                return tuple(float('nan') for _ in range(6))  # type: ignore
             limit_up = int((valid >= 9.9).sum())
             limit_down = int((valid <= -9.9).sum())
             advance = int((valid > 0).sum())
@@ -535,10 +535,10 @@ class MacroDataService:
             except Exception:
                 logger.warning("[MacroData] stock_a_high_low_statistics failed, using 0 for new_high/new_low")
                 pass
-            return limit_up, limit_down, advance, decline, new_high, new_low
+            return float(limit_up), float(limit_down), float(advance), float(decline), float(new_high), float(new_low)
         except Exception as e:
             logger.warning(f"[MacroData] Market stats fetch failed: {e}")
-            return 0, 0, 0, 0, 0, 0
+            return tuple(float('nan') for _ in range(6))  # type: ignore
 
     def _fetch_market_turnover(self) -> float:
         """全市场换手率（%）= 总成交额 / 前一日流通市值 * 100
@@ -755,8 +755,9 @@ class MacroDataService:
                 except Exception:
                     continue
 
-            # SZSE 汇总（单位：亿元）
+            # SZSE 今日和昨日余额
             sz_balance = 0.0
+            sz_prev_balance = 0.0
             sz_buy = 0.0
             for offset in range(1, 5):
                 d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')
@@ -765,12 +766,22 @@ class MacroDataService:
                     if df is not None and not df.empty:
                         sz_balance = float(df['融资融券余额'].iloc[0])
                         sz_buy = float(df['融资买入额'].iloc[0])
+                        # 查找深交所前一个交易日
+                        for p_offset in range(offset + 1, offset + 10):
+                            pd_str = (datetime.now() - timedelta(days=p_offset)).strftime('%Y%m%d')
+                            try:
+                                p_df = ak.stock_margin_szse(date=pd_str)
+                                if p_df is not None and not p_df.empty:
+                                    sz_prev_balance = float(p_df['融资融券余额'].iloc[0])
+                                    break
+                            except Exception:
+                                continue
                         break
                 except Exception:
                     continue
 
             total_balance = current_balance + sz_balance
-            total_prev = prev_balance + sz_balance  # 深交所变化较小，主要用 SSE 变化
+            total_prev = prev_balance + sz_prev_balance
             change = total_balance - total_prev
             buy_ratio = 0.0
             if total_balance > 0:

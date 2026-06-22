@@ -2204,6 +2204,7 @@ class BacktestEngine:
         # 改进 (2025-06-15k): 贝叶斯优化分支（optuna）
         if optimization_config.search_mode == 'bayesian':
             logger.info(f"[run_optimization] 贝叶斯优化: 使用 optuna TPE 采样器，max_iter={max_iter}")
+            metric_key = optimization_config.optimize_metric
             return self._run_bayesian_optimization(
                 strategy_cls, data, optimization_config, param_values, keys, metric_key, on_progress
             )
@@ -3601,7 +3602,7 @@ class WalkForwardValidator:
             avg_out_sample_sharpe=round(avg_out_sharpe, 2),
             avg_in_sample_drawdown=round(avg_in_dd, 2),
             avg_out_sample_drawdown=round(avg_out_dd, 2),
-            information_ratio=overfit_information_ratio,
+            overfit_information_ratio=overfit_information_ratio,
             overfit_ratio=overfit_ratio,
             best_params_stability=stability_score,
             parameter_consistency=consistency_score,

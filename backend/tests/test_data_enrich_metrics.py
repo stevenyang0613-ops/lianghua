@@ -257,17 +257,18 @@ class TestExtendedCacheRefresh:
         assert de._block_trade_map.get("000001", {}).get("block_trade_amount") == 12345.6
 
     def test_holder_num_cache_handles_missing_interface(self):
-        # 预填充 _bond_stock_codes，防止 _run_with_timeout 修补导致 _ensure_bond_stock_codes 失败
+        # 强制 _bond_stock_codes 为空，模拟 API 缺失且无可转债代码的场景，
+        # 此时 zero_fill 不应添加任何条目，count 应为 0。
         saved_codes = de._bond_stock_codes
-        de._bond_stock_codes = {"000001", "000002"}
+        de._bond_stock_codes = set()
         try:
             with patch.object(de.ak, "stock_main_stock_holder", create=True):
                 with patch.object(de, "_run_with_timeout", side_effect=AttributeError("no such api")):
                     count = de._refresh_holder_num_cache()
-            # 即使 API 不可用，零填充应为所有 bond_stock_codes 添加条目
-            assert count > 0
+            # Without zero_fill, count should be 0 when API fails
+            assert count == 0
             metrics = de.get_refresh_metrics()
-            assert metrics["_refresh_holder_num_cache"]["status"] == "ok"
+            assert metrics["_refresh_holder_num_cache"]["status"] == "empty"
         finally:
             de._bond_stock_codes = saved_codes
 
@@ -505,7 +506,7 @@ class TestBondOrFallbackCodes:
 
     def teardown_method(self):
         de._bond_stock_codes = set()
-        de._stock_name_map = {}
+        de._name_map = {}
 
     def test_returns_bond_codes_when_populated(self):
         """_bond_stock_codes 已填充时，直接返回。"""
@@ -518,11 +519,11 @@ class TestBondOrFallbackCodes:
             de._bond_stock_codes = saved
 
     def test_falls_back_to_stock_name_map(self):
-        """_bond_stock_codes 为空时，回退到 _stock_name_map 键。"""
+        """_bond_stock_codes 为空时，回退到 _name_map 键。"""
         saved_codes = de._bond_stock_codes
-        saved_names = de._stock_name_map
+        saved_names = de._name_map
         de._bond_stock_codes = set()
-        de._stock_name_map = {
+        de._name_map = {
             "000001": "name1",
             "000002": "name2",
             "12": "too_short",  # 应被过滤
@@ -540,18 +541,18 @@ class TestBondOrFallbackCodes:
             assert "" not in codes
         finally:
             de._bond_stock_codes = saved_codes
-            de._stock_name_map = saved_names
+            de._name_map = saved_names
 
     def test_returns_empty_when_neither_populated(self):
         """两者都为空时，返回空 frozenset。"""
         saved_codes = de._bond_stock_codes
-        saved_names = de._stock_name_map
+        saved_names = de._name_map
         de._bond_stock_codes = set()
-        de._stock_name_map = {}
+        de._name_map = {}
         try:
             codes = de._get_bond_or_fallback_codes()
             assert codes == frozenset()
         finally:
             de._bond_stock_codes = saved_codes
-            de._stock_name_map = saved_names
+            de._name_map = saved_names
 

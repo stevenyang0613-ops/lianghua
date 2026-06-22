@@ -12,7 +12,7 @@ let _baseCache: string | typeof UNINITIALIZED = UNINITIALIZED
 const getBase = (): string => {
   if (_baseCache !== UNINITIALIZED) return _baseCache as string
   if (typeof window !== 'undefined') {
-    _baseCache = (window as any).__API_BASE__ || '/api/v1'
+    _baseCache = window.__API_BASE__ || '/api/v1'
   } else {
     _baseCache = '/api/v1'
   }

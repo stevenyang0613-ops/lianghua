@@ -30,6 +30,32 @@ export interface DashboardLayout {
 const LAYOUTS_KEY = 'dashboard_layouts'
 const CURRENT_LAYOUT_KEY = 'current_dashboard_layout'
 
+// Debounced localStorage write to avoid hammering on every drag/resize
+let _pendingLayouts: DashboardLayout[] | null = null
+let _layoutFlushTimer: ReturnType<typeof setTimeout> | null = null
+const LAYOUT_FLUSH_DELAY = 500
+
+function _flushLayouts(): void {
+  if (_layoutFlushTimer) {
+    clearTimeout(_layoutFlushTimer)
+    _layoutFlushTimer = null
+  }
+  if (_pendingLayouts === null) return
+  try {
+    localStorage.setItem(LAYOUTS_KEY, JSON.stringify(_pendingLayouts))
+  } catch (e) {
+    console.warn('[DashboardLayout] localStorage write failed:', e)
+  }
+  _pendingLayouts = null
+}
+
+function _scheduleLayoutsFlush(layouts: DashboardLayout[]): void {
+  _pendingLayouts = layouts
+  if (!_layoutFlushTimer) {
+    _layoutFlushTimer = setTimeout(_flushLayouts, LAYOUT_FLUSH_DELAY)
+  }
+}
+
 // 默认布局
 const DEFAULT_LAYOUT: DashboardLayout = {
   id: 'default',
@@ -176,7 +202,7 @@ export function createLayout(name: string): DashboardLayout {
     updatedAt: Date.now(),
   }
   layouts.push(newLayout)
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
   return newLayout
 }
 
@@ -191,7 +217,7 @@ export function updateLayout(id: string, updates: Partial<DashboardLayout>): Das
     ...updates,
     updatedAt: Date.now(),
   }
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
   return layouts[index]
 }
 
@@ -225,7 +251,7 @@ export function addWidget(layoutId: string, widget: Omit<DashboardWidget, 'id'>)
 
   layout.widgets.push(newWidget)
   layout.updatedAt = Date.now()
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
 
   return newWidget
 }
@@ -241,7 +267,7 @@ export function updateWidget(layoutId: string, widgetId: string, updates: Partia
 
   layout.widgets[index] = { ...layout.widgets[index], ...updates }
   layout.updatedAt = Date.now()
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
 
   return layout.widgets[index]
 }
@@ -254,7 +280,7 @@ export function deleteWidget(layoutId: string, widgetId: string): boolean {
 
   layout.widgets = layout.widgets.filter(w => w.id !== widgetId)
   layout.updatedAt = Date.now()
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
 
   return true
 }
@@ -276,7 +302,7 @@ export function updateWidgetPositions(layoutId: string, widgets: { id: string; x
   })
 
   layout.updatedAt = Date.now()
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
 }
 
 // 复制布局
@@ -299,7 +325,7 @@ export function duplicateLayout(id: string): DashboardLayout | null {
   }
 
   layouts.push(newLayout)
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  _scheduleLayoutsFlush(layouts)
 
   return newLayout
 }
@@ -323,7 +349,7 @@ export function importLayout(json: string): DashboardLayout | null {
 
     const layouts = getLayouts()
     layouts.push(layout)
-    localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+    _scheduleLayoutsFlush(layouts)
 
     return layout
   } catch {

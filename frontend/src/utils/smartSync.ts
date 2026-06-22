@@ -27,7 +27,7 @@ let connectionChangeHandler: (() => void) | null = null
 
 // 获取网络状态
 function getNetworkStatus(): NetworkStatus {
-  const connection = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
 
   return {
     isOnline: navigator.onLine,
@@ -123,7 +123,7 @@ export function initNetworkMonitor(): void {
   window.addEventListener('offline', offlineHandler)
 
   // 监听网络连接信息变化
-  const connection = (navigator as any).connection
+  const connection = navigator.connection
   if (connection) {
     connectionChangeHandler = () => {
       console.log('[SmartSync] Connection changed:', connection.effectiveType)
@@ -147,7 +147,7 @@ export function cleanupNetworkMonitor(): void {
     offlineHandler = null
   }
   if (connectionChangeHandler) {
-    const connection = (navigator as any).connection
+    const connection = navigator.connection
     if (connection) {
       connection.removeEventListener('change', connectionChangeHandler)
     }

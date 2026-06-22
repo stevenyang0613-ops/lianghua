@@ -226,7 +226,7 @@ def _signal_to_frontend(signal, macro_data) -> dict:
     )
     macro_desc = (
         f'制造业PMI为{pmi:.1f}，经济{"扩张" if pmi > 50 else "收缩"}'
-        if pmi != 50.0 else '暂无宏观数据'
+        if not math.isnan(pmi) and pmi != 50.0 else '暂无宏观数据'
     )
 
     market_env = signal.regime.value if signal.regime else 'neutral'
