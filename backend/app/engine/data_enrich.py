@@ -3599,7 +3599,8 @@ async def start_background_refresh():
             _extended_executor.submit(fn)
             for fn in (_refresh_north_cache, _refresh_margin_cache, _refresh_lhb_cache,
                        _refresh_block_trade_cache, _refresh_holder_num_cache,
-                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache)
+                       _refresh_earnings_forecast_cache, _refresh_restricted_release_cache,
+                       _refresh_mgmt_cache, _refresh_earnings_express_cache)
         ]
         for f in concurrent.futures.as_completed(futures, timeout=300):
             try:
