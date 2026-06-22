@@ -114,12 +114,7 @@ export default class ErrorBoundary extends Component<Props, State> {
         url: window.location.href,
         timestamp: Date.now(),
       }).catch(() => {
-        // Fallback: send via IPC if HTTP fails
-        ;(window as any).electronAPI?.httpRequest?.('POST', '/api/errors', {
-          message: error.message,
-          stack: error.stack,
-          componentStack: errorInfo.componentStack,
-        })
+        // HTTP failed; log is best-effort
       })
     }
 

@@ -51,10 +51,10 @@ export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
 
   // 找到最早过期的缓存
   const oldestCache = cacheStatus
-    .filter(c => c.status)
+    .filter((c): c is typeof c & { status: NonNullable<typeof c.status> } => !!c.status)
     .sort((a, b) => {
-      if (a.status!.isExpired && !b.status!.isExpired) return -1
-      if (!a.status!.isExpired && b.status!.isExpired) return 1
+      if (a.status.isExpired && !b.status.isExpired) return -1
+      if (!a.status.isExpired && b.status.isExpired) return 1
       return 0
     })[0]
 

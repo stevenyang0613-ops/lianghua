@@ -193,7 +193,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
             if (result.ok) {
               disableOfflineMode()
               const token = result.data?.ws_auth_token
-                || (await (window.electronAPI as any).getWsToken?.())
+                || (window.electronAPI?.getWsToken ? await window.electronAPI.getWsToken() : undefined)
               if (token) {
                 setWsAuthToken(token)
                 // token 更新后，刷新 WebSocket URL 确保使用最新 token

@@ -110,8 +110,8 @@ export class MultiAccountManager {
       id,
       createdAt: now,
       updatedAt: now,
-      status: config!.status || 'active',
-      tags: config!.tags || [],
+      status: config.status || 'active',
+      tags: config.tags || [],
     }
 
     // 加密敏感信息
@@ -338,40 +338,41 @@ export class MultiAccountManager {
     }
 
     const config = group.riskConfig
+    if (!config) return { allowed: true }
 
     // 检查最大持仓
-    if (config!.maxPosition > 0) {
+    if (config.maxPosition > 0) {
       const totalValue = this.calculateGroupPositionValue(groupId)
-      if (totalValue + trade.amount * trade.price > config!.maxPosition) {
+      if (totalValue + trade.amount * trade.price > config.maxPosition) {
         return { allowed: false, reason: '超过最大持仓限制' }
       }
     }
 
     // 检查单笔交易限制
-    if (config!.maxSingleTrade > 0) {
-      if (trade.amount * trade.price > config!.maxSingleTrade) {
+    if (config.maxSingleTrade > 0) {
+      if (trade.amount * trade.price > config.maxSingleTrade) {
         return { allowed: false, reason: '超过单笔交易限制' }
       }
     }
 
     // 检查允许交易的标的
-    if (config!.allowedSymbols && config!.allowedSymbols.length > 0) {
-      if (!config!.allowedSymbols.includes(trade.symbol)) {
+    if (config.allowedSymbols && config.allowedSymbols.length > 0) {
+      if (!config.allowedSymbols.includes(trade.symbol)) {
         return { allowed: false, reason: '该标的不在允许交易列表中' }
       }
     }
 
     // 检查禁止交易的标的
-    if (config!.blockedSymbols && config!.blockedSymbols.length > 0) {
-      if (config!.blockedSymbols.includes(trade.symbol)) {
+    if (config.blockedSymbols && config.blockedSymbols.length > 0) {
+      if (config.blockedSymbols.includes(trade.symbol)) {
         return { allowed: false, reason: '该标的在禁止交易列表中' }
       }
     }
 
     // 检查当日亏损限制
-    if (config!.maxDailyLoss > 0) {
+    if (config.maxDailyLoss > 0) {
       const todayLoss = this.calculateGroupTodayLoss(groupId)
-      if (todayLoss < -config!.maxDailyLoss) {
+      if (todayLoss < -config.maxDailyLoss) {
         return { allowed: false, reason: '超过当日亏损限制' }
       }
     }

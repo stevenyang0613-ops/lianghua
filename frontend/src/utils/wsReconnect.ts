@@ -128,6 +128,8 @@ export class WSReconnect {
   }
 
   private async connectViaIPC(): Promise<void> {
+    const api = window.electronAPI
+    if (!api) throw new Error('[WS] electronAPI not available')
     try {
       // 清理上一次连接的监听器，避免重连时重复注册
       this.ipcCleanup?.()
@@ -138,7 +140,7 @@ export class WSReconnect {
       const connectSeq = ++this._connectSeq
 
       // 注册 IPC 事件监听（必须在 wsConnect 之前注册，避免错过 ws-state 事件）
-      const unsubState = window.electronAPI!.onWsState((id: string, state: string, code?: number, reason?: string) => {
+      const unsubState = api.onWsState((id: string, state: string, code?: number, reason?: string) => {
         if (id !== this.wsId) return
         if (state === WsIpcState.CONNECTED) {
           // 只有当前连接序号匹配时才处理
@@ -156,7 +158,7 @@ export class WSReconnect {
         }
       })
 
-      const unsubMsg = window.electronAPI!.onWsMessage((id: string, data: string, isBinary: boolean) => {
+      const unsubMsg = api.onWsMessage((id: string, data: string, isBinary: boolean) => {
         if (id !== this.wsId) return
         if (isBinary) {
           // Base64 解码为 ArrayBuffer
@@ -174,7 +176,7 @@ export class WSReconnect {
         unsubMsg()
       }
 
-      const result = await window.electronAPI!.wsConnect(this.wsId, this.url)
+      const result = await api.wsConnect(this.wsId, this.url)
       if (!result.ok) {
         this._addLog('error', `IPC连接失败: ${result.error}`)
         this.handleConnectionFailure()

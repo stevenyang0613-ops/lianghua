@@ -847,7 +847,7 @@ def _fill_pe_pb_from_yfinance(codes: list[str], pe_map: dict, pb_map: dict):
 
         logger.info(f"[DataEnrich][yfinance] Phase 1 filled {filled} stocks, total PE={len(pe_map)}, PB={len(pb_map)}")
 
-        # ── Phase 2: 批量失败的股票逐只 fallback (max 50) ──
+        # ── Phase 2: 批量失败的股票逐只 fallback (use .info instead of .fast_info for different API path) ──
         if single_fallback_codes:
             phase2_codes = single_fallback_codes[:50]
             logger.info(f"[DataEnrich][yfinance] Phase 2: single fallback for {len(phase2_codes)} stocks")
@@ -860,14 +860,14 @@ def _fill_pe_pb_from_yfinance(codes: list[str], pe_map: dict, pb_map: dict):
                 else:
                     ticker = f"{code}.SZ"
                 try:
-                    info = yf.Ticker(ticker).fast_info
-                    if info is not None:
+                    info = yf.Ticker(ticker).info  # .info instead of .fast_info for different API endpoint
+                    if info is not None and isinstance(info, dict):
                         if code not in pe_map:
-                            pe = getattr(info, 'trailing_pe', None) or getattr(info, 'forward_pe', None)
+                            pe = info.get('trailingPe', None) or info.get('forwardPe', None)
                             if pe and 0 < pe < 10000:
                                 pe_map[code] = round(float(pe), 2)
                         if code not in pb_map:
-                            pb = getattr(info, 'price_to_book', None)
+                            pb = info.get('priceToBook', None)
                             if pb and 0 < pb < 10000:
                                 pb_map[code] = round(float(pb), 2)
                         if code in pe_map or code in pb_map:
@@ -1571,7 +1571,11 @@ def _refresh_mgmt_cache():
         # 注意: EM 返回列名为 "代码" 而非 "证券代码"
         # 只保留增持/买入方向，排除减持/卖出（否则减持高价会误导选股）
         try:
-            df_em_detail = ak.stock_hold_management_detail_em()
+            df_em_detail = _run_with_timeout(
+                ak.stock_hold_management_detail_em,
+                timeout=180.0, default=None,
+                op_name="mgmt_em_detail",
+            )
             count_before = len(result)
             for _, r in df_em_detail.iterrows():
                 code = str(r.get("代码", "")).strip()
@@ -1598,10 +1602,10 @@ def _refresh_mgmt_cache():
             try:
                 df_ggcg = _run_with_timeout(
                     lambda: ak.stock_ggcg_em(symbol="全部"),
-                    timeout=60.0, default=None, op_name="mgmt_ggcg_em"
+                    timeout=180.0, default=None, op_name="mgmt_ggcg_em"
                 )
                 if df_ggcg is None:
-                    raise TimeoutError("stock_ggcg_em timed out (60s)")
+                    raise TimeoutError("stock_ggcg_em timed out (180s)")
                 count_before = len(result)
                 for _, r in df_ggcg.iterrows():
                     code = str(r.get("代码", "")).strip()
@@ -1624,7 +1628,10 @@ def _refresh_mgmt_cache():
         # Source 3 (opt-in): cninfo - 非 macOS 环境自动启用，macOS sandbox 需设 LH_MGMT_TRY_CNINFO=1
         if sys.platform != 'darwin' or os.environ.get("LH_MGMT_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
             try:
-                df_cninfo = ak.stock_hold_management_detail_cninfo(symbol="增持")
+                df_cninfo = _run_with_timeout(
+                    lambda: ak.stock_hold_management_detail_cninfo(symbol="增持"),
+                    timeout=120.0, default=None, op_name="mgmt_cninfo",
+                )
                 count_before = len(result)
                 for _, r in df_cninfo.iterrows():
                     code = str(r.get("证券代码", "")).strip()
@@ -4081,7 +4088,7 @@ def _refresh_earnings_express_cache():
                     continue
                 for _, r in df.iterrows():
                     code = str(r.get("股票代码", "")).strip()
-                    if not code or len(code) != 6:
+                    if not code or len(code) != 6 or not code.isdigit():
                         continue
                     eps = _sf(r.get("每股收益"))
                     revenue = _sf(r.get("营业收入-营业收入"))
@@ -4184,7 +4191,7 @@ def _refresh_north_cache():
         # 个股北向持仓：对可转债正股逐股查询（单股接口稳定）
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
-        bond_codes = sorted(_bond_stock_codes)[:250] if _bond_stock_codes else []
+        bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
         all_codes = bond_codes[:]
         if not all_codes:
             logger.debug("[DataEnrich] North: _bond_stock_codes empty, fetching all A-share codes")
@@ -4204,11 +4211,10 @@ def _refresh_north_cache():
                     ak.stock_hsgt_individual_em, code,
                     timeout=_TIMEOUT_FAST, default=None,
                     op_name=f"north_{code}",
-                    quiet_errors=True,  # East Money 单股北向接口经常对部分股票返回 NoneType
                 )
                 if df is None or len(df) == 0:
                     return None
-                last = df.iloc[0]
+                last = df.iloc[-1]
                 market_val = _sf(last.get("持股市值"))
                 net_buy = _sf(last.get("今日增持资金"))
                 if market_val is None and net_buy is None:
@@ -4346,7 +4352,7 @@ def _refresh_lhb_cache():
         result = {}
         for _, r in df.iterrows():
             code = str(r.get("代码", "")).strip()
-            if not code or len(code) != 6:
+            if not code or len(code) != 6 or not code.isdigit():
                 continue
             count = _sf(r.get("上榜次数"))
             new_count = int(count) if count else 0
@@ -4363,6 +4369,8 @@ def _refresh_lhb_cache():
             }
         if result:
             # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
+            if not _bond_stock_codes:
+                _ensure_bond_stock_codes()
             for code in _bond_stock_codes:
                 if code not in result:
                     result[code] = {
@@ -4417,6 +4425,8 @@ def _refresh_block_trade_cache():
             if amount and amount > 0:
                 result[code] = {"block_trade_amount": amount}
         # Zero-fill: 无大宗交易的股票显式写入 0，区分"无交易"与"数据缺失"
+        if not _bond_stock_codes:
+            _ensure_bond_stock_codes()
         for code in _bond_stock_codes:
             if code not in result:
                 result[code] = {"block_trade_amount": 0}
@@ -4446,11 +4456,15 @@ def _refresh_holder_num_cache():
             return 0
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
-        bond_codes = sorted(_bond_stock_codes)[:250] if _bond_stock_codes else []
+        bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
         all_codes = bond_codes[:]
         if len(all_codes) < 1000:
             try:
-                df_all = ak.stock_info_a_code_name()
+                df_all = _run_with_timeout(
+                    ak.stock_info_a_code_name,
+                    timeout=30.0, default=None,
+                    op_name="holder_stock_info_a_code_name",
+                )
                 if df_all is not None and not df_all.empty:
                     a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
                     seen = set(all_codes)
@@ -4486,7 +4500,7 @@ def _refresh_holder_num_cache():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(_fetch_one, c): c for c in all_codes}
             processed = 0
-            for fut in concurrent.futures.as_completed(futures, timeout=120):
+            for fut in concurrent.futures.as_completed(futures, timeout=300):
                 r = fut.result()
                 if r:
                     code, holders = r
@@ -4529,6 +4543,7 @@ def _refresh_earnings_forecast_cache():
 
     接口需要传入财报发布日期（季度末），默认 20200331 已过时；
     这里自动计算当前季度末，若空数据则回退到上一季度。
+    修复：合并所有 candidate_dates 的数据，而不是只取第一个有数据的 period。
     """
     try:
         import calendar
@@ -4543,36 +4558,40 @@ def _refresh_earnings_forecast_cache():
             day = calendar.monthrange(year, month)[1]
             candidate_dates.append(f"{year}{month:02d}{day:02d}")
 
-        df = None
-        used_date = None
-        for date_str in candidate_dates:
-            df = _run_with_timeout(
-                ak.stock_yjyg_em, date_str,
-                timeout=_TIMEOUT_MEDIUM, default=None, op_name=f"yjyg_em_{date_str}",
-            )
-            if df is not None and len(df) > 0:
-                used_date = date_str
-                break
-
-        if df is None or len(df) == 0:
-            logger.warning("[DataEnrich] EarningsForecast: empty result")
-            return 0
-
         result = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
-            if not code or len(code) != 6:
+        for date_str in candidate_dates:
+            try:
+                df = _run_with_timeout(
+                    ak.stock_yjyg_em, date_str,
+                    timeout=_TIMEOUT_MEDIUM, default=None, op_name=f"yjyg_em_{date_str}",
+                )
+                if df is None or len(df) == 0:
+                    continue
+                count = 0
+                for _, r in df.iterrows():
+                    code = str(r.get("股票代码", "")).strip()
+                    if not code or len(code) != 6:
+                        continue
+                    if code in result:
+                        continue
+                    change_pct = _sf(r.get("业绩变动幅度"))
+                    if change_pct is not None:
+                        result[code] = {
+                            "yoy_change_pct": change_pct,
+                            "_date": date_str,
+                        }
+                        count += 1
+                logger.info(f"[DataEnrich] EarningsForecast: {date_str}={count} entries, total={len(result)}")
+                if len(result) >= 1000:
+                    break
+            except Exception as e:
+                logger.debug(f"[DataEnrich] EarningsForecast: {date_str} failed: {e}")
                 continue
-            change_pct = _sf(r.get("业绩变动幅度"))
-            if change_pct is not None:
-                result[code] = {
-                    "yoy_change_pct": change_pct,
-                    "_date": used_date,
-                }
+
         if result:
             _set_global_map("_earnings_forecast_map", result)
             _save_cache(_EARNINGS_FORECAST_CACHE, result)
-            logger.info(f"[DataEnrich] EarningsForecast: {len(result)} stocks refreshed (date={used_date})")
+            logger.info(f"[DataEnrich] EarningsForecast: {len(result)} stocks refreshed")
             return len(result)
         return 0
     except Exception as e:

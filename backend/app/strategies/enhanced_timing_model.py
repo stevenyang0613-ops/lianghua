@@ -240,7 +240,7 @@ class EnhancedMarketData:
     earnings_surprise_ratio: float = float('nan')          # 盈利超预期比例
 
     # === 资金/流向专用字段 ===
-    industry_net_inflow_ratio: float = 50.0  # 行业净流入占比评分 0-100
+    industry_net_inflow_ratio: float = float('nan')  # 行业净流入占比评分 0-100
     
     # === 元数据 ===
     data_completeness: float = 0.0       # 数据完整度 0-1（默认0，需计算后才设置）
@@ -901,7 +901,7 @@ class EnhancedTimingModel:
         
         # 4.2 主力资金净流入
         main_flow = data.main_force_net_flow
-        main_available = main_flow != 0.0
+        main_available = not math.isnan(main_flow) and main_flow != 0.0
         main_score = sigmoid_score(main_flow, 0, steepness=0.025) if main_available else 50.0
         main_signal = (
             "bullish" if main_flow > 50 else "bearish" if main_flow < -50 else "neutral"
@@ -920,7 +920,7 @@ class EnhancedTimingModel:
 
         # 4.3 北向资金净流入（聪明钱）
         north = data.north_bound_net_flow
-        north_available = north != 0.0
+        north_available = not math.isnan(north) and north != 0.0
         north_score = sigmoid_score(north, 0, steepness=0.03) if north_available else 50.0
         north_signal = (
             "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
@@ -975,7 +975,7 @@ class EnhancedTimingModel:
         
         # 4.6 行业资金流向（净流入行业占比）
         industry_flow = data.industry_net_inflow_ratio
-        ind_flow_available = industry_flow != 50.0
+        ind_flow_available = not math.isnan(industry_flow) and industry_flow != 50.0
         ind_flow_score = safe_score(industry_flow, lambda v: sigmoid_score(v, 50, steepness=0.06), treat_zero_as_missing=False) if ind_flow_available else 50.0
         ind_flow_signal = (
             "bullish" if industry_flow > 60 else "bearish" if industry_flow < 40 else "neutral"
@@ -2440,8 +2440,8 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'margin_buy_ratio', 0)
         if val > 0:
             data.margin_buy_ratio = val
-        val = getattr(macro_data, 'industry_net_inflow', 0)
-        if val > 0:
+        val = getattr(macro_data, 'industry_net_inflow', float('nan'))
+        if not math.isnan(val):
             data.industry_net_inflow_ratio = val
         # 宏观扩展
         val = getattr(macro_data, 'industrial_output', 0)

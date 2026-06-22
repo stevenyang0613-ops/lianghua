@@ -184,6 +184,7 @@ class TestExtendedCacheRefresh:
         for attr in (
             "_north_map", "_margin_map", "_lhb_map", "_block_trade_map",
             "_holder_num_map", "_earnings_forecast_map", "_restricted_release_map",
+            "_mgmt_map",
         ):
             target = getattr(de, attr, None)
             if isinstance(target, dict):
@@ -299,6 +300,7 @@ class TestDataSourceApiCalls:
         for attr in (
             "_north_map", "_margin_map", "_block_trade_map",
             "_earnings_forecast_map", "_restricted_release_map",
+            "_mgmt_map",
         ):
             target = getattr(de, attr, None)
             if isinstance(target, dict):

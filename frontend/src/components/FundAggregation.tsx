@@ -158,13 +158,13 @@ export default function FundAggregation({ onTransfer }: Props) {
           sourceAccounts: idleAccounts.map(s => s.account.id).filter(id => id !== targetAccount.id),
           targetAccounts: [targetAccount.id],
           transfers: idleAccounts
-            .filter(s => s.account.id !== targetAccount.id && s.balance)
+            .filter((s): s is typeof s & { balance: NonNullable<typeof s.balance> } => s.account.id !== targetAccount.id && !!s.balance)
             .map(s => ({
               fromAccountId: s.account.id,
               fromAccountName: s.account.name,
               toAccountId: targetAccount.id,
               toAccountName: targetAccount.name,
-              amount: s.balance!.availableCash * 0.5,  // 转出一半闲置资金
+              amount: s.balance.availableCash * 0.5,  // 转出一半闲置资金
               reason: '闲置资金归集',
             })),
           totalAmount: idleAccounts.reduce((sum, s) =>
@@ -200,7 +200,7 @@ export default function FundAggregation({ onTransfer }: Props) {
               fromAccountName: risk.account.name,
               toAccountId: safe.account.id,
               toAccountName: safe.account.name,
-              amount: risk.balance!.availableCash * 0.3,
+              amount: (risk.balance as NonNullable<typeof risk.balance>).availableCash * 0.3,
               reason: '风险账户资金调出',
             }))
           ),
@@ -241,8 +241,8 @@ export default function FundAggregation({ onTransfer }: Props) {
             toAccountId: low.account.id,
             toAccountName: low.account.name,
             amount: Math.min(
-              high.balance!.availableCash - avgFunds,
-              avgFunds - low.balance!.availableCash
+              (high.balance as NonNullable<typeof high.balance>).availableCash - avgFunds,
+              avgFunds - (low.balance as NonNullable<typeof low.balance>).availableCash
             ),
             reason: '资金均衡化',
           }))

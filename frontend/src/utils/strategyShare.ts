@@ -75,9 +75,10 @@ function getBase(): string {
 }
 
 async function fetchJSON<T>(url: string): Promise<T> {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-  })
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('ws_auth_token')
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const resp = await fetch(url, { headers })
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
   }
@@ -85,9 +86,12 @@ async function fetchJSON<T>(url: string): Promise<T> {
 }
 
 async function postJSON<T>(url: string): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem('ws_auth_token')
+  if (token) headers['Authorization'] = `Bearer ${token}`
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
   })
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)

@@ -1163,7 +1163,8 @@ function startPythonBackend() {
       details: '请检查 Python 解释器路径与依赖',
     })
     // Fallback EADDRINUSE detection — primary detection is in stderr handler above
-    if ((err as any).code === 'EADDRINUSE') {
+    const errnoErr = err as NodeJS.ErrnoException
+    if (errnoErr.code === 'EADDRINUSE') {
       console.error(`[Electron] Port ${BACKEND_PORT} is already in use by another process (fallback detection)`)
       mainWindow?.webContents.send('backend-error', { code: 'EADDRINUSE', message: `Port ${BACKEND_PORT} is in use` })
     }

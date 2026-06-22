@@ -374,8 +374,8 @@ class MacroDataService:
     def _fetch_cpi_ppi(self) -> Tuple[float, float]:
         try:
             if ak is None:
-                return 2.0, 0.0
-            cpi = 2.0
+                return float('nan'), float('nan')
+            cpi = float('nan')
             try:
                 df = ak.macro_china_cpi_yearly()
                 if df is not None and not df.empty:
@@ -384,7 +384,7 @@ class MacroDataService:
                         cpi = round(float(df['今值'].iloc[-1]), 1)
             except Exception as e:
                 logger.warning(f"[MacroData] CPI fetch failed: {e}")
-            ppi = 0.0
+            ppi = float('nan')
             try:
                 df = ak.macro_china_ppi_yearly()
                 if df is not None and not df.empty:
@@ -396,40 +396,40 @@ class MacroDataService:
             return cpi, ppi
         except Exception as e:
             logger.warning(f"[MacroData] CPI/PPI fetch failed: {e}")
-            return 2.0, 0.0
+            return float('nan'), float('nan')
 
     def _fetch_m2_growth(self) -> float:
         try:
             if ak is None:
-                return 10.0
+                return float('nan')
             df = ak.macro_china_money_supply()
             if df is None or df.empty:
-                return 10.0
+                return float('nan')
             col = '货币和准货币(M2)-同比增长'
             if col in df.columns:
                 vals = df[col].dropna()
                 if len(vals) > 0:
                     return round(float(vals.iloc[0]), 1)  # 第一行为最新
-            return 10.0
+            return float('nan')
         except Exception as e:
             logger.warning(f"[MacroData] M2 fetch failed: {e}")
-            return 10.0
+            return float('nan')
 
     def _fetch_social_financing(self) -> float:
         try:
             if ak is None:
-                return 10.0
+                return float('nan')
             df = ak.macro_china_shrzgm()
             if df is None or df.empty:
-                return 10.0
+                return float('nan')
             col = '社会融资规模增量'
             if col not in df.columns:
-                return 10.0
+                return float('nan')
             df = df.copy()
             df[col] = pd.to_numeric(df[col], errors='coerce')
             df = df.dropna(subset=[col])
             if df.empty:
-                return 10.0
+                return float('nan')
             latest = df.iloc[-1]
             latest_month = str(latest['月份'])
             prev_month = str(int(latest_month) - 100)
@@ -440,23 +440,23 @@ class MacroDataService:
             return round(float(latest[col]), 1)
         except Exception as e:
             logger.warning(f"[MacroData] Social financing fetch failed: {e}")
-            return 10.0
+            return float('nan')
 
     def _fetch_gdp_growth(self) -> float:
         try:
             if ak is None:
-                return 5.0
+                return float('nan')
             df = ak.macro_china_gdp_yearly()
             if df is None or df.empty:
-                return 5.0
+                return float('nan')
             df = df.dropna(subset=['今值']).copy()
             if df.empty:
-                return 5.0
+                return float('nan')
             val = float(df['今值'].iloc[-1])
             return round(val, 1)
         except Exception as e:
             logger.warning(f"[MacroData] GDP fetch failed: {e}")
-            return 5.0
+            return float('nan')
 
     def _fetch_shibor(self) -> Tuple[float, float, float]:
         try:
@@ -609,54 +609,65 @@ class MacroDataService:
         """北向资金净流入（亿元）"""
         try:
             if ak is None:
-                return 0.0
+                return float('nan')
             df = ak.stock_hsgt_fund_flow_summary_em()
             if df is None or df.empty:
-                return 0.0
+                return float('nan')
             # 筛选北向资金（沪股通 + 深股通）
             north = df[df['资金方向'] == '北向']
             if north.empty:
-                return 0.0
+                return float('nan')
             # 优先使用成交净买额，若无效则使用资金净流入
             for col in ['成交净买额', '资金净流入']:
                 if col in north.columns:
                     vals = pd.to_numeric(north[col], errors='coerce').dropna()
                     if not vals.empty and vals.sum() != 0:
                         return round(float(vals.sum()), 2)
-            return 0.0
+            return float('nan')
         except Exception as e:
             logger.debug(f"[MacroData] North bound flow fetch failed: {e}")
-            return 0.0
+            return float('nan')
 
     def _fetch_main_force_flow(self) -> float:
         """主力资金净流入（亿元）。使用行业资金流向汇总"""
         try:
             if ak is None:
-                return 0.0
+                return float('nan')
             df = ak.stock_fund_flow_industry()
             if df is None or df.empty:
-                return 0.0
+                return float('nan')
             if '净额' not in df.columns:
-                return 0.0
+                return float('nan')
             net = pd.to_numeric(df['净额'], errors='coerce').dropna()
             if net.empty:
-                return 0.0
+                return float('nan')
             return round(float(net.sum()), 2)
         except Exception as e:
             logger.debug(f"[MacroData] Main force flow fetch failed: {e}")
-            return 0.0
+            return float('nan')
 
     def _fetch_industry_net_inflow(self) -> float:
         """行业净流入占比评分（0-100）。使用行业资金流向计算"""
         try:
             if ak is None:
-                return 50.0
+                return float('nan')
             df = ak.stock_fund_flow_industry()
             if df is None or df.empty or '净额' not in df.columns:
-                return 50.0
+                return float('nan')
             net = pd.to_numeric(df['净额'], errors='coerce').dropna()
             if net.empty:
-                return 50.0
+                return float('nan')
+            total = abs(net).sum()
+            if total == 0:
+                return 50.0  # 没有资金流动 → 中性
+            # 净流入占比评分：赢家行业占所有行业比例
+            positive_pct = (net > 0).sum() / max(len(net), 1)
+            # 按净额加权
+            weighted = net.clip(lower=0).sum() / total * 100
+            return round(weighted, 1)
+        except Exception as e:
+            logger.debug(f"[MacroData] Industry net inflow fetch failed: {e}")
+            return float('nan')
             positive = int((net > 0).sum())
             total = len(net)
             if total > 0:
@@ -670,20 +681,22 @@ class MacroDataService:
         """新增投资者开户数（万户）"""
         try:
             if ak is None:
-                return 0.0
+                return float('nan')
             df = ak.stock_account_statistics_em()
             if df is None or df.empty:
-                return 0.0
+                return float('nan')
             col = '新增投资者-数量'
             if col not in df.columns:
-                return 0.0
+                return float('nan')
             vals = pd.to_numeric(df[col], errors='coerce').dropna()
             if vals.empty:
-                return 0.0
+                return float('nan')
             return round(float(vals.iloc[0]), 2)  # 第一行为最新
         except Exception as e:
             logger.debug(f"[MacroData] New accounts fetch failed: {e}")
-            return 0.0
+            return float('nan')
+
+    def _fetch_margin_data(self) -> Tuple[float, float, float]:
         try:
             if ak is None:
                 return 0.0, 0.0, 0.0
@@ -737,16 +750,6 @@ class MacroDataService:
         except Exception as e:
             logger.warning(f"[MacroData] Margin data fetch failed: {e}")
             return 0.0, 0.0, 0.0
-
-    def _fetch_main_force_flow(self) -> float:
-        """主力资金净流入。当前东方财富相关接口已失效，返回 0（中性）"""
-        logger.debug("[MacroData] Main force flow data source unavailable, returning neutral 0")
-        return 0.0
-
-    def _fetch_industry_net_inflow(self) -> float:
-        """行业资金流向。当前东方财富相关接口已失效，返回 50（中性占比）"""
-        logger.debug("[MacroData] Industry flow data source unavailable, returning neutral 50")
-        return 50.0
 
     def _fetch_pe_pb(self) -> Tuple[float, float, float, float]:
         try:
@@ -977,11 +980,6 @@ class MacroDataService:
         except Exception as e:
             logger.warning(f"[MacroData] VIX calc failed: {e}")
             return 0.0
-
-    def _fetch_new_accounts(self) -> float:
-        """新增开户数。当前数据源陈旧，返回 0（中性）"""
-        logger.debug("[MacroData] New accounts data source unavailable, returning neutral 0")
-        return 0.0
 
     def _compute_technical_indicators(self, data: MacroData) -> None:
         """从指数日线数据自动计算技术指标"""

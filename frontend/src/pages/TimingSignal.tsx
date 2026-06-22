@@ -434,7 +434,8 @@ const getScoreColor = (score: number) => {
 	          {factors.map((factor: TimingFactor, idx: number) => {
 	            const icon = factor.icon || '';
 	            const catColor = getCategoryColor(icon);
-	            const hasSub = factor.subFactors && factor.subFactors.length > 0;
+	            const subFactors = factor.subFactors;
+	            const hasSub = subFactors != null && subFactors.length > 0;
 	            const factorScoreVal = factor.score ?? 0;
 	            const factorMaxVal = factor.maxScore || 1;
 	            const factorPct = factor.score != null ? (factorScoreVal / factorMaxVal) * 100 : 0;
@@ -467,7 +468,7 @@ const getScoreColor = (score: number) => {
 	                    </Col>
 	                    <Col span={3}>
 	                      {hasSub && (
-	                        <Tag style={{ fontSize: 11 }}>{factor.subFactors!.length}个子因子</Tag>
+	                        <Tag style={{ fontSize: 11 }}>{subFactors.length}个子因子</Tag>
 	                      )}
 	                    </Col>
 	                  </Row>
@@ -477,7 +478,7 @@ const getScoreColor = (score: number) => {
                   <p style={{ color: '#666', marginBottom: 12 }}>{factor.description}</p>
                   {hasSub && (
 	                    <Table
-	                      dataSource={factor.subFactors!.map((sf, i) => ({ ...sf, key: i }))}
+	                      dataSource={subFactors.map((sf, i) => ({ ...sf, key: i }))}
 	                      columns={[
 	                        { title: '子因子', dataIndex: 'name', key: 'name', width: 160 },
 	                        {

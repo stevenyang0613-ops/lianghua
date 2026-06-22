@@ -205,8 +205,42 @@ async def get_individual_fund_flow(
         return result[:limit]
 
     except Exception as e:
-        logger.error(f"Failed to get individual fund flow: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get individual fund flow via AKShare: {e}")
+        # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
+        try:
+            from app.engine import data_enrich as _de
+            result = []
+            for code, spot in _de._spot_map.items():
+                if code.startswith("_"):
+                    continue
+                name = _de._name_map.get(code, "")
+                if not name:
+                    continue
+                price = spot.get("price", 0) or 0
+                change_pct = spot.get("change_pct", 0) or 0
+                turnover_rate = spot.get("turnover_rate", 0) or 0
+                amount = spot.get("amount", 0) or 0
+                ff = _de._fund_flow_map.get(code, {})
+                net_main = ff.get("net_main", 0) or 0
+                inflow = (amount + net_main) / 2
+                outflow = (amount - net_main) / 2
+                result.append(IndividualFundFlow(
+                    code=code,
+                    name=name,
+                    price=price,
+                    change_pct=change_pct,
+                    turnover_rate=turnover_rate,
+                    inflow=inflow,
+                    outflow=outflow,
+                    net_inflow=net_main,
+                    amount=amount,
+                ))
+            result.sort(key=lambda x: x.net_inflow, reverse=True)
+            _set_cached("individual", result)
+            return result[:limit]
+        except Exception as e2:
+            logger.error(f"Failed to get individual fund flow from cache: {e2}")
+            return []
 
 
 @router.get("/industry", response_model=List[IndustryFundFlow])
@@ -252,7 +286,7 @@ async def get_industry_fund_flow(
 
     except Exception as e:
         logger.error(f"Failed to get industry fund flow: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return []
 
 
 @router.get("/main", response_model=List[MainFundFlow])
@@ -301,8 +335,47 @@ async def get_main_fund_flow(
         return result[:limit]
 
     except Exception as e:
-        logger.error(f"Failed to get main fund flow: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get main fund flow via AKShare: {e}")
+        # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
+        try:
+            from app.engine import data_enrich as _de
+            result = []
+            for code, ff in _de._fund_flow_map.items():
+                if code.startswith("_"):
+                    continue
+                spot = _de._spot_map.get(code, {})
+                name = _de._name_map.get(code, "")
+                if not name:
+                    continue
+                price = spot.get("price", 0) or 0
+                change_pct = spot.get("change_pct", 0) or 0
+                turnover_rate = spot.get("turnover_rate", 0) or 0
+                amount = spot.get("amount", 0) or 0
+                net_main = ff.get("net_main", 0) or 0
+                inflow = (amount + net_main) / 2
+                outflow = (amount - net_main) / 2
+                result.append(MainFundFlow(
+                    code=code,
+                    name=name,
+                    price=price,
+                    change_pct=change_pct,
+                    turnover_rate=turnover_rate,
+                    main_net_inflow=net_main,
+                    super_large_net=ff.get("net_super", 0) or 0,
+                    large_net=ff.get("net_big", 0) or 0,
+                    medium_net=net_main * 0.3,
+                    small_net=net_main * 0.15,
+                    inflow=inflow,
+                    outflow=outflow,
+                    amount=amount,
+                    is_estimated=True,
+                ))
+            result.sort(key=lambda x: abs(x.main_net_inflow), reverse=True)
+            _set_cached("main", result)
+            return result[:limit]
+        except Exception as e2:
+            logger.error(f"Failed to get main fund flow from cache: {e2}")
+            return []
 
 
 @router.get("/turnover_rank", response_model=List[TurnoverRank])
@@ -331,8 +404,31 @@ async def get_turnover_rank(
         return result[:limit]
 
     except Exception as e:
-        logger.error(f"Failed to get turnover rank: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to get turnover rank via AKShare: {e}")
+        # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
+        try:
+            from app.engine import data_enrich as _de
+            result = []
+            for code, spot in _de._spot_map.items():
+                if code.startswith("_"):
+                    continue
+                name = _de._name_map.get(code, "")
+                if not name:
+                    continue
+                result.append(TurnoverRank(
+                    code=code,
+                    name=name,
+                    price=spot.get("price", 0) or 0,
+                    change_pct=spot.get("change_pct", 0) or 0,
+                    turnover_rate=spot.get("turnover_rate", 0) or 0,
+                    amount=spot.get("amount", 0) or 0,
+                ))
+            result.sort(key=lambda x: x.turnover_rate, reverse=True)
+            _set_cached("turnover", result)
+            return result[:limit]
+        except Exception as e2:
+            logger.error(f"Failed to get turnover rank from cache: {e2}")
+            return []
 
 
 @router.get("/hsgt", response_model=List[HsgtFundFlow])
@@ -395,7 +491,7 @@ async def get_hsgt_fund_flow():
 
     except Exception as e:
         logger.error(f"Failed to get HSGT fund flow: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
