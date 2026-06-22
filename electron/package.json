@@ -1,7 +1,7 @@
 {
   "name": "lianghua-electron",
   "version": "1.0.0",
-  "description": "LiangHua - \u53ef\u8f6c\u503a\u5238\u91cf\u5316\u5206\u6790\u7ec8\u7aef",
+  "description": "LiangHua - 可转债券量化分析终端",
   "author": "LiangHua <dev@lianghua.app>",
   "private": true,
   "main": "dist/main.js",
@@ -35,7 +35,8 @@
       "dist/preload.js",
       "dist/splash-preload.js",
       "package.json",
-      "node_modules/**"
+      "node_modules/**",
+      "resources/**"
     ],
     "extraResources": [
       {
@@ -51,13 +52,15 @@
         "from": "../backend",
         "to": "backend",
         "filter": [
-            "app/**/*.py",
-            "run_app.py",
-            "!.venv/**",
-            "!dist/**",
-            "!**/__pycache__/**",
-            "!**/*.pyc",
-            "!.git/**",
+          "app/**/*.py",
+          "run_app.py",
+          "!.venv/**",
+          "dist/lianghua-backend/**",
+          "!dist/build/**",
+          "!dist/**/*.pyc",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!.git/**",
           "!data/**",
           "!build/**",
           "!wheels/**",
@@ -88,13 +91,22 @@
         {
           "target": "zip",
           "arch": [
-            "arm64"
+            "arm64",
+            "x64"
           ]
         },
         {
           "target": "dir",
           "arch": [
-            "arm64"
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
           ]
         }
       ],
@@ -118,7 +130,6 @@
     }
   },
   "devDependencies": {
-    "@types/electron": "^1.4.38",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",

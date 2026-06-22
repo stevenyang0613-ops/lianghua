@@ -95,7 +95,7 @@ describe('Market page', () => {
     // 等待 fetchAllQuotes 完成后,loading 变为 false,virtual table 渲染
     const priceHeader = await findByTestId('vt-sort-price', undefined, { timeout: 3000 })
     expect(priceHeader).toBeTruthy()
-    // 强赎状态列不应可排序
-    expect(container.querySelector('[data-testid="vt-sort-call_status"]')).toBeNull()
+    // 强赎状态列也应可排序（用于按状态分组查看）
+    expect(container.querySelector('[data-testid="vt-sort-call_status"]')).toBeTruthy()
   })
 })

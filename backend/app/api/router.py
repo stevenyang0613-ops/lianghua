@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 from app.api.market import router as market_router
 from app.api.ws import router as ws_router
@@ -51,6 +55,27 @@ router.include_router(paper_trade_router, prefix="/paper-trade", tags=["paper-tr
 router.include_router(metrics_router, prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(verify_token)])
 router.include_router(strategies_router, prefix="/strategies-share", tags=["strategies-share"], dependencies=[Depends(verify_token)])
 
+# 兼容端点：用户管理（前端 community.ts 调用 /user/*）
+@router.get("/user/profile", dependencies=[Depends(verify_token)])
+async def _user_profile():
+    return {"username": "desktop", "email": "", "hint": "user profile stub"}
+
+@router.put("/user/profile", dependencies=[Depends(verify_token)])
+async def _update_user_profile():
+    return {"status": "ok", "hint": "user profile update stub"}
+
+@router.put("/user/password", dependencies=[Depends(verify_token)])
+async def _change_user_password():
+    return {"status": "ok", "hint": "password change stub"}
+
+@router.get("/user/subscriptions", dependencies=[Depends(verify_token)])
+async def _user_subscriptions():
+    return {"subscriptions": [], "hint": "user subscriptions stub"}
+
+@router.get("/user/strategies", dependencies=[Depends(verify_token)])
+async def _user_strategies():
+    return {"strategies": [], "hint": "user strategies stub"}
+
 
 # 兼容旧路径的索引端点(测试与外部消费者期望的 /api/v1/<resource> 入口)
 @router.get("/backtest/plans", dependencies=[Depends(verify_token)])
@@ -96,13 +121,17 @@ async def api_health_check(request: Request):
 @router.get("/data-enrich/metrics", dependencies=[Depends(verify_token)])
 async def data_enrich_metrics():
     """返回所有缓存刷新的执行指标：耗时、覆盖率、bond_stock 覆盖率等"""
-    from app.engine.data_enrich import get_refresh_metrics, get_cache_refresh_ts
-    metrics = get_refresh_metrics()
-    refresh_ts = get_cache_refresh_ts()
-    return {
-        "metrics": metrics,
-        "refresh_ts": refresh_ts,
-    }
+    try:
+        from app.engine.data_enrich import get_refresh_metrics, get_cache_refresh_ts
+        metrics = get_refresh_metrics()
+        refresh_ts = get_cache_refresh_ts()
+        return {
+            "metrics": metrics,
+            "refresh_ts": refresh_ts,
+        }
+    except Exception as e:
+        logger.error(f"[DataEnrich] Metrics endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="数据增强指标获取失败")
 
 
 @router.get("/data-enrich/self-check", dependencies=[Depends(verify_token)])
@@ -115,7 +144,7 @@ async def data_enrich_self_check():
     - 内存缓存行数
     """
     from app.engine.data_enrich import (
-        _compute_field_coverage, cache_status,
+        _compute_field_coverage,
         _NORTH_CACHE, _MARGIN_CACHE, _LHB_CACHE, _BLOCK_TRADE_CACHE,
         _HOLDER_NUM_CACHE, _EARNINGS_FORECAST_CACHE, _EARNINGS_EXPRESS_CACHE,
         _RESTRICTED_RELEASE_CACHE, _FIN_CACHE, _SPOT_CACHE,
@@ -127,6 +156,16 @@ async def data_enrich_self_check():
 
     coverage = _compute_field_coverage()
     bond_count = len(_last_enriched_bonds) if _last_enriched_bonds else 0
+
+    # 辅助函数：检查缓存文件新鲜度
+    import os
+    def _cache_status(path: str, ttl: int = 0) -> str:
+        if not os.path.exists(path):
+            return "missing"
+        if ttl <= 0:
+            return "unknown"
+        age = time.time() - os.path.getmtime(path)
+        return "fresh" if age < ttl else "stale"
 
     # 缓存状态摘要
     cache_paths = {
@@ -144,7 +183,7 @@ async def data_enrich_self_check():
 
     caches = {}
     for name, (path, ttl, mem_size) in cache_paths.items():
-        status = cache_status(path, ttl=ttl) if ttl else "unknown"
+        status = _cache_status(path, ttl=ttl) if ttl else "unknown"
         caches[name] = {
             "status": status,
             "memory_entries": mem_size,

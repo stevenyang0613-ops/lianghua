@@ -335,9 +335,9 @@ export class AlertManager {
       details: event.details,
     }
     if (window.electronAPI?.httpRequest) {
-      await window.electronAPI.httpRequest('POST', '/api/alerts/email', emailPayload)
+      await window.electronAPI.httpRequest('POST', '/api/v1/alerts/email', emailPayload)
     } else {
-      await fetch('/api/alerts/email', {
+      await fetch('/api/v1/alerts/email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emailPayload),
@@ -414,12 +414,12 @@ export class AlertManager {
     if (!recipients || recipients.length === 0) return
 
     if (window.electronAPI?.httpRequest) {
-      await window.electronAPI.httpRequest('POST', '/api/alerts/sms', {
+      await window.electronAPI.httpRequest('POST', '/api/v1/alerts/sms', {
         phones: recipients,
         message: `[${event.level.toUpperCase()}] ${event.ruleName}: ${event.message}`,
       })
     } else {
-      await fetch('/api/alerts/sms', {
+      await fetch('/api/v1/alerts/sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

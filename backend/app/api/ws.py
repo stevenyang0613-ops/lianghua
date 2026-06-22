@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import hmac
 import json
 import logging
 import os
@@ -111,7 +112,10 @@ async def _stats_persistence_loop():
     """每60秒保存一次统计到文件"""
     while True:
         await asyncio.sleep(60)
-        _save_stats()
+        try:
+            _save_stats()
+        except Exception as e:
+            logger.error(f"[WS] Stats persistence failed: {e}")
 
 # 在模块加载时启动持久化任务（由 lifespan 中的 event loop 调度）
 _stats_task: asyncio.Task | None = None
@@ -145,7 +149,7 @@ async def verify_ws_auth(websocket: WebSocket) -> bool:
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
         await websocket.close(code=4001, reason="Unauthorized: empty token")
         return False
-    if token != settings.ws_auth_token:
+    if not hmac.compare_digest(token, settings.ws_auth_token):
         logger.warning("[WS] Auth rejected: token mismatch from %s (got %s...)", websocket.client.host if websocket.client else "unknown", token[:8])
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
         await websocket.close(code=4001, reason="Unauthorized: invalid token")

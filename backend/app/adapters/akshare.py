@@ -467,7 +467,6 @@ class AKShareAdapter(DataSourceAdapter):
         return code.startswith('132') or code.startswith('133')
 
     @staticmethod
-    @staticmethod
     def _parse_iso_date(value):
         """解析 JSL/THS 的日期字段为 date；空值/无效值返回 None"""
         if value is None:

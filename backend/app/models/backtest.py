@@ -130,7 +130,7 @@ class OptimizationResult(BaseModel):
             reverse=True,
         )[:n]
 
-    def plot_results(self, param_x: str, param_y: str, metric_color: str = 'sharpe_ratio', save_path: str | None = None) -> str | None:
+    def plot_results(self, param_x: str, param_y: str, metric_color: str = 'sharpe_ratio', save_path: Optional[str] = None) -> Optional[str]:
         """改进 (2025-06-15k): 参数空间可视化热力图/散点图
 
         Args:

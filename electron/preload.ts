@@ -42,15 +42,16 @@ export interface ElectronAPI {
 
   // Backend
   restartBackend: () => Promise<void>
-  onBackendReady: (callback: () => void) => () => void
+  onBackendReady: (callback: (data?: any) => void) => () => void
 
   // Frontend reload (used by did-fail-load error page retry button)
   retryFrontendLoad: () => Promise<boolean>
 
   // HTTP proxy for API requests (bypasses CORS/webSecurity)
-  httpGet: (url: string) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
-  httpPost: (url: string, body: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
-  httpRequest: (method: string, url: string, body?: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
+  // Optional: may not be available in browser dev mode or test environments
+  httpGet?: (url: string) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
+  httpPost?: (url: string, body: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
+  httpRequest?: (method: string, url: string, body?: any) => Promise<{ ok: boolean; status: number; data: any; error?: string }>
 
   // Performance monitoring
   getPerformanceMetrics: () => Promise<{
@@ -131,7 +132,7 @@ export interface CrashReport {
 let listenerCounter = 0
 const listeners: Map<string, (...args: any[]) => void> = new Map()
 
-contextBridge.exposeInMainWorld('electronAPI', {
+const api: ElectronAPI = {
   isElectron: true,
   platform: process.platform,
   versions: {
@@ -166,9 +167,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   retryFrontendLoad: () => ipcRenderer.invoke('retry-frontend-load'),
 
   // Backend ready event
-  onBackendReady: (callback: () => void) => {
+  onBackendReady: (callback: (data?: any) => void) => {
     const key = `backend-ready-${listenerCounter++}`
-    const listener = () => callback()
+    const listener = (_event: IpcRendererEvent, data?: any) => callback(data)
     ipcRenderer.on('backend-ready', listener)
     listeners.set(key, listener)
     return () => {
@@ -312,4 +313,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Prefetched data from main process
   getPrefetchedMarketData: () => ipcRenderer.invoke('get-prefetched-market-data'),
-})
+}
+
+contextBridge.exposeInMainWorld('electronAPI', api)
+
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI
+  }
+}

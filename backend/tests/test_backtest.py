@@ -307,7 +307,7 @@ class TestDayDataOptimization:
         (LowPremiumStrategy, {"hold_count": 3, "rebalance_days": 10, "min_price": 90}),
         (MomentumStrategy, {"hold_count": 3, "rebalance_days": 10, "momentum_window": 5, "max_premium": 60}),
         (MultiFactorStrategy, {"hold_count": 3, "rebalance_days": 10, "max_premium": 60}),
-        (XibuSevenDimensionStrategy, {"hold_count": 3, "rebalance_days": 10, "max_premium": 60}),
+        (XibuSevenDimensionStrategy, {"hold_count": 15, "rebalance_days": 10, "max_premium": 60}),
     ])
     def test_on_data_with_day_data_produces_valid_signals(self, strategy_cls, params):
         """验证每个策略在接收 day_data 时生成的信号结构正确"""

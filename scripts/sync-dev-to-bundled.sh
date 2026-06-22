@@ -114,6 +114,19 @@ fi
 echo "🧹 清理 __pycache__/..."
 find "$BUNDLED_APP" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
+# 同步前端构建文件到 bundled .app（桌面 app 的 GUI 资源）
+echo "📦 同步前端构建到桌面 app..."
+BUNDLED_FRONTEND="${BUNDLED_APP%/*}/frontend"  # backend/ → frontend/
+if [ -d "$PROJECT_ROOT/frontend/dist" ]; then
+    # 确保目标目录存在
+    mkdir -p "$BUNDLED_FRONTEND"
+    # 删除旧文件并复制新构建（注意：保留 index.html 等文件）
+    cp -R "$PROJECT_ROOT/frontend/dist/." "$BUNDLED_FRONTEND/"
+    echo "   -> $BUNDLED_FRONTEND/ ✅"
+else
+    echo "   ⚠️ frontend/dist/ 不存在，跳过前端同步（运行 npm run build）"
+fi
+
 # 检测 bundled 中的 Python 后端进程并提示重启
 PYTHON_PID=$(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null | head -1 || true)
 if [ -n "$PYTHON_PID" ]; then

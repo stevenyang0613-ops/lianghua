@@ -160,106 +160,122 @@ class MacroDataService:
             self._cache_time = datetime.now()
             return data
         except Exception as e:
-            logger.error(f"[MacroData] Fetch failed: {e}")
+            err_msg = str(e) or f"{type(e).__name__}"
+            logger.error(f"[MacroData] Fetch failed: {err_msg}")
             return self._cache or MacroData()
 
     def _fetch_all(self, bonds=None) -> MacroData:
-        """同步获取所有宏观数据"""
+        """同步获取所有宏观数据（独立网络请求并行化，减少总耗时）。"""
         data = MacroData()
 
-        # 1. 国债收益率曲线（10年、5年、2年）
-        y10, y5, y2 = self._fetch_treasury_yields()
-        data.treasury_10y_yield = y10
-        data.treasury_5y_yield = y5
-        data.treasury_2y_yield = y2
+        # 定义所有独立的宏观数据获取任务（无相互依赖）
+        def _task_treasury():
+            y10, y5, y2 = self._fetch_treasury_yields()
+            data.treasury_10y_yield = y10
+            data.treasury_5y_yield = y5
+            data.treasury_2y_yield = y2
 
-        # 2. PMI
-        data.pmi_current, data.pmi_prev = self._fetch_pmi()
+        def _task_pmi():
+            data.pmi_current, data.pmi_prev = self._fetch_pmi()
 
-        # 3. CPI / PPI
-        data.cpi, data.ppi = self._fetch_cpi_ppi()
+        def _task_cpi_ppi():
+            data.cpi, data.ppi = self._fetch_cpi_ppi()
 
-        # 4. M2 增速
-        data.m2_growth = self._fetch_m2_growth()
+        def _task_m2():
+            data.m2_growth = self._fetch_m2_growth()
 
-        # 5. 社融增速
-        data.social_financing_growth = self._fetch_social_financing()
+        def _task_social_financing():
+            data.social_financing_growth = self._fetch_social_financing()
 
-        # 6. GDP 增速
-        data.gdp_growth = self._fetch_gdp_growth()
+        def _task_gdp():
+            data.gdp_growth = self._fetch_gdp_growth()
 
-        # 7. Shibor
-        data.shibor_overnight, data.shibor_1w, data.shibor_1m = self._fetch_shibor()
+        def _task_shibor():
+            data.shibor_overnight, data.shibor_1w, data.shibor_1m = self._fetch_shibor()
 
-        # 8. 信用利差
-        data.credit_spread_aa = self._fetch_credit_spread()
+        def _task_credit_spread():
+            data.credit_spread_aa = self._fetch_credit_spread()
 
-        # 9. 市场涨跌统计
-        (data.limit_up_count, data.limit_down_count,
-         data.advance_count, data.decline_count,
-         data.new_high_60d, data.new_low_60d) = self._fetch_market_stats()
+        def _task_market_stats():
+            (data.limit_up_count, data.limit_down_count,
+             data.advance_count, data.decline_count,
+             data.new_high_60d, data.new_low_60d) = self._fetch_market_stats()
 
-        # 10. 指数数据 (中证转债)
-        (data.cb_index_current, data.cb_index_change,
-         data.cb_index_ma20, data.cb_index_ma60,
-         data.cb_index_df) = self._fetch_cb_index()
+        def _task_cb_index():
+            (data.cb_index_current, data.cb_index_change,
+             data.cb_index_ma20, data.cb_index_ma60,
+             data.cb_index_df) = self._fetch_cb_index()
 
-        # 11. 沪深300
-        (data.stock_index_current, data.stock_index_change,
-         data.stock_index_ma20, data.stock_index_ma60,
-         data.stock_index_df) = self._fetch_stock_index()
+        def _task_stock_index():
+            (data.stock_index_current, data.stock_index_change,
+             data.stock_index_ma20, data.stock_index_ma60,
+             data.stock_index_df) = self._fetch_stock_index()
 
-        # 12. 转债市场统计（从集思录转债指数，真实中位数）
-        self._fill_cb_stats_from_jsl(data)
+        def _task_cb_stats():
+            self._fill_cb_stats_from_jsl(data)
 
-        # 13. 北向资金（当前无稳定免费数据源，返回中性值）
-        data.north_bound_net_flow = self._fetch_north_bound_flow()
+        def _task_north_bound():
+            data.north_bound_net_flow = self._fetch_north_bound_flow()
 
-        # 14. 融资融券
-        (data.margin_balance, data.margin_balance_change,
-         data.margin_buy_ratio) = self._fetch_margin_data()
+        def _task_margin():
+            (data.margin_balance, data.margin_balance_change,
+             data.margin_buy_ratio) = self._fetch_margin_data()
 
-        # 15. 主力资金净流入（当前无稳定免费数据源，返回中性值）
-        data.main_force_net_flow = self._fetch_main_force_flow()
+        def _task_main_force():
+            data.main_force_net_flow = self._fetch_main_force_flow()
 
-        # 16. 行业资金流向（当前无稳定免费数据源，返回中性值）
-        data.industry_net_inflow = self._fetch_industry_net_inflow()
+        def _task_industry_flow():
+            data.industry_net_inflow = self._fetch_industry_net_inflow()
 
-        # 17. PE/PB 中位数 + 历史分位数
-        (data.stock_pe_median, data.stock_pb_median,
-         data.stock_pe_percentile, data.stock_pb_percentile) = self._fetch_pe_pb()
+        def _task_pe_pb():
+            (data.stock_pe_median, data.stock_pb_median,
+             data.stock_pe_percentile, data.stock_pb_percentile) = self._fetch_pe_pb()
 
-        # 18. 工业增加值
-        data.industrial_output = self._fetch_industrial_output()
+        def _task_industrial_output():
+            data.industrial_output = self._fetch_industrial_output()
 
-        # 19. 社零
-        data.retail_sales = self._fetch_retail_sales()
+        def _task_retail_sales():
+            data.retail_sales = self._fetch_retail_sales()
 
-        # 20. 出口增速
-        data.export_growth = self._fetch_export_growth()
+        def _task_export_growth():
+            data.export_growth = self._fetch_export_growth()
 
-        # 21. 认沽/认购比
-        data.pcr_ratio = self._fetch_pcr_ratio()
+        def _task_pcr():
+            data.pcr_ratio = self._fetch_pcr_ratio()
 
-        # 22. 波动率指数
-        data.vix_index = self._fetch_vix()
+        def _task_vix():
+            data.vix_index = self._fetch_vix()
 
-        # 23. 新增开户数（数据源陈旧，返回中性值）
-        data.new_accounts = self._fetch_new_accounts()
+        def _task_new_accounts():
+            data.new_accounts = self._fetch_new_accounts()
 
-        # 24. 从指数日线自动计算技术指标
+        tasks = [
+            _task_treasury, _task_pmi, _task_cpi_ppi, _task_m2,
+            _task_social_financing, _task_gdp, _task_shibor,
+            _task_credit_spread, _task_market_stats, _task_cb_index,
+            _task_stock_index, _task_cb_stats, _task_north_bound,
+            _task_margin, _task_main_force, _task_industry_flow,
+            _task_pe_pb, _task_industrial_output, _task_retail_sales,
+            _task_export_growth, _task_pcr, _task_vix, _task_new_accounts,
+        ]
+
+        # 使用线程池并行执行独立任务（I/O 密集，GIL 不阻塞网络）
+        # 最大并发 8，避免触发 AKShare / 代理频率限制
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="macro_fetch") as pool:
+            futures = {pool.submit(t): t.__name__ for t in tasks}
+            for fut in as_completed(futures, timeout=80):
+                task_name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning(f"[MacroData] {task_name} failed: {type(e).__name__}: {e}")
+
+        # 以下任务依赖前面的原始数据，必须串行执行
         self._compute_technical_indicators(data)
-
-        # 25. 机构持仓变化（从融资数据间接推算）
         data.institutional_holding_change = self._fetch_institutional_holding(data)
-
-        # 26. 盈利超预期比例
         data.earnings_surprise_ratio = self._fetch_earnings_surprise()
-
-        # 27. 产业链景气（从宏观数据间接推算）
         data.industry_cycle_score = self._calc_industry_cycle(data)
-
-        # 28. 政策信号+事件冲击（从市场表现间接推算）
         data.policy_signal_score, data.event_impact_score = self._calc_policy_event_scores(data)
 
         # 计算数据完整度

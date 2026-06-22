@@ -2,21 +2,24 @@
 认证 API
 """
 
+import asyncio
+import logging
+import bcrypt
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # 临时用户存储（生产环境应使用数据库）
 fake_users_db = {}
+_register_lock = asyncio.Lock()
 
 class UserCreate(BaseModel):
     username: str
@@ -32,11 +35,28 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+def _prehash_password(password: str) -> str:
+    """预处理密码以兼容 bcrypt 的 72 字节限制。
+
+    bcrypt 5.x 拒绝处理超过 72 字节的明文。先做一次 SHA-256 摘要，
+    既固定长度又避免触发该限制。
+    """
+    import hashlib
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        _prehash_password(plain_password).encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
+
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(
+        _prehash_password(password).encode("utf-8"),
+        bcrypt.gensalt(),
+    ).decode("utf-8")
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     from app.config import settings
@@ -48,22 +68,53 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 @router.post("/register", response_model=User)
 async def register(user: UserCreate):
-    if user.username in fake_users_db:
-        raise HTTPException(status_code=400, detail="Username already registered")
+    try:
+        if user.username in fake_users_db:
+            raise HTTPException(status_code=400, detail="Username already registered")
 
-    hashed_password = get_password_hash(user.password)
-    fake_users_db[user.username] = {
-        "username": user.username,
-        "email": user.email,
-        "hashed_password": hashed_password,
-        "disabled": False,
-    }
-    return User(username=user.username, email=user.email)
+        hashed_password = await asyncio.to_thread(get_password_hash, user.password)
+        fake_users_db[user.username] = {
+            "username": user.username,
+            "email": user.email,
+            "hashed_password": hashed_password,
+            "disabled": False,
+        }
+        logger.info(f"[Auth] Registered user: {user.username}")
+        return User(username=user.username, email=user.email)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 临时调试：某些运行时下 register 会触发 500 并导致进程退出，
+        # 通过 print 确保异常信息被输出到 stderr。
+        import traceback
+        print(f"[REGISTER ERROR] {type(e).__name__}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Registration failed: {type(e).__name__}") from e
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 
 @router.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = fake_users_db.get(form_data.username)
-    if not user or not verify_password(form_data.password, user["hashed_password"]):
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    if not await asyncio.to_thread(verify_password, form_data.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/login", response_model=Token)
+async def login_json(req: LoginRequest):
+    """兼容 JSON 格式的登录请求（前端 axios 使用）"""
+    user = fake_users_db.get(req.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    if not await asyncio.to_thread(verify_password, req.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
 
     access_token = create_access_token(data={"sub": user["username"]})
@@ -149,3 +200,37 @@ async def verify_token(token: str = Depends(oauth2_scheme)) -> str:
         return username
     except JWTError:
         raise credentials_exception
+
+
+# ---------------------------------------------------------------------------
+# 兼容端点：用户管理（前端 community.ts 调用）
+# ---------------------------------------------------------------------------
+
+@router.get("/user/profile")
+async def get_user_profile():
+    """兼容端点：获取用户信息（前端 community.ts 调用）"""
+    return {"username": "desktop", "email": "", "hint": "user profile stub"}
+
+
+@router.put("/user/profile")
+async def update_user_profile():
+    """兼容端点：更新用户信息（前端 community.ts 调用）"""
+    return {"status": "ok", "hint": "user profile update stub"}
+
+
+@router.put("/user/password")
+async def change_user_password():
+    """兼容端点：修改密码（前端 community.ts 调用）"""
+    return {"status": "ok", "hint": "password change stub"}
+
+
+@router.get("/user/subscriptions")
+async def get_user_subscriptions():
+    """兼容端点：获取用户订阅（前端 community.ts 调用）"""
+    return {"subscriptions": [], "hint": "user subscriptions stub"}
+
+
+@router.get("/user/strategies")
+async def get_user_strategies():
+    """兼容端点：获取用户策略（前端 community.ts 调用）"""
+    return {"strategies": [], "hint": "user strategies stub"}

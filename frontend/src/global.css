@@ -4,6 +4,7 @@
   --text-color: #1f1f1f;
   --border-color: #e8e8e8;
   --hover-bg: #e6f7ff;
+  --statusbar-bg: #f5f5f5;
   /* 表格统一字号(antd Table + 自研 VirtualTable 共享) */
   --table-cell-font-size: 13px;
   --table-header-font-size: 13px;
@@ -15,6 +16,7 @@
   --text-color: #ffffffd9;
   --border-color: #424242;
   --hover-bg: #262626;
+  --statusbar-bg: #1f1f1f;
 }
 
 * {
@@ -123,12 +125,12 @@ body {
   z-index: 1005;
 }
 
-/* Smooth transitions for window focus state */
-.electron-window * {
+/* Smooth transitions for window focus state — 仅作用于顶层容器，避免 * 选择器导致全量重绘 */
+.electron-window {
   transition: opacity 0.2s ease;
 }
 
-.electron-window.window-inactive * {
+.electron-window.window-inactive {
   opacity: 0.95;
 }
 

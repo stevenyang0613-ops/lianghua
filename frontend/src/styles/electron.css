@@ -3,28 +3,8 @@
  * These styles are applied when running in Electron environment
  */
 
-/* Base electron window styles */
+/* Base electron window styles — 滚动条样式已由 global.css 统一定义 */
 .electron-window {
-  /* Custom scrollbar for electron */
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.1);
-    border-radius: 4px;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
-  }
-
   /* Disable text selection on UI elements */
   .no-select {
     user-select: none;

@@ -38,8 +38,8 @@ export default function StatusBar() {
     <div
       style={{
         height: 28,
-        background: '#f5f5f5',
-        borderTop: '1px solid #e8e8e8',
+        background: 'var(--statusbar-bg, #f5f5f5)',
+        borderTop: '1px solid var(--border-color, #e8e8e8)',
         display: 'flex',
         alignItems: 'center',
         padding: '0 12px',

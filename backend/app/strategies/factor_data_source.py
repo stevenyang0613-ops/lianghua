@@ -269,7 +269,8 @@ class FactorDataSource:
         """
         if not code or not ak:
             return {}
-        clean = code[2:] if code.startswith(('sh', 'sz', 'bj')) and len(code) > 2 else code
+        prefix = code[:2].lower()
+        clean = code[2:] if prefix in ('sh', 'sz', 'bj') and len(code) > 2 else code
         try:
             df = ak.stock_zyjs_ths(symbol=clean)
             if df is None or df.empty:
@@ -385,9 +386,15 @@ class FactorDataSource:
                     'avg_price': 0.0,
                     'total_volume': 0.0,
                 }
-            premiums = [float(getattr(q, 'premium_ratio', 0) or 0) for q in quotes]
-            prices = [float(getattr(q, 'price', 0) or 0) for q in quotes]
-            volumes = [float(getattr(q, 'volume', 0) or 0) for q in quotes]
+            def _safe_float(v):
+                try:
+                    f = float(v)
+                    return 0.0 if pd.isna(f) else f
+                except (TypeError, ValueError):
+                    return 0.0
+            premiums = [_safe_float(getattr(q, 'premium_ratio', None)) for q in quotes]
+            prices = [_safe_float(getattr(q, 'price', None)) for q in quotes]
+            volumes = [_safe_float(getattr(q, 'volume', None)) for q in quotes]
             sorted_p = sorted(premiums)
             median = sorted_p[len(sorted_p) // 2] if sorted_p else 0.0
             return {

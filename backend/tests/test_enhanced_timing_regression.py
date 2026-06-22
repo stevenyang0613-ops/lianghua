@@ -196,7 +196,11 @@ class TestEnsembleMethod:
 class TestSafeScoreHelper:
     def test_zero_returns_neutral(self):
         from app.strategies.enhanced_timing_model import safe_score
-        assert safe_score(0, lambda v: v * 2, neutral=50.0) == 50.0
+        assert safe_score(0, lambda v: v * 2, neutral=50.0, treat_zero_as_missing=True) == 50.0
+
+    def test_zero_returns_zero_when_not_missing(self):
+        from app.strategies.enhanced_timing_model import safe_score
+        assert safe_score(0, lambda v: v * 2, neutral=50.0, treat_zero_as_missing=False) == 0
 
     def test_nonzero_uses_func(self):
         from app.strategies.enhanced_timing_model import safe_score

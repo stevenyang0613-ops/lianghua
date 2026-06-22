@@ -112,6 +112,37 @@ class PaperTradeManager:
         "fusion": "融合策略",
     }
 
+    # 最优参数（基于策略设计逻辑 + 回测经验）
+    OPTIMAL_PARAMS = {
+        "xibu_seven": {
+            "hold_count": 60, "buffer_size": 8, "buffer_days": 5,
+            "min_credit_score": 55, "max_premium": 100, "min_remaining_months": 6,
+            "aum_level": "small", "market_env": "neutral",
+            "rebalance_days": 5, "min_hold_days": 3,
+            "momentum_filter": True, "position_sizing": "score_weighted",
+        },
+        "xuanji_twelve": {
+            "hold_count": 25, "rebalance_days": 7, "market_state": "auto",
+            "max_premium": 50, "min_price": 90, "max_price": 150,
+            "delta_hedge_pct": 15, "vol_adjust": 0.80,
+            "stop_loss_pct": -8.0, "trailing_stop_pct": -3.0,
+            "portfolio_stop_loss": -15.0, "icir_lookback": 60,
+            "buffer_size": 3, "buffer_days": 3,
+            "min_credit_score": 60, "min_liquidity": 500,
+        },
+        "fusion": {
+            "hold_count": 25, "rebalance_days": 7,
+            "xuanji_hold_count": 50, "xibu_hold_count": 40,
+            "buffer_size": 3, "buffer_days": 3, "min_credit_score": 55,
+            "max_premium": 60, "min_price": 90, "max_price": 150,
+            "trailing_stop_pct": -3.0, "portfolio_stop_loss": -15.0,
+        },
+    }
+
+    @classmethod
+    def get_optimal_params(cls, strategy_id):
+        return dict(cls.OPTIMAL_PARAMS.get(strategy_id, {}))
+
     def __init__(
         self,
         storage: DataStorage,
@@ -438,7 +469,9 @@ class PaperTradeManager:
                         SELECT code, name, close_price AS price, premium_ratio, volume, dual_low,
                                ytm, remaining_years, change_pct, stock_price,
                                conversion_value, snapshot_date AS date,
-                               momentum_5d, momentum_10d, momentum_20d, momentum_60d
+                               momentum_5d, momentum_10d, momentum_20d, momentum_60d,
+                               hv, rating_score, pure_bond_premium_ratio, bond_value,
+                               industry, pe, pb, roe, gpm, call_status, is_called, forced_call_days
                         FROM daily_snapshots
                         WHERE snapshot_date IN ({placeholders})
                         ORDER BY snapshot_date ASC
@@ -499,7 +532,9 @@ class PaperTradeManager:
                                                 SELECT q.code, q.name, q.price, q.premium_ratio, q.volume, q.dual_low,
                                                        q.ytm, q.remaining_years, q.change_pct, q.stock_price,
                                                        q.conversion_value, q.momentum_5d, q.momentum_10d,
-                                                       q.momentum_20d, q.momentum_60d, q.timestamp
+                                                       q.momentum_20d, q.momentum_60d, q.timestamp,
+                                                       q.hv, q.rating_score, q.pure_bond_premium_ratio, q.bond_value,
+                                                       q.industry, q.pe, q.pb, q.roe, q.gpm, q.call_status, q.is_called, q.forced_call_days
                                                 FROM quotes_history q
                                                 INNER JOIN {tmp_table} s ON q.code = s.code
                                                 WHERE CAST(q.timestamp AS DATE) IN ({supp_date_ph})
@@ -561,34 +596,10 @@ class PaperTradeManager:
                     for b in bonds:
                         if not is_tradeable_bond(b):
                             continue
-                        all_rows.append({
-                            "code": b.code,
-                            "name": b.name,
-                            "price": b.price,
-                            "premium_ratio": b.premium_ratio,
-                            "volume": b.volume,
-                            "dual_low": b.dual_low,
-                            "ytm": b.ytm,
-                            "remaining_years": b.remaining_years,
-                            "change_pct": b.change_pct,
-                            "stock_price": getattr(b, "stock_price", 0),
-                            "conversion_value": getattr(b, "conversion_value", 0),
-                            "hv": getattr(b, "hv", None),
-                            "iv": getattr(b, "iv", None),
-                            "rating_score": getattr(b, "rating_score", 75),
-                            "pure_bond_premium_ratio": getattr(b, "pure_bond_premium_ratio", None),
-                            "bond_value": getattr(b, "bond_value", None),
-                            "industry": getattr(b, "industry", None),
-                            "pe": getattr(b, "pe", None),
-                            "pb": getattr(b, "pb", None),
-                            "roe": getattr(b, "roe", None),
-                            "gpm": getattr(b, "gpm", None),
-                            "call_status": getattr(b, "call_status", ""),
-                            "is_called": getattr(b, "is_called", False),
-                            "forced_call_days": getattr(b, "forced_call_days", 0),
-                            "date": datetime.now().date(),
-                            "timestamp": datetime.now(),
-                        })
+                        row = b.to_strategy_dict()
+                        row["date"] = datetime.now().date()
+                        row["timestamp"] = datetime.now()
+                        all_rows.append(row)
             except Exception as e:
                 logger.debug(f"[PaperTrade] _build_init_df live quotes failed: {e}")
         
@@ -664,33 +675,9 @@ class PaperTradeManager:
         # 构建 DataFrame（一次构建，多账户共用）
         rows = []
         for b in valid_bonds:
-            rows.append({
-                "code": b.code,
-                "name": b.name,
-                "price": b.price,
-                "premium_ratio": b.premium_ratio,
-                "volume": b.volume,
-                "dual_low": b.dual_low,
-                "ytm": b.ytm,
-                "remaining_years": b.remaining_years,
-                "change_pct": b.change_pct,
-                "stock_price": getattr(b, "stock_price", 0),
-                "conversion_value": getattr(b, "conversion_value", 0),
-                "hv": getattr(b, "hv", None),
-                "iv": getattr(b, "iv", None),
-                "rating_score": getattr(b, "rating_score", 75),
-                "pure_bond_premium_ratio": getattr(b, "pure_bond_premium_ratio", None),
-                "bond_value": getattr(b, "bond_value", None),
-                "industry": getattr(b, "industry", None),
-                "pe": getattr(b, "pe", None),
-                "pb": getattr(b, "pb", None),
-                "roe": getattr(b, "roe", None),
-                "gpm": getattr(b, "gpm", None),
-                "call_status": getattr(b, "call_status", ""),
-                "is_called": getattr(b, "is_called", False),
-                "forced_call_days": getattr(b, "forced_call_days", 0),
-                "date": datetime.now().date(),
-            })
+            row = b.to_strategy_dict()
+            row["date"] = datetime.now().date()
+            rows.append(row)
 
         if not rows:
             return
@@ -1255,7 +1242,11 @@ class PaperTradeManager:
                     f"Available: {list(STRATEGY_REGISTRY.keys())}"
                 )
                 continue
-            account = self.create_account(strategy_id)
+            optimal_params = self.get_optimal_params(strategy_id)
+            account = self.create_account(strategy_id, params=optimal_params)
             new_accounts.append(account)
-            logger.info(f"[PaperTrade] Auto-created default account for {strategy_name}")
+            logger.info(
+                f"[PaperTrade] Auto-created {strategy_name} with optimal params "
+                f"({len(optimal_params)} keys)"
+            )
         return new_accounts

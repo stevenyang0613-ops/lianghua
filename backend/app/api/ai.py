@@ -312,3 +312,9 @@ def extract_hedge_suggestions(text: str) -> list:
 def calculate_risk_score(text: str) -> int:
     """计算风险分数"""
     return 50  # 简化实现
+
+
+@router.get("/stream")
+async def stream_analyze():
+    """兼容端点：AI 流式分析（前端 community.ts 调用）"""
+    return {"status": "ok", "hint": "ai stream not implemented", "data": []}

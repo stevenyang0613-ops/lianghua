@@ -76,6 +76,18 @@ export const signalsWs = createWsReconnect('/api/v1/ws/signals', 'signals')
 
 let _lastToken = ''
 let _refreshing = false
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 取消待执行的 refreshWsToken 定时器。
+ * 在应用卸载或页面刷新前调用，避免孤儿 timer。
+ */
+export function cancelRefreshWsToken(): void {
+  if (_refreshTimer) {
+    clearTimeout(_refreshTimer)
+    _refreshTimer = null
+  }
+}
 
 /**
  * Token 更新后重置 WebSocket 连接。
@@ -86,6 +98,9 @@ let _refreshing = false
 export function refreshWsToken(): void {
   if (_refreshing) return
   _refreshing = true
+
+  // 清理旧的待执行 timer，防止重叠
+  cancelRefreshWsToken()
 
   try {
     const newToken = getToken()
@@ -99,12 +114,13 @@ export function refreshWsToken(): void {
     marketWs.connect()
 
     // 延迟 500ms 再 reset signals，避免两个 WS 同时断开/重连的冲击
-    setTimeout(() => {
+    _refreshTimer = setTimeout(() => {
       try {
         signalsWs.reset(signalsUrl)
         signalsWs.connect()
       } finally {
         _refreshing = false
+        _refreshTimer = null
       }
     }, 500)
   } catch {

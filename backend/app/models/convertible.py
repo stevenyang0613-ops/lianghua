@@ -15,6 +15,16 @@ class ConvertibleBond(BaseModel):
     outstanding_scale: float = Field(0.0, description="剩余规模(亿元)")
 
 
+# 评级 → 数值分映射（0-100 量表，供 data_enrich 和策略共用）
+RATING_SCORE_MAP: dict[str, float] = {
+    "AAA": 95, "AA+": 90, "AA": 85, "AA-": 80,
+    "A+": 75, "A": 70, "A-": 65,
+    "BBB+": 60, "BBB": 55, "BBB-": 50,
+    "BB+": 45, "BB": 40, "BB-": 35,
+}
+RATING_SCORE_DEFAULT: float = 75.0
+
+
 class ConvertibleQuote(BaseModel):
     """可转债实时行情"""
     code: str = Field(..., description="转债代码")
@@ -81,3 +91,44 @@ class ConvertibleQuote(BaseModel):
     profit_yoy: Optional[float] = Field(None, description="净利润同比增长(%)")
     restricted_release_amount: Optional[float] = Field(None, description="近期解禁金额(亿元)")
     timestamp: datetime = Field(default_factory=datetime.now)
+
+    def to_strategy_dict(self) -> dict:
+        """导出策略所需的字段子集，避免每次 getattr 开销。"""
+        return {
+            "code": self.code,
+            "name": self.name,
+            "price": self.price,
+            "premium_ratio": self.premium_ratio,
+            "volume": self.volume,
+            "dual_low": self.dual_low,
+            "ytm": self.ytm,
+            "remaining_years": self.remaining_years,
+            "change_pct": self.change_pct,
+            "stock_price": self.stock_price,
+            "conversion_value": self.conversion_value,
+            "hv": self.hv,
+            "iv": self.iv,
+            "rating_score": (
+                self.rating_score
+                if self.rating_score is not None
+                else RATING_SCORE_MAP.get(str(self.rating).strip().upper(), RATING_SCORE_DEFAULT)
+                if self.rating
+                else RATING_SCORE_DEFAULT
+            ),
+            "pure_bond_premium_ratio": (
+                self.pure_bond_premium_ratio
+                if self.pure_bond_premium_ratio is not None
+                else round((self.price - self.bond_value) / self.bond_value * 100, 2)
+                if (self.bond_value and self.bond_value > 0 and self.price)
+                else None
+            ),
+            "bond_value": self.bond_value,
+            "industry": self.industry,
+            "pe": self.pe,
+            "pb": self.pb,
+            "roe": self.roe,
+            "gpm": self.gpm,
+            "call_status": self.call_status,
+            "is_called": self.is_called,
+            "forced_call_days": self.forced_call_days,
+        }

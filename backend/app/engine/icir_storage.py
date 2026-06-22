@@ -51,8 +51,11 @@ def _save_ic_cache():
     _ensure_dir()
     path = _CACHE_DIR / _IC_FILE
     try:
-        with open(path, "w") as f:
+        # 原子写入：先写 tmp，再 rename（防止部分写入导致文件损坏）
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w") as f:
             json.dump(_ic_map, f, ensure_ascii=False)
+        tmp.replace(path)
     except Exception as e:
         logger.warning(f"[ICIR] Failed to save IC cache: {e}")
 
@@ -76,8 +79,11 @@ def _save_icir_cache():
     _ensure_dir()
     path = _CACHE_DIR / _ICIR_FILE
     try:
-        with open(path, "w") as f:
+        # 原子写入：先写 tmp，再 rename（防止部分写入导致文件损坏）
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w") as f:
             json.dump(_icir_map, f, ensure_ascii=False)
+        tmp.replace(path)
     except Exception as e:
         logger.warning(f"[ICIR] Failed to save ICIR cache: {e}")
 

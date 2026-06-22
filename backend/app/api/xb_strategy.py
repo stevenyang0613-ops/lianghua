@@ -197,6 +197,9 @@ def _signal_to_frontend(signal, macro_data) -> dict:
 
     # 状态判定
     def _factor_status(score_pct: float) -> str:
+        import math
+        if math.isnan(score_pct):
+            return 'missing'
         if score_pct >= 70:
             return 'good'
         elif score_pct >= 40:
@@ -280,6 +283,8 @@ def _get_recommendation(total_score: float, position_limit: float) -> str:
     """生成投资建议"""
     if math.isnan(total_score):
         return "数据不足，无法评估择时信号"
+    if math.isnan(position_limit) or position_limit < 0:
+        position_limit = 0.0
     pct = int(position_limit * 100)
     if total_score >= 70:
         return f"建议仓位{pct}%，市场情绪乐观，可积极配置低估值品种"
@@ -369,22 +374,30 @@ def _enhanced_signal_to_frontend(signal, macro_data) -> dict:
         cv_bullish = sum(1 for cv in signal.cross_validations if cv.signal == 'bullish')
         cv_bearish = sum(1 for cv in signal.cross_validations if cv.signal == 'bearish')
 
-        # 建议
-        pct = int(position_limit * 100)
+        # 建议（先 guard position_limit NaN 再计算 pct）
         if math.isnan(total_score):
             recommendation = "数据不足，无法评估择时信号"
-        elif total_score >= 70:
-            recommendation = f"建议仓位{pct}%，多维度信号偏多，可积极配置"
-        elif total_score >= 50:
-            recommendation = f"建议仓位{pct}%，信号中性，精选品种均衡配置"
-        elif total_score >= 30:
-            recommendation = f"建议仓位{pct}%，信号偏空，以防守为主"
+            pct = 0
         else:
-            recommendation = f"建议仓位{pct}%，多维度预警，启动对冲，严控风险"
+            pct = int((position_limit if not math.isnan(position_limit) else 0.0) * 100)
+            if total_score >= 70:
+                recommendation = f"建议仓位{pct}%，多维度信号偏多，可积极配置"
+            elif total_score >= 50:
+                recommendation = f"建议仓位{pct}%，信号中性，精选品种均衡配置"
+            elif total_score >= 30:
+                recommendation = f"建议仓位{pct}%，信号偏空，以防守为主"
+            else:
+                recommendation = f"建议仓位{pct}%，多维度预警，启动对冲，严控风险"
+
+        # 数值字段 NaN → None（JSON null），前端显示"N/A"
+        def _r(v: float, digits: int = 1):
+            if v is None or math.isnan(v):
+                return None
+            return round(v, digits)
 
         return clean_numpy_types({
-            "totalScore": round(total_score, 1),
-            "positionLimit": round(position_limit, 4),
+            "totalScore": _r(total_score, 1),
+            "positionLimit": _r(position_limit, 4),
             "marketEnv": market_env,
             "factors": factors,
             "recommendation": recommendation,
@@ -392,8 +405,8 @@ def _enhanced_signal_to_frontend(signal, macro_data) -> dict:
             # 增强字段
             "modelVersion": "v4.0-enhanced",
             "quality": signal.quality.value,
-            "confidence": round(signal.confidence, 4),
-            "consensusScore": round(signal.consensus_score, 2),
+            "confidence": _r(signal.confidence, 4),
+            "consensusScore": _r(signal.consensus_score, 2),
             "riskAlerts": risk_alerts,
             "hedgeRecommended": signal.hedge_recommended,
             "crossValidation": {

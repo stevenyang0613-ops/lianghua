@@ -91,3 +91,30 @@ async def get_log_stats(startTime: Optional[datetime] = None, endTime: Optional[
         "byLevel": dict(level_counts),
         "byCategory": dict(category_counts),
     }
+
+
+@router.get("/export")
+async def export_logs(
+    format: str = "json",
+    startTime: Optional[datetime] = None,
+    endTime: Optional[datetime] = None,
+    level: Optional[str] = None,
+):
+    """导出日志（兼容端点）"""
+    results = logs_db
+    if startTime:
+        results = [l for l in results if l.timestamp >= startTime]
+    if endTime:
+        results = [l for l in results if l.timestamp <= endTime]
+    if level:
+        results = [l for l in results if l.level == level]
+
+    if format == "csv":
+        import csv, io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "level", "category", "message", "timestamp", "userId", "sessionId"])
+        for l in results:
+            writer.writerow([l.id, l.level, l.category, l.message, l.timestamp.isoformat(), l.userId, l.sessionId])
+        return {"format": "csv", "data": output.getvalue(), "count": len(results)}
+    return {"format": "json", "data": [l.model_dump() for l in results], "count": len(results)}

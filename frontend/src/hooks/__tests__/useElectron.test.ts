@@ -33,7 +33,7 @@ describe('useElectron', () => {
   })
 
   it('should detect non-electron environment', () => {
-    window.electronAPI = undefined
+    ;(window as any).electronAPI = undefined
     const { result } = renderHook(() => useElectron())
     expect(result.current.isElectron).toBe(false)
   })

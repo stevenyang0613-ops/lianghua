@@ -15,11 +15,13 @@ export interface ElectronAPI {
   encryptString(plainText: string): Promise<string>
   decryptString(cipherText: string): Promise<string>
   getAppInfo(): Promise<{ version: string; electronVersion: string; nodeVersion: string; platform: string; arch: string; isDev: boolean }>
+  getWsToken(): Promise<string>
+  retryFrontendLoad(): Promise<boolean>
   restartBackend(): Promise<void>
   httpGet(url: string): Promise<{ ok: boolean; status: number; data: any; error?: string }>
   httpPost(url: string, body: any): Promise<{ ok: boolean; status: number; data: any; error?: string }>
   httpRequest(method: string, url: string, body?: any): Promise<{ ok: boolean; status: number; data: any; error?: string }>
-  onBackendReady(callback: () => void): () => void
+  onBackendReady(callback: (data?: any) => void): () => void
   getPerformanceMetrics(): Promise<any>
   getCrashReports(limit?: number): Promise<any[]>
   clearCrashReports(): Promise<{ success: boolean }>

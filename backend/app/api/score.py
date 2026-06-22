@@ -1142,14 +1142,20 @@ from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
 
 
 def _compute_xibu_scores(strategy, df):
-    """同步计算七维评分（在线程池中执行，优先使用向量化）"""
+    """同步计算七维评分（在线程池中执行，优先使用向量化）
+
+    改进 (2025-06-15as): market_env 从 strategy.get_param 获取，消除外部传入与
+    strategy 实例内部值不一致的风险。score.py 中创建 strategy 时已将 market_env
+    传入构造函数，此处无需重复接收。
+    """
     import threading
     t0 = time.time()
     thread_name = threading.current_thread().name
     logger.info(f"[Compute] Seven-dim scoring started on thread={thread_name}, rows={len(df)}")
     # 优先使用向量化计算（约50-100倍提速）
+    market_env = strategy.get_param('market_env') if hasattr(strategy, 'get_param') else None
     if hasattr(strategy, 'calc_vectorized'):
-        scores_list, vetoed_list = strategy.calc_vectorized(df)
+        scores_list, vetoed_list = strategy.calc_vectorized(df, market_env=market_env)
     else:
         scores_list = []
         vetoed_list = []
@@ -1229,8 +1235,8 @@ def _compute_market_change_stats(bonds) -> dict:
 async def get_xibu_ranking(
     request: Request,
     top_n: int = Query(60, ge=10, le=200, description="返回前N名"),
-    aum_level: str = Query("small", description="AUM规模等级: small/medium/large"),
-    market_env: str = Query("neutral", description="市场环境: bull/bear/neutral"),
+    aum_level: str = Query("small", enum=["small", "medium", "large"], description="AUM规模等级: small/medium/large"),
+    market_env: str = Query("neutral", enum=["bull", "bear", "neutral"], description="市场环境: bull/bear/neutral"),
 ):
     """
     西部七维打分排名 - V3.0
@@ -1405,13 +1411,20 @@ async def get_xibu_ranking(
 async def stream_xibu_ranking(
     request: Request,
     top_n: int = Query(60, ge=10, le=200),
-    aum_level: str = Query("small"),
-    market_env: str = Query("neutral"),
+    aum_level: str = Query("small", enum=["small", "medium", "large"]),
+    market_env: str = Query("neutral", enum=["bull", "bear", "neutral"]),
 ):
     """SSE流式返回七维排名，每计算完一批就推送"""
 
     async def event_generator():
         try:
+            # 改进 (2025-06-15au): 流式端点添加缓存检查，避免多个 SSE 连接重复计算
+            cache_key = _get_cache_key("xibu_ranking_stream", top_n=top_n, aum=aum_level, market=market_env)
+            cached = _get_cached(cache_key, ttl=5)  # 5秒短期缓存
+            if cached:
+                yield f"data: {json.dumps(cached)}\n\n"
+                return
+
             engine = request.app.state.engine
             bonds = await engine.get_all_quotes()
 
@@ -1445,7 +1458,9 @@ async def stream_xibu_ranking(
             scores_list, vetoed_list = await asyncio.to_thread(_compute_xibu_scores, strategy, df)
 
             if not scores_list:
-                yield f"data: {json.dumps({'type': 'done', 'total': 0, 'items': [], 'vetoed': vetoed_list[:20], 'vetoed_count': len(vetoed_list)})}\n\n"
+                result = {"type": "done", "total": 0, "items": [], "vetoed": vetoed_list[:20], "vetoed_count": len(vetoed_list)}
+                _set_cache(cache_key, result, ttl=5)
+                yield f"data: {json.dumps(result)}\n\n"
                 return
 
             # scores_list 已按 total 降序排列，直接取 top_n
@@ -1488,7 +1503,6 @@ async def stream_xibu_ranking(
                 "market_stats": _compute_market_change_stats(bonds),
             }
 
-            cache_key = _get_cache_key("xibu_ranking", top_n=top_n, aum=aum_level, market=market_env)
             _set_cache(cache_key, result, ttl=_LONG_CACHE_TTL)
 
             yield f"data: {json.dumps(result)}\n\n"
@@ -1573,7 +1587,7 @@ async def get_xibu_history(
 async def get_xibu_single_score(
     request: Request,
     code: str,
-    aum_level: str = Query("small", description="AUM规模等级"),
+    aum_level: str = Query("small", enum=["small", "medium", "large"], description="AUM规模等级"),
 ):
     """
     获取单只转债的西部七维详细评分

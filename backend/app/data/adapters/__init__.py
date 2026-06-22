@@ -15,6 +15,7 @@ from .tonghuashun_adapter import TonghuashunAdapter
 from .cninfo_adapter import CNInfoAdapter
 from .eastmoney_adapter import EastmoneyAdapter
 from .tdx_data_adapter import TdxDataAdapter
+from .mx_adapter import MXAdapter
 
 __all__ = [
     'DataSourceAdapter',
@@ -24,4 +25,5 @@ __all__ = [
     'CNInfoAdapter',
     'EastmoneyAdapter',
     'TdxDataAdapter',
+    'MXAdapter',
 ]

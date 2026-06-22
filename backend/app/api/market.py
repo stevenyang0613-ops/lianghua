@@ -1685,12 +1685,43 @@ async def get_data_sources_status(request: Request):
     try:
         from pathlib import Path as _P
         from app.engine.data_enrich import (
+            _INDUSTRY_CACHE, _SPOT_CACHE, _FIN_CACHE, _FUND_FLOW_CACHE,
+            _DEBT_CACHE, _VOL_CACHE, _BUYBACK_CACHE, _MGMT_CACHE,
+            _PLEDGE_CACHE, _MOMENTUM_CACHE, _EVENT_CACHE, _CONCEPT_CACHE,
+            _BOND_OUTSTANDING_CACHE, _CALL_STATUS_CACHE, _STOCK_NAME_CACHE,
+            _BOND_PRICE_CACHE, _COUPON_RATE_CACHE, _MAIN_BIZ_CACHE, _ANALYST_RANK_CACHE,
+            _MACRO_CPI_CACHE, _MACRO_PPI_CACHE, _MACRO_M2_CACHE, _MACRO_LPR_CACHE,
             _NORTH_CACHE, _MARGIN_CACHE, _LHB_CACHE, _BLOCK_TRADE_CACHE,
             _HOLDER_NUM_CACHE, _EARNINGS_FORECAST_CACHE, _EARNINGS_EXPRESS_CACHE,
             _RESTRICTED_RELEASE_CACHE,
         )
-        cache_dir = _NORTH_CACHE.parent
+        cache_dir = _INDUSTRY_CACHE.parent
         sources = {
+            # 第一批：核心 enrichment (13)
+            "industry": _INDUSTRY_CACHE,
+            "spot": _SPOT_CACHE,
+            "fin": _FIN_CACHE,
+            "fund_flow": _FUND_FLOW_CACHE,
+            "debt": _DEBT_CACHE,
+            "volatility": _VOL_CACHE,
+            "buyback": _BUYBACK_CACHE,
+            "mgmt": _MGMT_CACHE,
+            "pledge": _PLEDGE_CACHE,
+            "momentum": _MOMENTUM_CACHE,
+            "event": _EVENT_CACHE,
+            "concept": _CONCEPT_CACHE,
+            "bond_outstanding": _BOND_OUTSTANDING_CACHE,
+            "call_status": _CALL_STATUS_CACHE,
+            "stock_name": _STOCK_NAME_CACHE,
+            "bond_price": _BOND_PRICE_CACHE,
+            "coupon_rate": _COUPON_RATE_CACHE,
+            "main_business": _MAIN_BIZ_CACHE,
+            "analyst_rank": _ANALYST_RANK_CACHE,
+            "macro_cpi": _MACRO_CPI_CACHE,
+            "macro_ppi": _MACRO_PPI_CACHE,
+            "macro_m2": _MACRO_M2_CACHE,
+            "macro_lpr": _MACRO_LPR_CACHE,
+            # 第二批：扩展 (8)
             "north": _NORTH_CACHE,
             "margin": _MARGIN_CACHE,
             "lhb": _LHB_CACHE,

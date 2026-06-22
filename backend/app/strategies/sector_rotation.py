@@ -92,7 +92,7 @@ class SectorRotationStrategy(Strategy):
             return None
 
         factor = self.get_param("bull_factor")
-        if day_data["momentum_1m"].mean() < 0 if "momentum_1m" in day_data.columns else False:
+        if "momentum_1m" in day_data.columns and pd.notna(day_data["momentum_1m"].mean()) and day_data["momentum_1m"].mean() < 0:
             factor = self.get_param("bear_factor")
 
         if factor not in day_data.columns:

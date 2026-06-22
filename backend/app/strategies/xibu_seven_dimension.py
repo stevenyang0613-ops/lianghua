@@ -10,7 +10,7 @@
 import logging
 import pandas as pd
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple, List
 from datetime import datetime, timedelta, date
 from dataclasses import dataclass
 
@@ -37,6 +37,74 @@ class BufferStatus:
     days_below_60: int  # 连续在60名外的天数
 
 
+# 改进 (2025-06-15ae): 市场环境检测提取为独立模块函数，便于策略类外复用和单元测试
+# 改进 (2025-06-15af): 外部传入 current_ts 避免重复获取，统一返回 pd.Timestamp，
+# 添加 NaN 防御，cache_ttl_seconds 从策略参数获取
+from typing import Optional
+def _detect_market_env(df: pd.DataFrame, current_ts: pd.Timestamp,
+                       last_cache: Optional[str] = None,
+                       last_ts: Optional[pd.Timestamp] = None,
+                       cache_ttl_seconds: int = 300) -> tuple[str, pd.Timestamp]:
+    """根据 DataFrame 中的 change_pct 列检测市场环境。
+
+    Args:
+        df: 当日数据 DataFrame，需包含 'change_pct' 列（可选）
+        current_ts: 当前时间戳（由调用方传入，避免函数内重复获取）
+        last_cache: 上次缓存的市场环境（'bull'/'bear'/'neutral' 或 None）
+        last_ts: 上次缓存的时间戳
+        cache_ttl_seconds: 缓存有效期（秒），默认 300，可由策略参数覆盖
+
+    Returns:
+        (market_env, current_ts): 检测到的市场环境及当前时间戳（统一为 pd.Timestamp）
+    """
+    if last_cache and last_ts and (current_ts - last_ts).seconds < cache_ttl_seconds:
+        return last_cache, current_ts
+
+    avg_change = float(df['change_pct'].mean()) if 'change_pct' in df.columns else 0.0
+    positive_ratio = float((df['change_pct'] > 0).mean()) if 'change_pct' in df.columns else 0.5
+
+    # 改进 (2025-06-15af): NaN/inf 防御——change_pct 全为 NaN/inf 时 .mean() 返回异常值
+    if pd.isna(avg_change) or not np.isfinite(avg_change):
+        avg_change = 0.0
+    if pd.isna(positive_ratio) or not np.isfinite(positive_ratio):
+        positive_ratio = 0.5
+
+    if avg_change > 0.5 and positive_ratio > 0.6:
+        market_env = 'bull'
+    elif avg_change < -0.5 and positive_ratio < 0.4:
+        market_env = 'bear'
+    else:
+        market_env = 'neutral'
+    return market_env, current_ts
+
+
+def _get_market_weights(market_env: str, stock_weights: dict, bond_weights: dict) -> tuple[dict, dict]:
+    """根据市场环境调整权重（纯函数，便于单元测试）。"""
+    if market_env == 'bull':
+        stock_weights = {
+            'momentum': 0.35,
+            'sector': 0.20,
+            'technical': 0.22,
+            'chip': 0.08,
+            'volatility': 0.10,
+            'news': 0.03,
+            'fundamental': 0.02,
+        }
+    elif market_env == 'bear':
+        stock_weights = {
+            'momentum': 0.20,
+            'sector': 0.12,
+            'technical': 0.13,
+            'chip': 0.10,
+            'volatility': 0.18,
+            'news': 0.10,
+            'fundamental': 0.17,
+        }
+    else:
+        stock_weights = stock_weights.copy()
+    return stock_weights, bond_weights.copy()
+
+
 class XibuSevenDimensionStrategy(Strategy):
     """西部七维量化打分策略 - V4.0"""
 
@@ -52,6 +120,7 @@ class XibuSevenDimensionStrategy(Strategy):
         StrategyParam(name="min_remaining_months", label="最小剩余期限(月)", type="int", default=6, min_val=1, max_val=36),
         StrategyParam(name="aum_level", label="AUM规模等级", type="str", default="small", description="small/medium/large"),
         StrategyParam(name="market_env", label="市场环境", type="str", default="neutral", description="bull/bear/neutral"),
+        StrategyParam(name="market_env_cache_ttl", label="市场环境缓存秒数", type="int", default=300, min_val=60, max_val=3600, description="市场环境检测结果的缓存有效期（秒）"),
         StrategyParam(name="rebalance_days", label="调仓间隔(天)", type="int", default=5, min_val=1, max_val=20),
         StrategyParam(name="min_hold_days", label="最小持仓天数", type="int", default=3, min_val=0, max_val=15),
         StrategyParam(name="momentum_filter", label="启用动量过滤", type="bool", default=True),
@@ -85,6 +154,66 @@ class XibuSevenDimensionStrategy(Strategy):
     }
 
     def __init__(self, **kwargs):
+        # 改进 (2025-06-15aq): 参数验证防御——无效参数立即 ValueError，避免静默传播
+        # 1. 整数参数校验（必须精确为整数，拒绝 10.5 等小数）
+        _VALID_INT_RANGES = {
+            'hold_count': (1, 100),
+            'buffer_size': (0, 15),
+            'buffer_days': (1, 10),
+            'min_remaining_months': (1, 36),
+            'market_env_cache_ttl': (60, 3600),
+            'rebalance_days': (1, 20),
+            'min_hold_days': (0, 15),
+        }
+        for param_name, (min_v, max_v) in _VALID_INT_RANGES.items():
+            val = kwargs.get(param_name)
+            if val is not None:
+                try:
+                    # 拒绝非整数类型（如 10.5、"10.5"）
+                    if isinstance(val, float):
+                        # float 必须是整数值（如 10.0 允许，10.5 拒绝）
+                        if not val.is_integer():
+                            raise ValueError
+                        ival = int(val)
+                    else:
+                        ival = int(val)
+                except (TypeError, ValueError):
+                    raise ValueError(f"[{self.name}] {param_name}={val!r} 不是有效整数")
+                if ival < min_v or ival > max_v:
+                    raise ValueError(
+                        f"[{self.name}] {param_name}={val} 超出允许范围 [{min_v}, {max_v}]"
+                    )
+
+        # 2. 浮点参数校验
+        _VALID_FLOAT_RANGES = {
+            'min_credit_score': (0.0, 100.0),
+            'max_premium': (10.0, 150.0),
+        }
+        for param_name, (min_v, max_v) in _VALID_FLOAT_RANGES.items():
+            val = kwargs.get(param_name)
+            if val is not None:
+                try:
+                    fval = float(val)
+                except (TypeError, ValueError):
+                    raise ValueError(f"[{self.name}] {param_name}={val!r} 不是有效数值")
+                if fval < min_v or fval > max_v:
+                    raise ValueError(
+                        f"[{self.name}] {param_name}={val} 超出允许范围 [{min_v}, {max_v}]"
+                    )
+
+        # 3. 枚举值校验
+        _VALID_ENUMS = {
+            'aum_level': {'small', 'medium', 'large'},
+            'market_env': {'bull', 'bear', 'neutral'},
+            'position_sizing': {'equal_weight', 'score_weighted'},
+        }
+        for param_name, allowed in _VALID_ENUMS.items():
+            val = kwargs.get(param_name)
+            if val is not None and str(val) not in allowed:
+                raise ValueError(
+                    f"[{self.name}] {param_name}={val!r} 不是允许值 {allowed}"
+                )
+
         super().__init__(**kwargs)
         self._buffer_tracker: dict[str, BufferStatus] = {}
         self._veto_results: dict[str, VetoResult] = {}
@@ -498,11 +627,14 @@ class XibuSevenDimensionStrategy(Strategy):
 
     # ==================== 综合评分 ====================
 
-    def calc_vectorized(self, df: pd.DataFrame, current_date: date) -> tuple[list[dict], list[dict]]:
+    def calc_vectorized(self, df: pd.DataFrame, market_env: Optional[str] = None) -> Tuple[List[dict], List[dict]]:
         """
         向量化计算全部评分，消除 iterrows 循环。
         返回 (scores_list, vetoed_list)，格式与 _calc_total_score 逐行调用一致。
         性能提升约 50-100 倍。
+
+        改进 (2025-06-15ae): 完全解耦——市场环境由 on_data 检测后传入，
+        calc_vectorized 成为纯函数（仅依赖 df 和 market_env），便于单元测试。
         """
         n = len(df)
         if n == 0:
@@ -518,14 +650,19 @@ class XibuSevenDimensionStrategy(Strategy):
         ytm = df['ytm'].values if 'ytm' in df.columns else np.zeros(n)
         remaining_years = df['remaining_years'].values if 'remaining_years' in df.columns else np.zeros(n)
         forced_call_days = df['forced_call_days'].values if 'forced_call_days' in df.columns else np.zeros(n)
-        codes = df['code'].values if 'code' in df.columns else [str(i) for i in range(n)]
-        names = df['name'].values if 'name' in df.columns else [''] * n
+        codes = np.asarray(df['code']) if 'code' in df.columns else np.array([str(i) for i in range(n)])
+        names = np.asarray(df['name']) if 'name' in df.columns else np.array([''] * n)
 
         # ===== 一票否决（向量化） =====
+        # 改进 (2025-06-15ae): 所有 self 参数在开头提取完毕，后续逻辑为纯函数
         min_credit_score = self.get_param('min_credit_score')
         max_premium = self.get_param('max_premium')
         min_months = self.get_param('min_remaining_months')
         aum_level = self.get_param('aum_level')
+        _stock_weights = self.STOCK_WEIGHTS
+        _bond_weights = self.BOND_WEIGHTS
+        _liquidity_thresholds = self.LIQUIDITY_THRESHOLDS
+        min_liquidity = _liquidity_thresholds.get(aum_level, 500)
 
         # 信用评分（向量化 _estimate_credit_score）
         credit = np.full(n, 100.0)
@@ -549,7 +686,6 @@ class XibuSevenDimensionStrategy(Strategy):
         veto3 = remaining_years * 12 < min_months
         veto4 = (forced_call_days > 0) & (forced_call_days < 15)
         volume_wan = volume * 10000
-        min_liquidity = self.LIQUIDITY_THRESHOLDS.get(aum_level, 500)
         veto5 = volume_wan < min_liquidity
         veto6 = (price <= 0) | (price > 300)
         veto_any = veto1 | veto2 | veto3 | veto4 | veto5 | veto6
@@ -606,8 +742,11 @@ class XibuSevenDimensionStrategy(Strategy):
 
         # 1. 动量（Z-score 加权）
         def _safe_zscore_inplace(arr, out):
-            std = np.std(arr)
-            if std == 0:
+            if len(arr) <= 1:
+                out[:] = 0.0
+                return
+            std = np.std(arr, ddof=1)  # 与 _zscore 的 series.std(ddof=1) 保持一致
+            if std == 0 or np.isnan(std):
                 out[:] = 0.0
             else:
                 np.subtract(arr, np.mean(arr), out=out)
@@ -697,7 +836,7 @@ class XibuSevenDimensionStrategy(Strategy):
         np.clip(D[:, 8], 0, 10.8, out=D[:, 8])
 
         # 10. 流动性
-        base_threshold = self.LIQUIDITY_THRESHOLDS.get(aum_level, 500)
+        base_threshold = _liquidity_thresholds.get(aum_level, 500)
         p_volume_w = p_volume * 10000
         D[:, 9][p_volume_w >= base_threshold * 4] = 9.0
         D[:, 9][(p_volume_w >= base_threshold * 2) & (p_volume_w < base_threshold * 4)] = 6.0
@@ -709,23 +848,8 @@ class XibuSevenDimensionStrategy(Strategy):
         D[:, 10][(p_credit >= 60) & (p_credit < 70)] = 4.0
 
         # ===== 动态市场环境检测 + 权重调整 =====
-        # 改进 (2025-06-15ad): 解耦市场环境检测——直接传入 current_date，不再依赖 self._dates[idx]
-        current_dt = pd.to_datetime(current_date)
-        if self._market_env_cache and self._market_env_ts and (current_dt - self._market_env_ts).seconds < 300:
-            market_env = self._market_env_cache
-        else:
-            avg_change = float(change_pct.mean()) if 'change_pct' in df.columns else 0
-            positive_ratio = float((change_pct > 0).mean()) if 'change_pct' in df.columns else 0.5
-            if avg_change > 0.5 and positive_ratio > 0.6:
-                market_env = 'bull'
-            elif avg_change < -0.5 and positive_ratio < 0.4:
-                market_env = 'bear'
-            else:
-                market_env = 'neutral'
-            self._market_env_cache = market_env
-            self._market_env_ts = current_dt
-
-        sw, bw = self._adjust_weights_by_market(market_env)
+        # 改进 (2025-06-15ae): 市场环境已由 on_data 检测并传入，直接应用
+        sw, bw = _get_market_weights(market_env, _stock_weights, _bond_weights)
 
         # ===== 动态权重应用 =====
         # 向量化模式下子维度分数已含默认权重（如动量满分16.5=0.30*55），
@@ -733,12 +857,12 @@ class XibuSevenDimensionStrategy(Strategy):
         stock_dim_keys = ['momentum', 'sector', 'technical', 'chip', 'volatility', 'news', 'fundamental']
         bond_dim_keys = ['valuation', 'clause', 'liquidity', 'credit']
         for dim_i, key in enumerate(stock_dim_keys):
-            default_w = self.STOCK_WEIGHTS.get(key, 0)
+            default_w = _stock_weights.get(key, 0)
             actual_w = sw.get(key, default_w)
             if default_w > 0 and actual_w != default_w:
                 D[:, dim_i] *= actual_w / default_w
         for dim_j, key in enumerate(bond_dim_keys):
-            default_w = self.BOND_WEIGHTS.get(key, 0)
+            default_w = _bond_weights.get(key, 0)
             actual_w = bw.get(key, default_w)
             if default_w > 0 and actual_w != default_w:
                 D[:, 7 + dim_j] *= actual_w / default_w
@@ -975,25 +1099,31 @@ class XibuSevenDimensionStrategy(Strategy):
         """策略初始化"""
         self._data = data.copy()
         # Defensive: ensure required columns exist with safe defaults
-        if 'premium_ratio' not in self._data.columns:
-            self._data['premium_ratio'] = 15.0
-        self._data['premium_ratio'] = self._data['premium_ratio'].fillna(15.0)
-        if 'change_pct' not in self._data.columns:
-            self._data['change_pct'] = 0.0
-        self._data['change_pct'] = self._data['change_pct'].fillna(0.0)
-        if 'volume' not in self._data.columns:
-            self._data['volume'] = 100000
-        self._data['volume'] = self._data['volume'].fillna(100000)
-        if 'ytm' not in self._data.columns:
-            self._data['ytm'] = 1.0
-        self._data['ytm'] = self._data['ytm'].fillna(0.0)
-        if 'remaining_years' not in self._data.columns:
-            self._data['remaining_years'] = 3.0
-        self._data['remaining_years'] = self._data['remaining_years'].fillna(3.0)
+        # 改进 (2025-06-15ah): 补全所有数据源列，防止 calc_vectorized 中缺失列导致异常值
+        _required_columns = {
+            'premium_ratio': 15.0,
+            'change_pct': 0.0,
+            'volume': 100000.0,
+            'ytm': 1.0,
+            'remaining_years': 3.0,
+            'price': 100.0,
+            'dual_low': 0.0,
+            'forced_call_days': 0,
+            'stock_change_pct': 0.0,
+            'code': '',
+            'name': '',
+        }
+        for col, default in _required_columns.items():
+            if col not in self._data.columns:
+                self._data[col] = default
+                logger.warning(f"[XibuSeven] 数据源缺失列 '{col}'，已填充默认值 {default}")
+            # 对数值列进行 fillna，对字符串列不处理（保持空字符串）
+            if self._data[col].dtype.kind in 'iufc':  # integer, unsigned, float, complex
+                self._data[col] = self._data[col].fillna(default)
         if 'date' in data.columns and len(data) > 0:
             sample_date = data['date'].iloc[0]
             if isinstance(sample_date, date):
-                self._dates = sorted(data['date'].unique())
+                self._dates = sorted(d for d in data['date'].unique() if pd.notna(d))
             else:
                 # 修复 (2025-06-15): date列类型异常时尝试转换，而非直接fallback到当前日期
                 # 原逻辑: self._dates = [datetime.now().date()] -> 导致所有日期相同，策略失效
@@ -1001,9 +1131,9 @@ class XibuSevenDimensionStrategy(Strategy):
                     converted = pd.to_datetime(data['date'], errors='coerce')
                     if converted.isna().all():
                         raise ValueError("date列转换后全为NaT")
-                    data['date'] = converted.dt.date
+                    # 只修改 self._data，不修改 caller 传入的 data，避免副作用
                     self._data['date'] = converted.dt.date
-                    self._dates = sorted(self._data['date'].unique())
+                    self._dates = sorted(d for d in self._data['date'].unique() if pd.notna(d))
                     logger.info(f"[XibuSeven] date列已从 {type(sample_date).__name__} 转换为 date")
                 except Exception as e:
                     logger.error(f"[XibuSeven] date列转换失败: {e}, 回退到当前日期")
@@ -1013,8 +1143,9 @@ class XibuSevenDimensionStrategy(Strategy):
 
     def on_data(self, data: pd.DataFrame, idx: int) -> Optional[list[dict]]:
         """V4.0: 周频调仓 + 动量过滤 + 仓位管理（向量化评分）"""
-        # 改进 (2025-06-15ad): 防御 _dates 空列表，避免后续索引越界
-        assert self._dates and len(self._dates) > 0, "_dates 未初始化"
+        # 改进 (2025-06-15ae): assert 在 -O 模式下会被忽略，改用显式 RuntimeError
+        if not self._dates or len(self._dates) == 0:
+            raise RuntimeError("[XibuSeven] _dates 未初始化")
         current_date = self._dates[idx] if idx < len(self._dates) else datetime.now().date()
         day_data = data.copy()
 
@@ -1041,8 +1172,18 @@ class XibuSevenDimensionStrategy(Strategy):
 
         self._last_rebalance_idx = idx
 
+        # 改进 (2025-06-15af): 使用模块级 _detect_market_env，传入当前时间戳和策略参数 cache_ttl
+        # 改进 (2025-06-15ag): 区分 None 和 0，尊重用户显式设置的 0 值
+        current_ts = pd.Timestamp.now()
+        _cache_ttl_raw = self.get_param('market_env_cache_ttl')
+        _cache_ttl = 300 if _cache_ttl_raw is None else int(_cache_ttl_raw)
+        market_env, self._market_env_ts = _detect_market_env(
+            data, current_ts, self._market_env_cache, self._market_env_ts, cache_ttl_seconds=_cache_ttl
+        )
+        self._market_env_cache = market_env
+
         # 向量化评分
-        scores_list, vetoed_list = self.calc_vectorized(day_data, current_date)
+        scores_list, vetoed_list = self.calc_vectorized(day_data, market_env)
 
         for v in vetoed_list:
             code = v.get('code', '')

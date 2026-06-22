@@ -207,6 +207,12 @@ class EastmoneyAdapter(DataSourceAdapter):
                     return pd.DataFrame()
 
                 data = await response.json()
+                # EM rate-limit detection: rc=101 (freq limit), rc=102 (IP banned)
+                if isinstance(data, dict) and data.get('rc') in (101, 102):
+                    err_msg = f"EM rate-limited: rc={data.get('rc')}"
+                    logger.warning(f"[Eastmoney] {err_msg}")
+                    self._last_error = err_msg
+                    return pd.DataFrame()
                 if not data or 'data' not in data or 'diff' not in data['data']:
                     return pd.DataFrame()
 
@@ -367,10 +373,18 @@ class EastmoneyAdapter(DataSourceAdapter):
             }
             secucodes = []
             for code in batch:
-                market = '.SZ' if code.startswith(('0', '3')) else '.SH'
+                # 市场后缀：SH(6xx), SZ(0/3xx), BJ(4/8xx)
+                if code.startswith('6'):
+                    market = '.SH'
+                elif code.startswith(('4', '8')):
+                    market = '.BJ'
+                else:
+                    market = '.SZ'
                 secucodes.append(f"{code}{market}")
             if secucodes:
-                params['filter'] = f'(SECUCODE="{",".join(secucodes)}")'
+                # EM datacenter filter 语法：IN ("code1","code2")
+                quoted = ','.join(f'"{s}"' for s in secucodes)
+                params['filter'] = f'(SECUCODE in ({quoted}))'
 
             try:
                 async with self._session.get(self.FINANCIAL_URL, params=params) as resp:

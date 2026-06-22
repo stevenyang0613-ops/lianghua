@@ -101,14 +101,14 @@ export class WSReconnect {
     this.useIPC = typeof window !== 'undefined' && !!window.electronAPI?.wsConnect
   }
 
-  connect(overrideUrl?: string): void {
+  async connect(overrideUrl?: string): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') return
     this.isManualClose = false
     if (overrideUrl) this.url = overrideUrl
     this.setState('connecting')
 
     if (this.useIPC) {
-      this.connectViaIPC()
+      await this.connectViaIPC()
     } else {
       this.connectDirect()
     }

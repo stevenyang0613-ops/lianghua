@@ -138,9 +138,11 @@ class TdxDataAdapter(DataSourceAdapter):
             return False
 
     async def disconnect(self) -> None:
-        """断开 TDX 连接"""
+        """断开 TDX 连接（仅清理本地引用，不关闭全局共享连接）"""
         if self._adapter is not None:
-            await asyncio.to_thread(self._adapter.disconnect)
+            # 不调用 _adapter.disconnect()：tdx_adapter 是进程级共享实例，
+            # 关闭它会同时断掉其他消费者的连接。
+            logger.debug("[TDX] Releasing local adapter reference")
         self._adapter = None
         self._connected = False
         logger.info("[TDX] Disconnected")
@@ -317,50 +319,9 @@ class TdxDataAdapter(DataSourceAdapter):
         end_date: Optional[date] = None,
         keywords: Optional[List[str]] = None,
     ) -> pd.DataFrame:
-        """获取公告（简化实现）
-
-        TDX 不直接提供公告 API，此实现利用证券列表返回名称匹配结果，
-        作为公告数据的简化替代。
-        """
-        if self._adapter is None:
-            return pd.DataFrame()
-
-        # 如果指定了代码范围，优先使用
-        if codes:
-            target_codes = codes
-        else:
-            # 获取全量证券列表作为候选
-            all_sec = await asyncio.to_thread(self._adapter.fetch_all_securities)
-            target_codes = list(all_sec.keys())
-
-        # 获取行情作为"公告"内容的简化替代
-        quotes = await asyncio.to_thread(self._adapter.fetch_quotes, target_codes)
-        if not quotes:
-            return pd.DataFrame()
-
-        rows = []
-        for code, data in quotes.items():
-            name = data.get("name", "")
-            # 关键词过滤
-            if keywords:
-                name_lower = name.lower()
-                if not any(kw.lower() in name_lower for kw in keywords):
-                    continue
-            rows.append({
-                "code": code,
-                "name": name,
-                "title": f"[{name}] 行情数据",
-                "publish_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "source": "tdx",
-                "content": f"价格={data.get('price')}, "
-                           f"涨跌幅={data.get('change_pct')}%, "
-                           f"成交量={data.get('vol')}, "
-                           f"成交额={data.get('amount')}",
-            })
-
-        if not rows:
-            return pd.DataFrame()
-        return pd.DataFrame(rows)
+        """TDX 不提供公告 API，返回空 DataFrame"""
+        logger.debug("[TDX] get_announcements not supported by TDX data source, returning empty")
+        return pd.DataFrame()
 
     async def get_industry_data(self) -> pd.DataFrame:
         """获取行业分类数据

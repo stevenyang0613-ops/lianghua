@@ -13,6 +13,7 @@ interface AppState {
 
 // Store创建时立即注册WS状态监听，确保任何组件首次读取时状态已是最新
 // 使用 queueMicrotask 避免同步 setState 导致 React #300 错误
+// 监听器引用保存在模块级，以便在 destroy 时清理
 const _unsub1 = marketWs.onStateChange((state) => {
   queueMicrotask(() => {
     try { useAppStore.setState({ marketWsConnected: state === 'connected' }) } catch { /* isolated */ }
@@ -26,7 +27,7 @@ const _unsub2 = signalsWs.onStateChange((state) => {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       backendConnected: false,
       setBackendConnected: (v) => set({ backendConnected: v }),
       selectedBond: null,
@@ -54,3 +55,9 @@ export const useAppStore = create<AppState>()(
     }
   )
 )
+
+// 导出清理函数供 App 组件在卸载时调用
+export function cleanupWsListeners() {
+  if (typeof _unsub1 === 'function') _unsub1()
+  if (typeof _unsub2 === 'function') _unsub2()
+}

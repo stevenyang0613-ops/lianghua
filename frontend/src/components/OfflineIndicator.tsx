@@ -38,11 +38,12 @@ export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
   }, [])
 
   if (!isOffline) {
+    // 在线模式：极简指示器，不占用大量垂直空间
     return (
-      <div style={{ ...style, padding: '8px 16px', background: '#f6ffed', borderBottom: '1px solid #b7eb8f' }}>
-        <Space>
-          <WifiOutlined style={{ color: '#52c41a' }} />
-          <Text type="success">在线模式</Text>
+      <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '2px 12px', background: 'transparent', borderBottom: 'none' }}>
+        <Space size={4}>
+          <WifiOutlined style={{ color: '#52c41a', fontSize: 11 }} />
+          <Text type="secondary" style={{ fontSize: 11 }}>在线</Text>
         </Space>
       </div>
     )

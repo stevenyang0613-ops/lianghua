@@ -284,6 +284,7 @@ class DataStorage:
         for fix_ddl in (
             "ALTER TABLE quotes_history ALTER COLUMN iv_source SET DATA TYPE VARCHAR",
             "ALTER TABLE daily_snapshots ALTER COLUMN iv_source SET DATA TYPE VARCHAR",
+            "ALTER TABLE quotes_history ALTER COLUMN event_detail SET DATA TYPE VARCHAR",
         ):
             try:
                 self._conn.execute(fix_ddl)

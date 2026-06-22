@@ -169,8 +169,10 @@ export default function PerformanceMonitor() {
     return () => clearInterval(interval)
   }, [])
 
-  // 网络监控
+  // 网络监控 — 仅在启用时拦截 fetch
   useEffect(() => {
+    if (!enabled) return
+
     const originalFetch = window.fetch
     let requestCount = 0
     let failureCount = 0
@@ -217,7 +219,7 @@ export default function PerformanceMonitor() {
     return () => {
       window.fetch = originalFetch
     }
-  }, [])
+  }, [enabled])
 
   // Electron 性能监控
   useEffect(() => {

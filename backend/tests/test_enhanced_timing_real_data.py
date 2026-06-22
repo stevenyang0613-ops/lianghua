@@ -51,7 +51,8 @@ def _make_real_macro_data():
     m.stock_pb_median = 2.1
     m.stock_pe_percentile = 45.0
     m.stock_pb_percentile = 35.0
-    # 以下字段数据源当前不可用，按中性值返回
+    # 以下字段数据源当前不可用，按约定占位值返回（0.0 表示数据缺失，
+    # 因为真实数据不可能恰好为 0；50.0 为行业净流入的中性占位值）
     m.north_bound_net_flow = 0.0
     m.main_force_net_flow = 0.0
     m.industry_net_inflow = 50.0

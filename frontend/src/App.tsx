@@ -25,6 +25,7 @@ import { initPerformanceOptimization } from './utils/performanceOptimization'
 import { logCollector } from './utils/logCollector'
 import { alertManager, initPredefinedRules } from './utils/alertNotification'
 import { startHealthCheck } from './utils/healthCheck'
+import { cleanupWsListeners } from './stores/useAppStore'
 
 const Market = lazy(() => import('./pages/Market'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
@@ -165,6 +166,7 @@ export default function App() {
       window.removeEventListener('unhandledrejection', rejectionGuard)
       marketWs.disconnect()
       signalsWs.disconnect()
+      cleanupWsListeners()
     }
   }, [])
 

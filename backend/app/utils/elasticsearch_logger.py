@@ -53,7 +53,7 @@ class ElasticsearchLogger:
         }
 
         if not await self.client.indices.exists(index=index):
-            await self.client.indices.create(index=index, body=mapping)
+            await self.client.indices.create(index=index, mappings=mapping["mappings"])
 
     async def log(
         self,

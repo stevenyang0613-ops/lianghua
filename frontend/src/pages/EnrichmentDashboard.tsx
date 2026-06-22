@@ -131,6 +131,8 @@ const NAME_MAP: Record<string, string> = {
   _refresh_bond_outstanding_cache: '剩余规模',
   _refresh_call_status_cache: '强赎状态',
   _refresh_stock_name_cache: '正股名称',
+  _refresh_earnings_express_cache: '业绩快报',
+  _refresh_coupon_rate_cache: '票面利率',
   _refresh_north_cache: '北向资金',
   _refresh_margin_cache: '融资融券',
   _refresh_lhb_cache: '龙虎榜',

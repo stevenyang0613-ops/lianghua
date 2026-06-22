@@ -1,7 +1,7 @@
 /**
  * 妙想MX金融数据 — 东方财富官方API数据查询
  */
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Card, Input, Button, Table, Tag, message, Typography, Spin,
   Tabs, Alert, Space, Descriptions, Empty, Divider,
@@ -23,6 +23,30 @@ export default function MXData() {
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<any>(null)
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const s = await getMXStatus()
+      setStatus(s)
+    } catch (e: any) {
+      // 静默失败，不弹出错误提示（避免定时刷新打扰用户）
+      console.warn('[MXData] 状态检查失败:', e?.message || e)
+    }
+  }, [])
+
+  // 改进 (2025-06-20): 自动刷新 MX 状态——组件挂载时检查 + 每 30s 定时刷新 + 页面重新可见时刷新
+  useEffect(() => {
+    checkStatus() // 首次加载
+    const interval = setInterval(checkStatus, 30000) // 30s 定时刷新
+    const onVisibility = () => {
+      if (!document.hidden) checkStatus()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [checkStatus])
 
   const tabs = [
     { key: 'query', label: <span><SearchOutlined /> 数据查询</span> },
@@ -47,15 +71,6 @@ export default function MXData() {
     } catch (e: any) {
       setError(e?.message || '网络错误')
     } finally { setLoading(false) }
-  }
-
-  const checkStatus = async () => {
-    try {
-      const s = await getMXStatus()
-      setStatus(s)
-    } catch (e: any) {
-      message.error(e?.message || '无法获取状态')
-    }
   }
 
   const queryExamples = [

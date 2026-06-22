@@ -25,6 +25,7 @@ from app.models.convertible import RATING_SCORE_MAP, RATING_SCORE_DEFAULT
 from app.engine.data_enrich_utils import (
     load_cache as _load_cache_impl, save_cache as _save_cache_impl, fresh as _fresh_impl,
     safe_float as _sf_impl, record_refresh_metric, load_refresh_metrics,
+    _lock_file_path, _acquire_file_lock,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,12 @@ _CALL_STATUS_CACHE = _CACHE_DIR / "bond_call_status.json"
 _STOCK_NAME_CACHE = _CACHE_DIR / "stock_names.json"
 _BOND_PRICE_CACHE = _CACHE_DIR / "bond_price.json"
 _COUPON_RATE_CACHE = _CACHE_DIR / "bond_coupon_rate.json"
+_MAIN_BIZ_CACHE = _CACHE_DIR / "stock_main_biz.json"
+_ANALYST_RANK_CACHE = _CACHE_DIR / "stock_analyst_rank.json"
+_MACRO_CPI_CACHE = _CACHE_DIR / "macro_cpi.json"
+_MACRO_PPI_CACHE = _CACHE_DIR / "macro_ppi.json"
+_MACRO_M2_CACHE = _CACHE_DIR / "macro_m2.json"
+_MACRO_LPR_CACHE = _CACHE_DIR / "macro_lpr.json"
 
 _industry_map: dict[str, str] = {}
 _industry_loaded = False
@@ -234,6 +241,7 @@ def _record_refresh_metric(name: str, elapsed_s: float, count: int, status: str 
     """
     if "_inproc" in name:
         return
+    logger.info(f"[DataEnrich][DEBUG] _record_refresh_metric: {name} status={status} count={count}")
     # 同步写入共享 metrics 文件（带文件锁，兼容 runner 子进程）
     record_refresh_metric(_METRICS_FILE, name, elapsed_s, count, status, error, extra)
     # 同时更新内存，保证 get_refresh_metrics 立即返回最新状态
@@ -300,11 +308,16 @@ def _write_metrics_to_file():
     """将内存中的 refresh metrics 持久化到 JSON 文件（含 stale 标记计算）。
     独立于 _record_refresh_metric 的限频逻辑，可随时强制写入。
     stale 标记同时回写内存，确保 get_refresh_metrics() 和文件内容一致。
+    注意：pending 预注册占位符不写入文件，避免覆盖 runner 子进程的真实结果。
     """
     now = time.time()
     try:
         with _cache_lock:
-            data = dict(_refresh_metrics)
+            data = {k: v for k, v in _refresh_metrics.items() if v.get("status") != "pending"}
+        spot_mem = _refresh_metrics.get("_refresh_spot_cache", {})
+        logger.info(f"[DataEnrich][DEBUG] _write_metrics_to_file: spot_mem_status={spot_mem.get('status')} spot_in_data={'_refresh_spot_cache' in data}")
+        if not data:
+            return
         # 写入文件时强制刷新 stale 标记（不节流）
         _mark_stale_entries(data, now, force=True)
         # 使用统一的 save_cache：原子写入 + _ts 注入 + NaN 防御
@@ -324,10 +337,16 @@ def _load_metrics_from_file():
         return
     if not runner_metrics:
         return
+    logger.info(f"[DataEnrich][DEBUG] load_metrics_from_file: spot={runner_metrics.get('_refresh_spot_cache',{}).get('status')}, ts={runner_metrics.get('_refresh_spot_cache',{}).get('ts')}")
     with _cache_lock:
         for name, entry in runner_metrics.items():
-            # 以较新的为准：比较时间戳
             mem = _refresh_metrics.get(name)
+            # 内存中若是 pending 占位符，直接用文件中的真实结果替换
+            if mem and mem.get("status") == "pending" and entry.get("status") != "pending":
+                logger.info(f"[DataEnrich][DEBUG] replacing pending {name} with file entry status={entry.get('status')} ts={entry.get('ts')}")
+                _refresh_metrics[name] = entry
+                continue
+            # 否则按时间戳较新为准
             if mem and mem.get("ts") and entry.get("ts"):
                 try:
                     if mem["ts"] >= entry["ts"]:
@@ -708,6 +727,7 @@ def _fill_pe_pb_from_ths(codes: list[str], pe_map: dict, pb_map: dict, sina_map:
     若 sys.platform=='darwin' 且未设置 LH_MGMT_TRY_CNINFO=1，自动跳过（不浪费 2-3min）。
     """
     # AGENTS.md #48: macOS sandbox 中 py_mini_racer 不可用，跳过 THS 以免每个调用阻塞 5-10s
+    # 非 macOS 环境自动启用，无需显式设置环境变量
     if sys.platform == 'darwin' and not os.environ.get('LH_MGMT_TRY_CNINFO'):
         logger.debug("[DataEnrich] THS PE/PB fallback skipped (macOS sandbox + no LH_MGMT_TRY_CNINFO)")
         return
@@ -1587,8 +1607,8 @@ def _refresh_mgmt_cache():
             except Exception as e_ggcg:
                 logger.warning(f"[DataEnrich] Mgmt EM ggcg (fallback) failed: {type(e_ggcg).__name__}: {str(e_ggcg)[:100]}")
 
-        # Source 3 (opt-in): cninfo - 默认跳过，需设 LH_MGMT_TRY_CNINFO=1
-        if os.environ.get("LH_MGMT_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
+        # Source 3 (opt-in): cninfo - 非 macOS 环境自动启用，macOS sandbox 需设 LH_MGMT_TRY_CNINFO=1
+        if sys.platform != 'darwin' or os.environ.get("LH_MGMT_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
             try:
                 df_cninfo = ak.stock_hold_management_detail_cninfo(symbol="增持")
                 count_before = len(result)
@@ -1602,6 +1622,8 @@ def _refresh_mgmt_cache():
                 logger.info(f"[DataEnrich] Mgmt cninfo (opt-in): added {len(result) - count_before}")
             except Exception as e_cninfo:
                 logger.info(f"[DataEnrich] Mgmt cninfo (opt-in) skipped: {type(e_cninfo).__name__}: {str(e_cninfo)[:80]}")
+        else:
+            logger.debug("[DataEnrich] Mgmt cninfo skipped (macOS sandbox + no LH_MGMT_TRY_CNINFO)")
 
         if result:
             _set_global_map("_mgmt_map", result)
@@ -2579,8 +2601,8 @@ def _refresh_pledge_cache():
     except Exception as e:
         logger.warning(f'[DataEnrich] Pledge EM failed: {e}')
 
-    # CNINFO fallback — 仅在显式启用时尝试（macOS sandbox 中通常会失败，见 AGENTS.md #48）
-    if os.environ.get("LH_PLEDGE_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
+    # CNINFO fallback — 非 macOS 环境自动启用，macOS sandbox 需设 LH_PLEDGE_TRY_CNINFO=1
+    if sys.platform != 'darwin' or os.environ.get("LH_PLEDGE_TRY_CNINFO", "").lower() in ("1", "true", "yes"):
         try:
             df2 = ak.stock_cg_equity_mortgage_cninfo()
             result2 = {}
@@ -2604,6 +2626,8 @@ def _refresh_pledge_cache():
                 return
         except Exception as e2:
             logger.warning(f'[DataEnrich] Pledge CNINFO failed: {e2}')
+    else:
+        logger.debug("[DataEnrich] Pledge CNINFO skipped (macOS sandbox + no LH_PLEDGE_TRY_CNINFO)")
 
     # [TDX] fallback: TDX 无法提供质押比例数据，仅做日志记录
     _ensure_bond_stock_codes()
@@ -2955,7 +2979,7 @@ async def enrich_quotes(bonds: list) -> list:
     def _needs_reload(name: str, ttl: float, min_size: int = 0) -> bool:
         """Check if a per-cache reload is needed based on its own TTL and min size."""
         ref = globals().get(f"_{name}_map")
-        if not ref:
+        if ref is None:
             return True
         if min_size > 0 and len(ref) < min_size:
             return True
@@ -3263,13 +3287,15 @@ async def enrich_quotes(bonds: list) -> list:
                     rz_ratio = margin.get("rz_ratio")
                     if rz_ratio is not None and rz_ratio > 0:
                         sp = spot_ref.get(stock_code, {})
-                        if sp and sp.get("volume") and sp.get("turnover_rate") and sp["turnover_rate"] > 0:
-                            # 流通市值 ≈ 成交额 / (换手率/100)
-                            vol_val = sp["volume"]
-                            circ_mv = vol_val / (sp["turnover_rate"] / 100)
-                            est_rzye = circ_mv * rz_ratio / 100
-                            if est_rzye > 0:
-                                b.margin_balance = round(est_rzye / 1e8, 2)
+                        if isinstance(sp, dict) and sp.get("volume") and sp.get("turnover_rate"):
+                            turnover_rate = sp["turnover_rate"]
+                            if turnover_rate and turnover_rate > 0:
+                                # 流通市值 ≈ 成交额 / (换手率/100)
+                                vol_val = sp["volume"]
+                                circ_mv = vol_val / (turnover_rate / 100)
+                                est_rzye = circ_mv * rz_ratio / 100
+                                if est_rzye > 0:
+                                    b.margin_balance = round(est_rzye / 1e8, 2)
             else:
                 b.margin_balance = margin
         else:
@@ -3615,6 +3641,10 @@ async def start_background_refresh():
         if callable(obj)
         and getattr(obj, "_REGISTER_METRIC", False) is True
     )
+    # 先加载 runner 子进程已写入共享 metrics 文件的真实结果，
+    # 避免随后补 pending 占位符时把 spot/vol/fund_flow/bond_price 等
+    # 实际已完成的指标覆盖成 pending。
+    _load_metrics_from_file()
     _startup_ts_iso = datetime.now().isoformat()
     with _cache_lock:
         for name in _PRE_REGISTERED_METRICS:
@@ -4122,8 +4152,18 @@ def _refresh_north_cache():
         if not _bond_stock_codes:
             _ensure_bond_stock_codes()
         bond_codes = sorted(_bond_stock_codes)[:250] if _bond_stock_codes else []
-        if not bond_codes:
-            logger.debug("[DataEnrich] North: _bond_stock_codes empty, skipping per-stock query")
+        all_codes = bond_codes[:]
+        if not all_codes:
+            logger.debug("[DataEnrich] North: _bond_stock_codes empty, fetching all A-share codes")
+            try:
+                df_all = ak.stock_info_a_code_name()
+                if df_all is not None and not df_all.empty:
+                    a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
+                    all_codes = a_codes
+            except Exception as e:
+                logger.debug(f"[DataEnrich] North: failed to get all A-share codes: {e}")
+        if not all_codes:
+            logger.debug("[DataEnrich] North: no codes available, skipping per-stock query")
 
         def _fetch_one(code: str):
             try:
@@ -4154,13 +4194,17 @@ def _refresh_north_cache():
             except Exception:
                 return None
 
-        if bond_codes:
+        if all_codes:
+            processed = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-                futures = {pool.submit(_fetch_one, c): c for c in bond_codes}
+                futures = {pool.submit(_fetch_one, c): c for c in all_codes}
                 for fut in concurrent.futures.as_completed(futures, timeout=180):
                     r = fut.result()
                     if r:
                         result[r[0]] = r[1]
+                    processed += 1
+                    if processed % 200 == 0:
+                        _save_cache(_NORTH_CACHE, result)
 
         if result:
             _set_global_map("_north_map", result)
@@ -4285,6 +4329,15 @@ def _refresh_lhb_cache():
                 "_data_source": "lhb_stock_statistic_em",
             }
         if result:
+            # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
+            for code in _bond_stock_codes:
+                if code not in result:
+                    result[code] = {
+                        "lhb_count": 0,
+                        "_prev_count": 0,
+                        "_delta": 0,
+                        "_data_source": "zero_fill",
+                    }
             _set_global_map("_lhb_map", result)
             _save_cache(_LHB_CACHE, result)
             logger.info(f"[DataEnrich] LHB: {len(result)} stocks refreshed (含 _delta 增量)")
@@ -4330,6 +4383,10 @@ def _refresh_block_trade_cache():
             amount = _sf(r.get("成交额"))
             if amount and amount > 0:
                 result[code] = {"block_trade_amount": amount}
+        # Zero-fill: 无大宗交易的股票显式写入 0，区分"无交易"与"数据缺失"
+        for code in _bond_stock_codes:
+            if code not in result:
+                result[code] = {"block_trade_amount": 0}
         if result:
             _set_global_map("_block_trade_map", result)
             _save_cache(_BLOCK_TRADE_CACHE, result)

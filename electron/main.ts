@@ -1,7 +1,11 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, globalShortcut, shell, dialog, NativeImage, safeStorage, screen } from 'electron'
 
+const isDev = !app.isPackaged
+
 // 抑制开发模式下的Electron安全警告（打包后自动消失）
-process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+if (isDev) {
+  process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+}
 // Dynamic import for electron-updater (optional dependency)
 let autoUpdater: any = null
 try {
@@ -22,8 +26,6 @@ let mainWindow: BrowserWindow | null = null
 let pythonProcess: ChildProcess | null = null
 let tray: Tray | null = null
 let isQuitting = false
-
-const isDev = !app.isPackaged
 
 // ---- Resource path helper ----
 function resourcePath(relativePath: string): string {
@@ -83,12 +85,74 @@ function startFrontendServer(): Promise<number> {
       '.woff2': 'font/woff2',
       '.ttf': 'font/ttf',
       '.eot': 'application/vnd.ms-fontobject',
+      '.map': 'application/json',
     }
 
     const server = http.createServer((req, res) => {
       try {
         // Normalize URL and prevent directory traversal
         const urlPath = new URL(req.url || '/', `http://localhost:${FRONTEND_PORT}`).pathname
+
+        // Proxy API and health requests to the backend server
+        if (urlPath.startsWith('/api/') || urlPath.startsWith('/health')) {
+          // Path-based timeout: slow refresh endpoints need more time
+          const PROXY_TIMEOUT_MS = urlPath.includes('/refresh')
+            ? 120000   // 2 min for data-refresh endpoints
+            : urlPath.startsWith('/health')
+            ? 10000    // 10 s for health checks
+            : 30000    // 30 s default
+
+          const proxyReq = http.request(
+            {
+              hostname: BACKEND_HOST,
+              port: BACKEND_PORT,
+              path: req.url,
+              method: req.method,
+              headers: {
+                ...req.headers,
+                host: `${BACKEND_HOST}:${BACKEND_PORT}`,
+              },
+              timeout: PROXY_TIMEOUT_MS,
+            },
+            (proxyRes) => {
+              res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
+              proxyRes.on('error', (err) => {
+                console.error(`[FrontendServer] Proxy response error for ${req.url}: ${err.message}`)
+                if (!res.writableEnded) {
+                  res.writeHead(502, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ detail: 'Backend response error' }))
+                }
+              })
+              proxyRes.pipe(res)
+            }
+          )
+          proxyReq.on('error', (err) => {
+            console.error(`[FrontendServer] Proxy error for ${req.url}: ${err.message}`)
+            if (!res.writableEnded) {
+              res.writeHead(502, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ detail: 'Backend unavailable' }))
+            }
+          })
+          proxyReq.on('timeout', () => {
+            proxyReq.destroy()
+            if (!res.writableEnded) {
+              res.writeHead(504, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ detail: 'Backend timeout' }))
+            }
+          })
+          req.on('error', (err) => {
+            console.error(`[FrontendServer] Client request error for ${req.url}: ${err.message}`)
+            proxyReq.destroy()
+          })
+          req.on('close', () => {
+            if (req.destroyed) {
+              proxyReq.destroy()
+            }
+          })
+          req.pipe(proxyReq)
+          return
+        }
+
         let filePath = path.join(frontendDir, urlPath === '/' ? 'index.html' : urlPath)
 
         // Security: ensure the resolved path is within frontendDir
@@ -106,12 +170,18 @@ function startFrontendServer(): Promise<number> {
         const ext = path.extname(filePath).toLowerCase()
         const contentType = mimeTypes[ext] || 'application/octet-stream'
 
-        const data = fs.readFileSync(filePath)
+        const stream = fs.createReadStream(filePath)
+        stream.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(404)
+            res.end('Not Found')
+          }
+        })
         res.writeHead(200, {
           'Content-Type': contentType,
           'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=86400',
         })
-        res.end(data)
+        stream.pipe(res)
       } catch (e) {
         res.writeHead(404)
         res.end('Not Found')
@@ -197,6 +267,58 @@ function recordCrash(type: CrashReport['type'], message: string, stack?: string)
 // ---- WebSocket connection pool ----
 const wsConnections = new Map<string, WebSocket>()
 const MAX_WS_CONNECTIONS = 64
+
+// 改进 (2025-06-20): WebSocket 心跳与死连接清理
+const WS_HEARTBEAT_INTERVAL_MS = 30000  // 30s 发一次 ping
+const WS_HEARTBEAT_TIMEOUT_MS = 60000 // 60s 未收到 pong 视为死连接
+const wsHeartbeatTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function _cleanupWsConnection(wsId: string) {
+  const ws = wsConnections.get(wsId)
+  if (ws) {
+    ws.removeAllListeners()
+    ws.close()
+    wsConnections.delete(wsId)
+  }
+  const timer = wsHeartbeatTimers.get(wsId)
+  if (timer) {
+    clearTimeout(timer)
+    wsHeartbeatTimers.delete(wsId)
+  }
+}
+
+function _startWsHeartbeat(wsId: string) {
+  const timer = setInterval(() => {
+    const ws = wsConnections.get(wsId)
+    if (!ws) {
+      _cleanupWsConnection(wsId)
+      return
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping()
+      // 设置 pong 超时检测
+      const pongTimeout = setTimeout(() => {
+        console.warn(`[WS ${wsId}] Pong timeout, closing dead connection`)
+        _cleanupWsConnection(wsId)
+        mainWindow?.webContents.send('ws-state', wsId, 'disconnected', 1006, 'Heartbeat timeout')
+      }, WS_HEARTBEAT_TIMEOUT_MS)
+      ws.once('pong', () => clearTimeout(pongTimeout))
+    } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      _cleanupWsConnection(wsId)
+    }
+  }, WS_HEARTBEAT_INTERVAL_MS)
+  wsHeartbeatTimers.set(wsId, timer as unknown as ReturnType<typeof setTimeout>)
+}
+
+// 全局定时器：每 60s 扫描一次 wsConnections，清理所有已关闭的连接
+setInterval(() => {
+  for (const [wsId, ws] of wsConnections.entries()) {
+    if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      console.log(`[WS] Cleanup dead connection ${wsId}`)
+      _cleanupWsConnection(wsId)
+    }
+  }
+}, 60000)
 
 // ---- Child windows ----
 const childWindows = new Map<number, BrowserWindow>()
@@ -1232,8 +1354,9 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // file:// 协议加载时需要禁用webSecurity以允许跨域请求（http:// + ws://127.0.0.1）
-      webSecurity: false,
+      // 开发模式通过 file:// 协议加载时需要禁用 webSecurity 以允许跨域请求
+      // 生产环境使用 http://127.0.0.1:8766 加载，保持 webSecurity 启用
+      webSecurity: isDev ? false : true,
     },
   })
 
@@ -1421,13 +1544,10 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
       return { ok: false, state: 'error', error: `WS connection limit reached (${MAX_WS_CONNECTIONS})` }
     }
     // Close existing connection for this wsId
-    // 静默关闭：移除所有监听器避免触发 ws-state:disconnected 事件
-    // 这是内部清理，不应让renderer感知（否则会导致重连循环）
+    // 清理旧连接时必须同时清理心跳定时器，否则旧的 setInterval 会持续运行
     const existing = wsConnections.get(wsId)
     if (existing) {
-      existing.removeAllListeners()
-      existing.close()
-      wsConnections.delete(wsId)
+      _cleanupWsConnection(wsId)
     }
 
     const ws = new WebSocket(url)
@@ -1452,6 +1572,12 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
     ws.on('close', (code: number, reason: Buffer) => {
       wsConnections.delete(wsId)
       mainWindow?.webContents.send('ws-state', wsId, 'disconnected', code, reason.toString())
+      // 清理心跳定时器
+      const timer = wsHeartbeatTimers.get(wsId)
+      if (timer) {
+        clearTimeout(timer)
+        wsHeartbeatTimers.delete(wsId)
+      }
     })
 
     ws.on('error', (err: Error) => {
@@ -1471,6 +1597,8 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
       const openHandler = () => {
         wsAccepted = true
         finalizeResolve({ ok: true, state: 'connected' })
+        // 改进 (2025-06-20): 连接成功后启动心跳
+        _startWsHeartbeat(wsId)
         // IPC Promise resolve 后再发送 ws-state 事件，确保 renderer 端先处理 IPC 结果
         mainWindow?.webContents.send('ws-state', wsId, 'connected')
       }
@@ -1509,6 +1637,9 @@ ipcMain.handle('ws-send', async (_event, wsId: string, message: string) => {
   const ws = wsConnections.get(wsId)
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return { ok: false, error: `WebSocket ${wsId} not connected` }
+  }
+  if (typeof message !== 'string') {
+    return { ok: false, error: 'Message must be a string' }
   }
   try {
     ws.send(message)
@@ -1643,7 +1774,7 @@ restartBackend = (isManualRestart = false) => {
     console.warn('[Electron] restartBackend fallback timeout firing')
     startPythonBackend()
     restartInFlight = false
-  }, 3000)
+  }, 8000)
   if (pythonProcess) {
     const oldProcess = pythonProcess
     pythonProcess = null
@@ -1881,7 +2012,14 @@ ipcMain.handle('send-to-window', (_event, windowId: number, channel: string, dat
   return false
 })
 
+const BROADCAST_CHANNELS = new Set([
+  'refresh-data', 'navigate', 'export-report', 'backend-ready',
+  'backend-error', 'ws-state', 'ws-message', 'resource-updated',
+  'update-status', 'window-focus', 'prefetched-market-data'
+])
+
 ipcMain.on('broadcast', (_event, channel: string, data: unknown) => {
+  if (!BROADCAST_CHANNELS.has(channel)) return
   mainWindow?.webContents.send(channel, data)
   for (const win of childWindows.values()) {
     win.webContents.send(channel, data)
@@ -1925,15 +2063,15 @@ function setupAutoUpdater() {
     mainWindow?.webContents.send('update-status', updateStatus)
 
     if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
+      dialog.showMessageBox(mainWindow as any, {
         type: 'info',
         title: '发现新版本',
         message: `发现新版本 ${info.version}`,
         detail: '是否立即下载更新？',
         buttons: ['下载', '稍后'],
         defaultId: 0,
-      }, (response) => {
-        if (response === 0) {
+      }).then((result: any) => {
+        if (result.response === 0) {
           autoUpdater.downloadUpdate()
         }
       })
@@ -1965,15 +2103,15 @@ function setupAutoUpdater() {
     mainWindow?.webContents.send('update-status', updateStatus)
 
     if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
+      dialog.showMessageBox(mainWindow as any, {
         type: 'question',
         title: '更新已下载',
         message: `新版本 ${info.version} 已准备就绪`,
         detail: '是否立即安装更新？应用将重新启动。',
         buttons: ['立即安装', '稍后安装'],
         defaultId: 0,
-      }, (response) => {
-        if (response === 0) {
+      }).then((result: any) => {
+        if (result.response === 0) {
           autoUpdater.quitAndInstall()
         }
       })
@@ -2145,10 +2283,12 @@ if (!gotTheLock) {
     setupAutoUpdater()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      if (mainWindow) {
+        mainWindow.show()
+        mainWindow.moveTop()
+        mainWindow.focus()
+      } else if (BrowserWindow.getAllWindows().length === 0) {
         createWindow().catch((err: any) => console.error('[Electron] activate createWindow failed:', err))
-      } else {
-        mainWindow?.show()
       }
     })
   })
@@ -2196,6 +2336,9 @@ if (!gotTheLock) {
       const crashPath = path.join(app.getPath('userData'), 'crash-reports.json')
       fs.writeFileSync(crashPath, JSON.stringify(crashReports.slice(0, 20), null, 2))
     } catch {}
+    for (const [id, win] of childWindows) {
+      try { win.close() } catch {}
+    }
     if (pythonProcess) {
       killPythonProcessGroup(pythonProcess)
       pythonProcess = null

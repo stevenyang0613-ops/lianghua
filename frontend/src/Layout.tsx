@@ -1,9 +1,8 @@
-import { useState } from 'react'
-import { Drawer, Button, Badge } from 'antd'
+import { useState, lazy, Suspense } from 'react'
+import { Drawer, Button, Badge, Spin } from 'antd'
 import { MenuOutlined, BellOutlined } from '@ant-design/icons'
 import Sidebar from './components/Sidebar'
 import StatusBar from './components/StatusBar'
-import DetailPanel from './components/DetailPanel'
 import ThemeToggle from './components/ThemeToggle'
 import AlertPanel from './components/AlertPanel'
 import TitleBar from './components/electron/TitleBar'
@@ -15,6 +14,9 @@ import { useAlertStore } from './stores/useAlertStore'
 import { isElectron } from './utils/electron'
 import './styles/electron.css'
 import type React from 'react'
+
+// 懒加载详情面板 — 仅当有选中的债券时才加载
+const DetailPanel = lazy(() => import('./components/DetailPanel'))
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const selectedBond = useAppStore((s) => s.selectedBond)
@@ -67,7 +69,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Sidebar collapsed={false} onCollapse={() => {}} />
           </Drawer>
         ) : (
-          <div style={{ width: sidebarCollapsed ? 80 : 200, borderRight: '1px solid #f0f0f0', overflow: 'auto', transition: 'width 0.2s', flexShrink: 0 }}>
+          <div style={{ width: sidebarCollapsed ? 80 : 200, borderRight: '1px solid var(--border-color, #f0f0f0)', overflow: 'auto', transition: 'width 0.2s', flexShrink: 0, willChange: 'width' }}>
             <Sidebar collapsed={sidebarCollapsed} onCollapse={setSidebarCollapsed} />
           </div>
         )}
@@ -84,7 +86,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        {selectedBond && !isMobile && <DetailPanel />}
+        {selectedBond && !isMobile && (
+          <Suspense fallback={<div style={{ width: 320, borderLeft: '1px solid var(--border-color, #e8e8e8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>}>
+            <DetailPanel />
+          </Suspense>
+        )}
       </div>
 
       <StatusBar />

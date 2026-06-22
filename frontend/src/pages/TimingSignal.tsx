@@ -69,7 +69,7 @@ const getScoreColor = (score: number) => {
       if (data && data.factors && data.factors.length > 0) {
         setSignal(data);
         setLoadError(null);
-      } else if (data && data.marketEnv === 'unknown' && data.totalScore === 0) {
+      } else if (data && data.marketEnv === 'unknown' && (data.totalScore === 0 || data.totalScore === null)) {
         // 缓存尚未准备好，后端正在后台刷新，前端显示加载中而非错误
         setSignal(null);
         setLoadError(null);
@@ -109,8 +109,9 @@ const getScoreColor = (score: number) => {
       good: { color: 'success', text: '良好' },
       warning: { color: 'warning', text: '警示' },
       danger: { color: 'error', text: '危险' },
+      missing: { color: 'default', text: '数据缺失' },
     };
-    const c = config[status] || config.warning;
+    const c = config[status] || config.missing;
     return <Tag color={c.color}>{c.text}</Tag>;
   };
 
@@ -119,8 +120,9 @@ const getScoreColor = (score: number) => {
       bullish: { color: 'green', text: '看多', icon: <RiseOutlined /> },
       bearish: { color: 'red', text: '看空', icon: <FallOutlined /> },
       neutral: { color: 'blue', text: '中性', icon: <DashboardOutlined /> },
+      missing: { color: 'default', text: '数据不足', icon: <ExclamationCircleOutlined /> },
     };
-    const c = config[signal] || config.neutral;
+    const c = config[signal] || config.missing;
     return <Tag color={c.color} icon={c.icon}>{c.text}</Tag>;
   };
 
@@ -140,6 +142,9 @@ const getScoreColor = (score: number) => {
   const isEnhanced = signal?.modelVersion === 'v4.0-enhanced' || (signal?.factors?.length ?? 0) > 4;
   const hasFactors = factors.length > 0;
 
+  const displayTotalScore = signal?.totalScore != null ? signal.totalScore : null;
+  const gaugeValue = displayTotalScore ?? 0;
+
   // 仪表盘图表配置
   const gaugeOption = {
     series: [{
@@ -153,21 +158,22 @@ const getScoreColor = (score: number) => {
           color: [[0.3, '#ff4d4f'], [0.5, '#faad14'], [0.7, '#1890ff'], [1, '#52c41a']],
         },
       },
-      pointer: {
+      pointer: displayTotalScore != null ? {
         icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
         length: '60%', width: 10, offsetCenter: [0, '-10%'],
         itemStyle: { color: 'auto' },
-      },
+      } : undefined,
       axisTick: { length: 8, lineStyle: { color: 'auto', width: 2 } },
       splitLine: { length: 15, lineStyle: { color: 'auto', width: 3 } },
       axisLabel: { color: '#666', fontSize: 12, distance: -50 },
       title: { offsetCenter: [0, '30%'], fontSize: 16 },
       detail: {
         valueAnimation: true,
-        formatter: '{value}分',
+        formatter: displayTotalScore != null ? '{value}分' : 'N/A',
         fontSize: 32, offsetCenter: [0, '0%'],
+        color: displayTotalScore != null ? 'auto' : '#999',
       },
-      data: [{ value: signal?.totalScore || 0, name: '择时评分' }],
+      data: [{ value: gaugeValue, name: '择时评分' }],
     }],
   };
 
@@ -188,8 +194,8 @@ const getScoreColor = (score: number) => {
     series: [{
       type: 'radar',
       data: [{
-        value: factors.map(f => f.score),
-        name: '当前得分',
+        value: factors.map(f => f.score ?? 0),
+	        name: '当前得分',
         areaStyle: { color: 'rgba(24, 144, 255, 0.25)' },
         lineStyle: { color: '#1890ff', width: 2 },
         itemStyle: { color: '#1890ff' },
@@ -257,9 +263,9 @@ const getScoreColor = (score: number) => {
           <Card>
             <Statistic
               title="择时评分"
-              value={signal?.totalScore || 0}
-              suffix="/ 100分"
-              valueStyle={{ color: getScoreColor(signal?.totalScore || 0) }}
+              value={signal?.totalScore != null ? signal.totalScore : 'N/A'}
+              suffix={signal?.totalScore != null ? '/ 100分' : undefined}
+              valueStyle={{ color: signal?.totalScore != null ? getScoreColor(signal.totalScore) : '#999' }}
             />
           </Card>
         </Col>
@@ -425,79 +431,82 @@ const getScoreColor = (score: number) => {
           expandIconPosition="end"
           style={{ border: 'none' }}
         >
-          {factors.map((factor: TimingFactor, idx: number) => {
-            const icon = factor.icon || '';
-            const catColor = getCategoryColor(icon);
-            const hasSub = factor.subFactors && factor.subFactors.length > 0;
+	          {factors.map((factor: TimingFactor, idx: number) => {
+	            const icon = factor.icon || '';
+	            const catColor = getCategoryColor(icon);
+	            const hasSub = factor.subFactors && factor.subFactors.length > 0;
+	            const factorScoreVal = factor.score ?? 0;
+	            const factorMaxVal = factor.maxScore || 1;
+	            const factorPct = factor.score != null ? (factorScoreVal / factorMaxVal) * 100 : 0;
 
-            return (
-              <Collapse.Panel
-                key={icon || `factor-${idx}`}
-                header={
-                  <Row align="middle" style={{ width: '100%' }}>
-                    <Col span={4}>
-                      <Space>
-                        <span style={{ color: catColor, fontSize: 16 }}>{getCategoryIcon(icon)}</span>
-                        <span style={{ fontWeight: 600, fontSize: 14 }}>{factor.name}</span>
-                      </Space>
-                    </Col>
-                    <Col span={5}>
-                      <Tag color="blue">{((factor.weight ?? 0) * 100).toFixed(0)}%权重</Tag>
-                    </Col>
-                    <Col span={8}>
-                      <Progress
-                        percent={(factor.score / (factor.maxScore || 1)) * 100}
-                        format={() => `${factor.score}/${factor.maxScore}`}
-                        strokeColor={getScoreColor((factor.score / (factor.maxScore || 1)) * 100)}
-                        size="small"
-                        style={{ marginBottom: 0 }}
-                      />
-                    </Col>
-                    <Col span={4}>
-                      {getStatusTag(factor.status)}
-                    </Col>
-                    <Col span={3}>
-                      {hasSub && (
-                        <Tag style={{ fontSize: 11 }}>{factor.subFactors!.length}个子因子</Tag>
-                      )}
-                    </Col>
-                  </Row>
-                }
+	            return (
+	              <Collapse.Panel
+	                key={icon || `factor-${idx}`}
+	                header={
+	                  <Row align="middle" style={{ width: '100%' }}>
+	                    <Col span={4}>
+	                      <Space>
+	                        <span style={{ color: catColor, fontSize: 16 }}>{getCategoryIcon(icon)}</span>
+	                        <span style={{ fontWeight: 600, fontSize: 14 }}>{factor.name}</span>
+	                      </Space>
+	                    </Col>
+	                    <Col span={5}>
+	                      <Tag color="blue">{((factor.weight ?? 0) * 100).toFixed(0)}%权重</Tag>
+	                    </Col>
+	                    <Col span={8}>
+	                      <Progress
+	                        percent={factorPct}
+	                        format={() => `${factorScoreVal}/${factorMaxVal}`}
+	                        strokeColor={getScoreColor(factorPct)}
+	                        size="small"
+	                        style={{ marginBottom: 0 }}
+	                      />
+	                    </Col>
+	                    <Col span={4}>
+	                      {getStatusTag(factor.status)}
+	                    </Col>
+	                    <Col span={3}>
+	                      {hasSub && (
+	                        <Tag style={{ fontSize: 11 }}>{factor.subFactors!.length}个子因子</Tag>
+	                      )}
+	                    </Col>
+	                  </Row>
+	                }
               >
                 <div style={{ padding: '0 16px' }}>
                   <p style={{ color: '#666', marginBottom: 12 }}>{factor.description}</p>
                   {hasSub && (
-                    <Table
-                      dataSource={factor.subFactors!.map((sf, i) => ({ ...sf, key: i }))}
-                      columns={[
-                        { title: '子因子', dataIndex: 'name', key: 'name', width: 160 },
-                        {
-                          title: '得分',
-                          key: 'score',
-                          width: 180,
-                          render: (_: any, r: any) => (
-                            <Progress
-                              percent={r.score}
-                              format={() => `${r.score}分`}
-                              strokeColor={getScoreColor(r.score)}
-                              size="small"
-                              style={{ marginBottom: 0 }}
-                            />
-                          ),
-                        },
-                        { title: '权重', key: 'weight', width: 80, render: (_: any, r: any) => `${(r.weight * 100).toFixed(0)}%` },
-                        {
-                          title: '方向',
-                          dataIndex: 'signal',
-                          key: 'signal',
-                          width: 90,
-                          render: (s: string) => getSignalTag(s),
-                        },
-                        { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
-                      ]}
-                      pagination={false}
-                      size="small"
-                    />
+	                    <Table
+	                      dataSource={factor.subFactors!.map((sf, i) => ({ ...sf, key: i }))}
+	                      columns={[
+	                        { title: '子因子', dataIndex: 'name', key: 'name', width: 160 },
+	                        {
+	                          title: '得分',
+	                          key: 'score',
+	                          width: 180,
+	                          render: (_: any, r: any) => (
+	                            <Progress
+	                              percent={r.score != null ? r.score : 0}
+	                              format={() => r.score != null ? `${r.score}分` : 'N/A'}
+	                              strokeColor={r.score != null ? getScoreColor(r.score) : '#d9d9d9'}
+	                              size="small"
+	                              style={{ marginBottom: 0 }}
+	                            />
+	                          ),
+	                        },
+	                        { title: '权重', key: 'weight', width: 80, render: (_: any, r: any) => `${(r.weight * 100).toFixed(0)}%` },
+	                        {
+	                          title: '方向',
+	                          dataIndex: 'signal',
+	                          key: 'signal',
+	                          width: 90,
+	                          render: (s: string) => getSignalTag(s),
+	                        },
+	                        { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+	      ]}
+	      pagination={false}
+	      size="small"
+	    />
                   )}
                 </div>
               </Collapse.Panel>

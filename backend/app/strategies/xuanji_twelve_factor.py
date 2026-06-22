@@ -2,9 +2,12 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 from collections import deque
+import logging
 
 from app.strategies.base import Strategy
 from app.models.backtest import StrategyParam
+
+logger = logging.getLogger(__name__)
 
 
 class XuanjiTwelveFactorStrategy(Strategy):
@@ -214,7 +217,9 @@ class XuanjiTwelveFactorStrategy(Strategy):
             price = day_data['price']
             mask = (cv > 0) & cv.notna() & price.notna()
             if mask.any():
-                parity_premium = (price[mask] / cv[mask] - 1) * 100
+                # 使用 pandas Series 保持索引对齐，避免 numpy array 与 Series 的广播问题
+                _pp_values = np.where(cv[mask] > 0, (price[mask] / cv[mask] - 1) * 100, 0.0)
+                parity_premium = pd.Series(_pp_values, index=day_data.index[mask])
                 layers.loc[mask & (parity_premium < -20)] = "bond_like"
                 layers.loc[mask & (parity_premium > 20)] = "equity_like"
         return layers
@@ -298,7 +303,7 @@ class XuanjiTwelveFactorStrategy(Strategy):
                 continue
             ic_arr = np.array(list(ics))
             ic_mean = ic_arr.mean()
-            ic_std = ic_arr.std()
+            ic_std = ic_arr.std() if len(ic_arr) > 1 else 0.0
             if ic_std > 0:
                 icir = abs(ic_mean) / ic_std
                 ic_stats[key] = round(icir, 4)
@@ -373,6 +378,8 @@ class XuanjiTwelveFactorStrategy(Strategy):
         buffer_days = self.get_param('buffer_days')
 
         if rank <= hold_count:
+            # 排名回到前hold_count，重置缓冲带计数器
+            self._buffer_tracker.pop(code, None)
             return True, f"排名{rank}"
 
         if rank > hold_count + buffer_size:
@@ -444,7 +451,7 @@ class XuanjiTwelveFactorStrategy(Strategy):
         self._peak_prices: dict[str, float] = {}  # 追踪止损用
         self._prev_selected: set[str] = set()
         self._buffer_tracker: dict[str, int] = {}
-        self._dates = sorted(self._data['date'].unique())
+        self._dates = sorted(d for d in self._data['date'].unique() if pd.notna(d))
         self._date_data_map = {d: group for d, group in self._data.groupby('date')}
         self._portfolio_peak = 1.0
         self._portfolio_stopped = False
@@ -457,6 +464,10 @@ class XuanjiTwelveFactorStrategy(Strategy):
         day_data = data.copy()
         if day_data.empty:
             return None
+
+        # 防御: 统一 code 列为字符串类型，避免 int64 vs str 的 isin 匹配失败
+        if 'code' in day_data.columns:
+            day_data['code'] = day_data['code'].astype(str)
 
         # 清理退市债券的缓冲状态
         active_codes = set(day_data['code'].values)
@@ -498,12 +509,14 @@ class XuanjiTwelveFactorStrategy(Strategy):
             if idx - self._portfolio_stop_trigger_idx >= self._portfolio_stop_cooldown:
                 self._portfolio_stopped = False
                 self._portfolio_stop_trigger_idx = -1
+                self._portfolio_peak = 1.0  # 重置峰值，避免旧基准影响新止损
                 logger.info(f"[Xuanji] 组合止损冷却期结束，idx={idx}，恢复策略")
             else:
                 return None
 
         # === 每天检查追踪止损（v5.0 改进）===
-        is_rebalance_day = (idx % self.get_param('rebalance_days') == 0)
+        rebalance_days = self.get_param('rebalance_days')
+        is_rebalance_day = (rebalance_days > 0 and idx % rebalance_days == 0)
         trailing_stop_pct = self.get_param('trailing_stop_pct')
 
         if self._prev_selected:

@@ -607,6 +607,7 @@ class RiskManager:
         code: str,
         current_positions: Dict[str, Position],
         aum: float,
+        current_price: float = 0.0,
     ) -> int:
         """计算最大可开仓数量
 
@@ -630,7 +631,7 @@ class RiskManager:
         available_value = max_single_value - current_value
 
         # 可增加仓位（保守估计：按面值100元计算，实际应从行情获取）
-        estimated_price = 100.0  # TODO: 从行情引擎获取实际价格
+        estimated_price = current_price if current_price and current_price > 0 else 100.0
         max_qty = int(available_value / estimated_price / 100) * 100
 
         return max(0, max_qty)

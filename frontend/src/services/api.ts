@@ -41,7 +41,7 @@ class ApiError extends Error {
 async function refreshAuthToken(): Promise<boolean> {
   try {
     const base = getApiBase()
-    const resp = await fetch(`${base}/health`, { headers: { 'Content-Type': 'application/json' } })
+    const resp = await fetch(`${base}/api/v1/health`, { headers: { 'Content-Type': 'application/json' } })
     if (!resp.ok) return false
     const data = await resp.json()
     const newToken = data?.ws_auth_token
@@ -65,7 +65,11 @@ async function requestAPI<T>(
   // 关键修复：只检查 httpRequest 是否存在，不依赖 isElectron()
   // 因为 isElectron 可能因 preload 加载时序问题返回 false
   if (window.electronAPI?.httpRequest) {
-    const result = await window.electronAPI.httpRequest(method, url, body)
+    const ipcPromise = window.electronAPI.httpRequest(method, url, body)
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('IPC timeout')), 30000)
+    )
+    const result = await Promise.race([ipcPromise, timeoutPromise])
     if (!result.ok) {
       if (result.status === 401) {
         console.warn('[API] IPC proxy got 401, requesting token refresh...')
@@ -705,7 +709,7 @@ export interface ExecutedPosition {
 }
 
 export async function fetchExecutedPositions(limit = 20, offset = 0): Promise<{ positions: ExecutedPosition[]; total: number }> {
-  return (fetchJSON as any)(`${BASE}/signals/executed-positions?limit=${limit}&offset=${offset}`)
+  return fetchJSON<{ positions: ExecutedPosition[]; total: number }>(`${BASE}/signals/executed-positions?limit=${limit}&offset=${offset}`)
 }
 
 export interface SignalHistoryItem {
@@ -1578,10 +1582,10 @@ export async function removeNotificationChannel(channelId: number): Promise<{ st
 
 export interface TimingFactor {
   name: string
-  score: number
+  score: number | null
   maxScore: number
   weight: number
-  status: 'good' | 'warning' | 'danger'
+  status: 'good' | 'warning' | 'danger' | 'missing'
   description: string
   icon?: string
   subFactors?: TimingSubFactor[]
@@ -1589,14 +1593,14 @@ export interface TimingFactor {
 
 export interface TimingSubFactor {
   name: string
-  score: number
+  score: number | null
   weight: number
-  signal: 'bullish' | 'bearish' | 'neutral'
+  signal: 'bullish' | 'bearish' | 'neutral' | 'missing'
   description: string
 }
 
 export interface TimingSignal {
-  totalScore: number
+  totalScore: number | null
   positionLimit: number
   marketEnv: 'bull' | 'bear' | 'neutral' | 'strong_bull' | 'strong_bear' | 'unknown'
   factors: TimingFactor[]

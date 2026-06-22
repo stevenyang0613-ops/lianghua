@@ -1,3 +1,4 @@
+import random
 import os
 import time
 import logging
@@ -11,6 +12,7 @@ import heapq
 import itertools
 import tracemalloc
 import tempfile
+import atexit
 from collections import deque
 from functools import partial
 from pathlib import Path
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, Any
 
 # 改进 (2025-06-15l): 可选依赖加载
 try:
@@ -159,7 +161,7 @@ def _check_numba_cache_size():
         # 更新检查时间戳
         try:
             with open(_check_file, 'w') as f:
-                f.write(str(_time.time()))
+                f.write(str(time.time()))
         except OSError:
             pass
     except Exception as e:
@@ -198,6 +200,10 @@ from app.strategies.base import Strategy
 # 后续 BacktestEngine._has_parquet_engine 将复用此值
 _HAS_PARQUET_ENGINE: Optional[bool] = None
 
+# 改进 (2025-06-15al): 模块级 ThreadPoolExecutor 单例，用于 _fast_rebuild_pareto_front 大 front 并行化
+# 避免每次重建都创建/销毁线程池的开销
+_THREAD_POOL: Optional[concurrent.futures.ThreadPoolExecutor] = None
+
 def _check_parquet_engine() -> bool:
     """检测 pyarrow 或 fastparquet 是否可用（缓存结果）"""
     global _HAS_PARQUET_ENGINE
@@ -208,6 +214,23 @@ def _check_parquet_engine() -> bool:
             or importlib.util.find_spec("fastparquet") is not None
         )
     return _HAS_PARQUET_ENGINE
+
+
+# 改进 (2025-06-15am): 注册 atexit handler 优雅关闭 ThreadPoolExecutor
+# 改进 (2025-06-15ao): 添加 _shutdown 标志防止二次调用 RuntimeError
+@atexit.register
+def _shutdown_thread_pool():
+    global _THREAD_POOL
+    if _THREAD_POOL is not None and not getattr(_THREAD_POOL, '_shutdown', False):
+        try:
+            _THREAD_POOL.shutdown(wait=False)
+            _THREAD_POOL._shutdown = True
+            logger.debug("[_THREAD_POOL] ThreadPoolExecutor 已优雅关闭")
+        except RuntimeError:
+            # 已关闭，忽略
+            pass
+        except Exception as e:
+            logger.warning(f"[_THREAD_POOL] ThreadPoolExecutor 关闭失败: {e}")
 
 
 class Portfolio:
@@ -251,16 +274,35 @@ class Portfolio:
                     reason='无行情数据平仓',
                 ))
 
+    # 改进 (2025-06-15at): debug 日志采样率控制——高并发回测中（5000 只 × 100 天），
+    # 全量 debug 日志会产生 50 万条输出，使用 1/1000 采样率降低 I/O 开销。
+    # 使用 random.random() 避免线程竞争条件，无需锁保护。
+    _safe_price_log_sample_rate = 1000
+
     @staticmethod
     def _safe_price(price) -> float:
-        """防御性 NaN 处理: 返回 0 替代 NaN/None"""
+        """防御性 NaN/inf/极小值处理: 返回 0 替代异常值
+
+        改进 (2025-06-15an): 统一使用 np.isfinite，覆盖 numpy 标量和 Python float 的
+        所有非有限情况（nan, inf, -inf）。对 numpy 类型 np.isfinite 比 math.isnan 更可靠。
+        改进 (2025-06-15ao): 极小值防御——np.float64 下溢值（<1e-15）已丢失精度，
+        按 0 处理避免后续 price*volume 的数值噪声。
+        改进 (2025-06-15at): debug 日志采样率控制——使用 random 避免线程竞争。
+        """
         if price is None:
+            if random.random() < 1 / Portfolio._safe_price_log_sample_rate:
+                logger.debug("[Portfolio._safe_price] price=None, returning 0.0")
             return 0.0
         try:
             p = float(price)
-            import math
-            return 0.0 if math.isnan(p) or math.isinf(p) else p
-        except (ValueError, TypeError):
+            if not np.isfinite(p) or abs(p) < 1e-15:
+                if random.random() < 1 / Portfolio._safe_price_log_sample_rate:
+                    logger.debug(f"[Portfolio._safe_price] price={price} (p={p}) is not finite or <1e-15, returning 0.0")
+                return 0.0
+            return p
+        except (ValueError, TypeError) as e:
+            if random.random() < 1 / Portfolio._safe_price_log_sample_rate:
+                logger.debug(f"[Portfolio._safe_price] price={price} conversion failed: {e}, returning 0.0")
             return 0.0
 
     def sell(self, code: str, price: float, slippage: float,
@@ -269,9 +311,12 @@ class Portfolio:
              reason: str = '') -> None:
         """卖出持仓"""
         if code not in self.holdings:
+            logger.debug(f"[Portfolio.sell] code={code} not in holdings, skipping")
             return
         h = self.holdings.pop(code)
         sell_price = Portfolio._safe_price(price) * (1 - slippage - impact_cost)
+        if sell_price <= 0:
+            logger.debug(f"[Portfolio.sell] code={code} sell_price={sell_price} <= 0, trade recorded with zero profit")
         sell_value = sell_price * h['volume']
         fee = max(sell_value * commission, min_commission)
         profit = sell_value - fee - (h['buy_price'] * h['volume'])
@@ -279,19 +324,26 @@ class Portfolio:
 
         sell_row = code_row_map.get(code)
         name = ''
-        if sell_row is not None:
+        if sell_row is not None and hasattr(sell_row, 'get'):
             try:
                 raw = sell_row.get('name', '') if isinstance(sell_row, dict) else getattr(sell_row, 'name', '')
                 name = str(raw) if raw and str(raw) != 'nan' else ''
             except Exception:
                 name = ''
 
+        # 防御性计算 profit_pct，避免 buy_price <= 0 导致除零
+        if h['buy_price'] > 0:
+            profit_pct = round((sell_price - h['buy_price']) / h['buy_price'] * 100, 2)
+        else:
+            logger.debug(f"[Portfolio.sell] code={code} buy_price={h['buy_price']} <= 0, profit_pct set to 0.0")
+            profit_pct = 0.0
+
         self.trades.append(TradeRecord(
             code=code, name=name,
             buy_date=h['buy_date'], sell_date=current_date,
             buy_price=h['buy_price'], sell_price=sell_price,
             volume=h['volume'],
-            profit_pct=round((sell_price - h['buy_price']) / h['buy_price'] * 100, 2),
+            profit_pct=profit_pct,
             profit_amount=round(profit, 2),
             hold_days=(current_date - h['buy_date']).days,
             reason=reason,
@@ -304,7 +356,16 @@ class Portfolio:
         if code in self.holdings:
             return False
         buy_price = Portfolio._safe_price(price) * (1 + slippage + impact_cost)
+        # 修复 (2025-06-15ap): buy_price <= 0 时无法计算 volume，直接返回 False
+        # 可能原因: 输入 price 为 0/NaN，或 slippage+impact_cost 导致价格为负
+        if buy_price <= 0:
+            logger.warning(f"[Portfolio] buy_price={buy_price} <= 0，跳过买入 {code}")
+            return False
+        # 改进 (2025-06-15am): volume 溢出防御——当 alloc 很大 / buy_price 很小时限制上限
         volume = max(1, int(alloc / buy_price))
+        if volume > 1_000_000_000:
+            logger.warning(f"[Portfolio] volume {volume} 超过上限 1e9，截断到 1e9")
+            volume = 1_000_000_000
         cost = buy_price * volume
         fee = max(cost * commission, min_commission)
 
@@ -325,7 +386,7 @@ class Portfolio:
         val = self.cash
         for code, h in self.holdings.items():
             row = code_row_map.get(code)
-            if row is not None:
+            if row is not None and hasattr(row, 'get'):
                 price = Portfolio._safe_price(row.get('price', h['buy_price']))
                 h['last_price'] = price  # 更新最新价格
                 val += price * h['volume']
@@ -335,7 +396,16 @@ class Portfolio:
 
 
 def _calculate_metrics(equity: list[float], risk_free_rate: float = 0.02) -> PerformanceMetrics:
-    """计算绩效指标，支持可配置无风险利率"""
+    """计算绩效指标，支持可配置无风险利率
+
+    改进 (2025-06-15al): 明确 risk_free_rate 为年化利率（如 0.02=2%/年），
+    内部已按 250 交易日折算为日度无风险利率。传入时请使用年化值。
+    """
+    # 改进 (2025-06-15an): 防御负利率——虽然理论上可能，但当前模型不支持
+    if risk_free_rate < 0:
+        logger.warning(f"[_calculate_metrics] risk_free_rate={risk_free_rate} 为负，已截断到 0")
+        risk_free_rate = 0.0
+
     if len(equity) < 2:
         return PerformanceMetrics()
 
@@ -360,11 +430,13 @@ def _calculate_metrics(equity: list[float], risk_free_rate: float = 0.02) -> Per
 
     # 最大回撤
     peak = np.maximum.accumulate(arr)
-    drawdowns = (arr - peak) / peak
+    drawdowns = np.zeros_like(arr, dtype=float)
+    nonzero = peak != 0
+    drawdowns[nonzero] = (arr[nonzero] - peak[nonzero]) / peak[nonzero]
     max_dd = float(np.min(drawdowns))
 
     # Sharpe (使用可配置的无风险利率)
-    std = float(np.std(returns, ddof=1))
+    std = float(np.std(returns, ddof=1)) if len(returns) > 1 else 0.0
     excess_ret = annual_ret - risk_free_rate
     sharpe = float(excess_ret / (std * np.sqrt(250))) if std > 0 else 0.0
     # 修复: 不限制Sharpe上限, 仅防止极除以零异常
@@ -615,7 +687,26 @@ def _run_single_backtest_file(
     改进 (2025-06-15f): 返回轻量 dict 替代 OptimizationResultItem，减少 pickle 开销。
     改进 (2025-06-15g): 支持 progress_queue 透传 on_progress。
     """
-    data = pd.read_parquet(data_path)
+    # 改进 (2025-06-15ah): 支持 parquet 和 feather 两种数据传递格式
+    # 改进 (2025-06-15ai): 读取异常防御——文件损坏或不存在时返回空结果而非崩溃
+    try:
+        if data_path.endswith('.feather'):
+            data = pd.read_feather(data_path)
+        else:
+            data = pd.read_parquet(data_path)
+    except Exception as e:
+        logger.error(f"[_run_single_backtest_file] 数据文件读取失败 ({data_path}): {e}")
+        return {
+            'params': params,
+            'total_return_pct': 0.0,
+            'annual_return_pct': 0.0,
+            'max_drawdown_pct': 0.0,
+            'sharpe_ratio': 0.0,
+            'sortino_ratio': 0.0,
+            'calmar_ratio': 0.0,
+            'win_rate': 0.0,
+            'total_trades': 0,
+        }
     # 改进 (2025-06-15c): parquet 读取后 date 列恢复为 datetime64，需显式转回 datetime.date
     # 防御: 空 DataFrame 时跳过转换，避免 iloc[0] 抛出 IndexError
     if 'date' in data.columns and len(data) > 0 and not isinstance(data['date'].iloc[0], date):
@@ -658,16 +749,21 @@ def _run_pareto_combo(args_tuple):
     """Pareto 优化进程池 worker：接收参数元组，返回结果 dict + metrics_dict。
 
     包装 _run_single_backtest 使其与进程池兼容，避免闭包不可序列化。
+    改进 (2025-06-15ai): 异常透传——worker 内捕获异常，返回错误标记而非崩溃整个批次。
     """
-    strategy_cls, params, data, commission_pct, slippage_pct, impact_cost_pct, min_commission, risk_free_rate, initial_cash, pareto_metrics = args_tuple
-    result = _run_single_backtest(
-        strategy_cls, params, data,
-        commission_pct, slippage_pct, impact_cost_pct,
-        min_commission, risk_free_rate, initial_cash, None,
-    )
-    item = OptimizationResultItem(**result)
-    metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
-    return result, metrics_dict
+    try:
+        strategy_cls, params, data, commission_pct, slippage_pct, impact_cost_pct, min_commission, risk_free_rate, initial_cash, pareto_metrics = args_tuple
+        result = _run_single_backtest(
+            strategy_cls, params, data,
+            commission_pct, slippage_pct, impact_cost_pct,
+            min_commission, risk_free_rate, initial_cash, None,
+        )
+        item = OptimizationResultItem(**result)
+        metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
+        return result, metrics_dict
+    except Exception as e:
+        logger.warning(f"[_run_pareto_combo] 组合评估失败: {e}")
+        return None, None
 
 
 # 改进 (2025-06-15o): Pareto 进程池 worker（parquet 文件版），大数据量避免重复 pickle
@@ -675,16 +771,21 @@ def _run_pareto_combo_file(args_tuple):
     """Pareto 优化进程池 worker：通过 parquet 文件路径传递数据，避免 DataFrame 重复序列化。
 
     当 data 超过 1MB 时，主进程写入一次临时 parquet，所有 worker 读取同一文件。
+    改进 (2025-06-15ai): 异常透传——worker 内捕获异常，返回错误标记而非崩溃整个批次。
     """
-    strategy_cls, params, data_path, commission_pct, slippage_pct, impact_cost_pct, min_commission, risk_free_rate, initial_cash, pareto_metrics = args_tuple
-    result = _run_single_backtest_file(
-        strategy_cls, params, data_path,
-        commission_pct, slippage_pct, impact_cost_pct,
-        min_commission, risk_free_rate, initial_cash, None,
-    )
-    item = OptimizationResultItem(**result)
-    metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
-    return result, metrics_dict
+    try:
+        strategy_cls, params, data_path, commission_pct, slippage_pct, impact_cost_pct, min_commission, risk_free_rate, initial_cash, pareto_metrics = args_tuple
+        result = _run_single_backtest_file(
+            strategy_cls, params, data_path,
+            commission_pct, slippage_pct, impact_cost_pct,
+            min_commission, risk_free_rate, initial_cash, None,
+        )
+        item = OptimizationResultItem(**result)
+        metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
+        return result, metrics_dict
+    except Exception as e:
+        logger.warning(f"[_run_pareto_combo_file] 组合评估失败: {e}")
+        return None, None
 
 
 def _normalize_date(d) -> date:
@@ -719,13 +820,67 @@ def _normalize_date(d) -> date:
     return d
 
 
+# 改进 (2025-06-15ag): 模块级 crowding distance 计算，用于多目标 Pareto 前沿的 best_item 选择
+def _crowding_distance(front_metrics: list[dict], pareto_metrics: list[str]) -> list[float]:
+    """计算 Pareto 前沿每个解的拥挤距离。
+
+    拥挤距离越大表示该解在目标空间中越独特（周围邻居稀疏）。
+    用于选择"最佳权衡解"——既不过于偏向某一指标，又有足够的代表性。
+
+    Args:
+        front_metrics: 前沿解的指标 dict 列表
+        pareto_metrics: 需要优化的指标名称列表
+
+    Returns:
+        每个解的拥挤距离列表（与 front_metrics 同序）
+    """
+    n = len(front_metrics)
+    if n <= 2:
+        return [float('inf')] * n
+
+    # 改进 (2025-06-15aj): 单指标时 crowding distance 退化为简单排序，直接返回均匀分布的距离
+    if len(pareto_metrics) == 1:
+        m = pareto_metrics[0]
+        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, 0.0))
+        distances = [0.0] * n
+        distances[sorted_indices[0]] = float('inf')
+        distances[sorted_indices[-1]] = float('inf')
+        if n > 2:
+            step = 1.0 / (n - 1)
+            for rank, idx in enumerate(sorted_indices[1:-1], start=1):
+                distances[idx] = rank * step
+        return distances
+
+    distances = [0.0] * n
+    for m in pareto_metrics:
+        # 改进 (2025-06-15ag): KeyError 防御——缺失指标时回退到 0.0
+        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, 0.0))
+        # 边界点（最优和最差）给予无穷大距离，确保保留极端解
+        distances[sorted_indices[0]] = float('inf')
+        distances[sorted_indices[-1]] = float('inf')
+        m_min = front_metrics[sorted_indices[0]].get(m, 0.0)
+        m_max = front_metrics[sorted_indices[-1]].get(m, 0.0)
+        if m_max == m_min:
+            continue
+        # 中间点的拥挤距离：相邻点在归一化后的差值
+        for k in range(1, n - 1):
+            i = sorted_indices[k]
+            diff = (front_metrics[sorted_indices[k + 1]].get(m, m_max) - front_metrics[sorted_indices[k - 1]].get(m, m_min)) / (m_max - m_min)
+            distances[i] += abs(diff)
+    return distances
+
+
 # 改进 (2025-06-15z): 模块级 Pareto 非支配排序函数，避免每次调用 _run_pareto_optimization 重复创建闭包
 def _dominates(a_metrics: dict, b_metrics: dict, pareto_metrics: list[str]) -> bool:
     """a 支配 b: a 在所有指标上不差于 b，且至少一个指标严格优于 b。
 
+    前置条件：a_metrics / b_metrics 必须为 dict（由调用方 _update_pareto_front 保证）。
     改进 (2025-06-15ae):  metrics 已在前端统一为 dict，直接索引访问，
     移除 try/getattr 回退以提升 hot path 性能。
     """
+    # 改进 (2025-06-15ah): assert 在 python -O 模式下会被跳过，改用显式 TypeError
+    if not isinstance(a_metrics, dict) or not isinstance(b_metrics, dict):
+        raise TypeError(f"_dominates 要求 dict metrics, got {type(a_metrics).__name__} and {type(b_metrics).__name__}")
     better_in_any = False
     for m in pareto_metrics:
         a_val = a_metrics[m]
@@ -761,8 +916,13 @@ def _fast_rebuild_pareto_front(front_items, front_metrics, pareto_metrics):
     if len(front_items) <= 100 or len(pareto_metrics) == 0:
         return front_items, front_metrics
     # 使用 pd.DataFrame 一次性转换为 numpy 数组，避免 Python 级双重循环
-    df = pd.DataFrame(front_metrics, columns=pareto_metrics)
-    arr = df.to_numpy(dtype=np.float64)
+    # 改进 (2025-06-15ai): 防御 to_numpy 异常（非数值列混入时）
+    try:
+        df = pd.DataFrame(front_metrics, columns=pareto_metrics)
+        arr = df.to_numpy(dtype=np.float64)
+    except Exception as e:
+        logger.warning(f"[Pareto] 前沿向量化转换失败 ({e})，回退到 Python 级比较")
+        return front_items, front_metrics
     # nan/inf 防御：若存在非有限值，回退到 Python 级精确比较
     if not np.isfinite(arr).all():
         logger.warning("[Pareto] 前沿指标含 nan/inf，跳过向量化重建")
@@ -777,22 +937,59 @@ def _fast_rebuild_pareto_front(front_items, front_metrics, pareto_metrics):
     n = arr.shape[0]
     dominated = np.zeros(n, dtype=np.bool_)
     global_rtol = 1e-12 * max(abs(arr.max()), 1.0)
-    for i in range(n):
-        if dominated[i]:
-            continue
-        ge = np.all(arr[i] + global_rtol >= arr, axis=1)  # i 不差于所有解（含容差）
-        gt = np.any(arr[i] > arr + global_rtol, axis=1)   # i 至少一个严格优于（含容差）
-        is_dominating = ge & gt
-        is_dominating[i] = False
-        dominated |= is_dominating
+    # 改进 (2025-06-15aj): 大 front 时使用 ThreadPoolExecutor 并行化外层循环
+    # numpy 操作释放 GIL，多线程可以真正加速
+    # 改进 (2025-06-15al): 使用模块级 ThreadPoolExecutor 单例，避免每次重建都创建/销毁线程
+    # 改进 (2025-06-15am): 收集所有结果后统一合并，避免多线程竞争修改 dominated 数组
+    if n > 500 and len(pareto_metrics) > 1:
+        try:
+            def _check_dominance(i):
+                if dominated[i]:
+                    return None
+                ge = np.all(arr[i] + global_rtol >= arr, axis=1)
+                gt = np.any(arr[i] > arr + global_rtol, axis=1)
+                is_dominating = ge & gt
+                is_dominating[i] = False
+                return is_dominating
+            global _THREAD_POOL
+            if _THREAD_POOL is None:
+                _THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(8, os.cpu_count() or 2),
+                    thread_name_prefix="pareto_rebuild"
+                )
+            results = list(_THREAD_POOL.map(_check_dominance, range(n)))
+            # 统一合并：避免多线程竞争修改 dominated
+            for is_dominating in results:
+                if is_dominating is not None:
+                    dominated |= is_dominating
+        except Exception as e:
+            logger.warning(f"[Pareto] ThreadPoolExecutor 并行化失败 ({e})，回退到串行")
+            for i in range(n):
+                if dominated[i]:
+                    continue
+                ge = np.all(arr[i] + global_rtol >= arr, axis=1)
+                gt = np.any(arr[i] > arr + global_rtol, axis=1)
+                is_dominating = ge & gt
+                is_dominating[i] = False
+                dominated |= is_dominating
+    else:
+        for i in range(n):
+            if dominated[i]:
+                continue
+            ge = np.all(arr[i] + global_rtol >= arr, axis=1)
+            gt = np.any(arr[i] > arr + global_rtol, axis=1)
+            is_dominating = ge & gt
+            is_dominating[i] = False
+            dominated |= is_dominating
     new_items = [front_items[i] for i in range(n) if not dominated[i]]
     new_metrics = [front_metrics[i] for i in range(n) if not dominated[i]]
     return new_items, new_metrics
 
 
-def _update_pareto_front(front, new_item, new_metrics, pareto_metrics,
+def _update_pareto_front(front: list[tuple[Any, dict]], new_item: OptimizationResultItem, new_metrics: dict,
+                        pareto_metrics: list[str],
                         rebuild_threshold: int = 150, rebuild_interval: int = 50,
-                        last_rebuild_size: int = 0):
+                        last_rebuild_size: int = 0) -> tuple[list[tuple[Any, dict]], int]:
     """增量更新 Pareto 前沿，当前沿增长达到一定比例时触发快速重建。
 
     Args:
@@ -816,28 +1013,134 @@ def _update_pareto_front(front, new_item, new_metrics, pareto_metrics,
             dominated = True
             break
     if not dominated:
-        front = [
-            (e_item, e_metrics) for e_item, e_metrics in front
-            if not _dominates(new_metrics, e_metrics, pareto_metrics)
-        ]
+        # 改进 (2025-06-15aj): 原地删除被支配的现有解，避免创建新列表的拷贝开销
+        for idx in range(len(front) - 1, -1, -1):
+            if _dominates(new_metrics, front[idx][1], pareto_metrics):
+                front.pop(idx)
         front.append((new_item, new_metrics))
-        # 改进 (2025-06-15ad): 增长率触发重建——前沿增长超过 rebuild_interval 时才重建
-        if len(front) > rebuild_threshold and (len(front) - last_rebuild_size) >= rebuild_interval:
+        # 改进 (2025-06-15ad): 增长率触发重建——前沿增长超过 rebuild_interval 或 20% 时才重建
+        if len(front) > rebuild_threshold and (
+            (len(front) - last_rebuild_size) >= rebuild_interval or
+            len(front) >= last_rebuild_size * 1.2
+        ):
             items, metrics = _fast_rebuild_pareto_front(
                 [it for it, _ in front], [me for _, me in front], pareto_metrics
             )
             front = list(zip(items, metrics))
             last_rebuild_size = len(front)
+    # 改进 (2025-06-15an): 前沿硬性上限——Pareto 前沿理论上可无限增长，
+    # 极端情况下（大量不相关参数组合）前沿可能膨胀到数万，按 crowding distance 截断到 5000
+    # 修复 (2025-06-15ao): 截断后 last_rebuild_size 应等于当前前沿大小，避免下次重建检查误判
+    _PARETO_FRONT_MAX_SIZE = 5000
+    if len(front) > _PARETO_FRONT_MAX_SIZE:
+        _front_metrics = [me for _, me in front]
+        _cd = _crowding_distance(_front_metrics, pareto_metrics)
+        _sorted_idx = sorted(range(len(front)), key=lambda i: _cd[i], reverse=True)
+        _keep_idx = set(_sorted_idx[:_PARETO_FRONT_MAX_SIZE])
+        front = [front[i] for i in range(len(front)) if i in _keep_idx]
+        last_rebuild_size = len(front)
+        logger.warning(
+            f"[Pareto] 前沿大小 {len(front)} 超过上限 {_PARETO_FRONT_MAX_SIZE}，"
+            f"已按 crowding distance 截断到 {_PARETO_FRONT_MAX_SIZE}"
+        )
     return front, last_rebuild_size
 
 
-def _compute_pareto_workers(data_size: int, n_combos: int) -> int:
+# 改进 (2025-06-15ah): 批量更新 Pareto 前沿，减少重复重建检查和函数调用开销
+def _update_pareto_front_batch(front: list[tuple[Any, dict]], new_items_metrics: list[tuple[Any, dict]],
+                               pareto_metrics: list[str],
+                               rebuild_threshold: int = 150, rebuild_interval: int = 50,
+                               last_rebuild_size: int = 0) -> tuple[list[tuple[Any, dict]], int]:
+    """批量更新 Pareto 前沿，接收多个新解，一次性完成插入和重建。
+
+    性能优化：
+    1. 先对新结果进行内部非支配过滤，减少需要插入 front 的数量
+    2. 只在最后检查一次是否需要重建，避免每个结果都触发 O(k²) 检查
+    3. 减少函数调用开销（尤其进程池流式 yield 时）
+
+    Args:
+        front: 当前 Pareto 前沿列表，每项为 (item, metrics_dict)
+        new_items_metrics: 新解列表，每项为 (item, metrics_dict)
+        pareto_metrics: 需要优化的指标名称列表
+        rebuild_threshold: 触发快速重建的前沿大小阈值
+        rebuild_interval: 重建触发最小增长量
+        last_rebuild_size: 上次重建时的前沿大小
+
+    Returns:
+        (front, last_rebuild_size): 更新后的前沿和重建大小标记
+    """
+    if not new_items_metrics:
+        return front, last_rebuild_size
+
+    # 改进 (2025-06-15ai): 小 batch 跳过内部过滤——当 batch < 5 时 O(k²) 不值得
+    if len(new_items_metrics) >= 5:
+        # 步骤 1: 新结果内部非支配过滤——保留不被其他新结果支配的解
+        filtered = []
+        for i, (item_i, metrics_i) in enumerate(new_items_metrics):
+            dominated = False
+            for j, (_, metrics_j) in enumerate(new_items_metrics):
+                if i != j and _dominates(metrics_j, metrics_i, pareto_metrics):
+                    dominated = True
+                    break
+            if not dominated:
+                filtered.append((item_i, metrics_i))
+    else:
+        filtered = new_items_metrics
+
+    # 步骤 2: 将过滤后的新结果逐个插入 front（只需检查现有 front 成员）
+    # 改进 (2025-06-15aj): 原地删除被支配的现有解，避免创建新列表的拷贝开销
+    for item, metrics in filtered:
+        dominated = False
+        for _, existing_metrics in front:
+            if _dominates(existing_metrics, metrics, pareto_metrics):
+                dominated = True
+                break
+        if not dominated:
+            for idx in range(len(front) - 1, -1, -1):
+                if _dominates(metrics, front[idx][1], pareto_metrics):
+                    front.pop(idx)
+            front.append((item, metrics))
+
+    # 步骤 3: 只在最后检查一次重建条件
+    if len(front) > rebuild_threshold and (
+        (len(front) - last_rebuild_size) >= rebuild_interval or
+        len(front) >= last_rebuild_size * 1.2
+    ):
+        items, metrics = _fast_rebuild_pareto_front(
+            [it for it, _ in front], [me for _, me in front], pareto_metrics
+        )
+        front = list(zip(items, metrics))
+        last_rebuild_size = len(front)
+
+    # 改进 (2025-06-15an): 前沿硬性上限——Pareto 前沿理论上可无限增长，
+    # 极端情况下（大量不相关参数组合）前沿可能膨胀到数万，按 crowding distance 截断到 5000
+    _PARETO_FRONT_MAX_SIZE = 5000
+    if len(front) > _PARETO_FRONT_MAX_SIZE:
+        _front_metrics = [me for _, me in front]
+        _cd = _crowding_distance(_front_metrics, pareto_metrics)
+        _sorted_idx = sorted(range(len(front)), key=lambda i: _cd[i], reverse=True)
+        _keep_idx = set(_sorted_idx[:_PARETO_FRONT_MAX_SIZE])
+        front = [front[i] for i in range(len(front)) if i in _keep_idx]
+        last_rebuild_size = min(last_rebuild_size, _PARETO_FRONT_MAX_SIZE)
+        logger.warning(
+            f"[Pareto] 前沿大小 {len(front)} 超过上限 {_PARETO_FRONT_MAX_SIZE}，"
+            f"已按 crowding distance 截断到 {_PARETO_FRONT_MAX_SIZE}"
+        )
+
+    return front, last_rebuild_size
+
+
+# 改进 (2025-06-15ae): 轻量数据阈值常量，便于统一调整和测试
+LIGHTWEIGHT_DATA_THRESHOLD_BYTES = 100_000
+
+
+def _compute_pareto_workers(data_size_bytes: int, n_combos: int) -> int:
     """计算 Pareto 并行评估的 worker 数量，考虑 CPU、内存、文件描述符限制。
 
     改进 (2025-06-15z): 将分散的 worker 计算逻辑封装为单一函数，便于测试和复用。
-    改进 (2025-06-15ab): 小组合数直接返回 1，避免无意义的进程启动开销。
+    改进 (2025-06-15ab): 小组合数或轻量数据直接返回 1，避免无意义的进程启动开销。
     """
-    if n_combos < 50 or data_size < 100_000:
+    if n_combos < 50 or data_size_bytes < LIGHTWEIGHT_DATA_THRESHOLD_BYTES:
         return 1
 
     _pareto_workers = max(1, min(8, (os.cpu_count() or 2)))
@@ -869,6 +1172,25 @@ def _compute_pareto_workers(data_size: int, n_combos: int) -> int:
             )
     except Exception:
         pass
+
+    # 改进 (2025-06-15ak): CPU 使用率检查——系统 CPU 满载时减少 worker 避免竞争
+    # 改进 (2025-06-15al): 添加冷却期——每 5 秒才采样一次，避免快速连续调用时累积阻塞
+    if _HAS_PSUTIL:
+        try:
+            _now = time.time()
+            if _now - getattr(_compute_pareto_workers, '_last_cpu_check_time', 0) >= 5:
+                _cpu_percent = psutil.cpu_percent(interval=0.1)
+                _compute_pareto_workers._last_cpu_check_time = _now
+                _compute_pareto_workers._last_cpu_check_value = _cpu_percent
+            else:
+                _cpu_percent = getattr(_compute_pareto_workers, '_last_cpu_check_value', 0)
+            if _cpu_percent > 80:
+                _pareto_workers = max(1, _pareto_workers // 2)
+                logger.warning(
+                    f"[Pareto] CPU 使用率 {_cpu_percent:.0f}% 过高，worker 数降至 {_pareto_workers}"
+                )
+        except Exception:
+            pass
 
     return _pareto_workers
 
@@ -1140,6 +1462,8 @@ def compare_optimization_runs(strategy_name: str, metric: str = 'sharpe_ratio', 
 def export_results_to_csv(results: list[OptimizationResultItem], path: str, metric_key: str = 'sharpe_ratio'):
     """改进 (2025-06-15j): 导出优化结果到 CSV 文件
 
+    改进 (2025-06-20): 原子写入——先写临时文件再替换，防止并发写入产生损坏文件。
+
     Args:
         results: OptimizationResultItem 列表
         path: 输出 CSV 文件路径
@@ -1159,7 +1483,11 @@ def export_results_to_csv(results: list[OptimizationResultItem], path: str, metr
             row['total_trades'] = r.total_trades
             rows.append(row)
         df = pd.DataFrame(rows)
-        df.to_csv(path, index=False, encoding='utf-8-sig')
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix('.csv.tmp')
+        df.to_csv(tmp, index=False, encoding='utf-8-sig')
+        tmp.replace(p)
         logger.info(f"[export_results] CSV 已导出: {path} ({len(rows)} 行)")
     except Exception as e:
         logger.warning(f"[export_results] CSV 导出失败: {e}")
@@ -1490,6 +1818,16 @@ class BacktestEngine:
         """
         start_time = time.time()
 
+        # 改进 (2025-06-15am): 防御空 DataFrame——早期失败而非进入空循环
+        if data is None or data.empty:
+            logger.warning("[BacktestEngine.run] 回测数据为空，直接返回空结果")
+            return BacktestResult(
+                metrics=PerformanceMetrics(),
+                equity_curve=[],
+                trades=[],
+                monthly_returns=[],
+            )
+
         # 排序 & 预构建日期索引
         data = data.sort_values(['code', 'date']).reset_index(drop=True)
 
@@ -1532,12 +1870,18 @@ class BacktestEngine:
 
         # 修复 (2025-06-15): 因子数据自动填充——缺失时先行业均值，再全局中位数
         # 避免 ROE=10, PE=25 等固定默认值削弱因子有效性
-        # 防御: 如果 industry 列缺失，先用默认值填充（类级别标记，只警告一次）
+        # 防御: 如果 industry 列缺失，先用默认值填充（线程安全标记，只警告一次）
         if 'industry' not in data.columns:
             data['industry'] = 'unknown'
-            if not hasattr(BacktestEngine, '_industry_warned'):
-                BacktestEngine._industry_warned = True
-                logger.warning("[BacktestEngine] industry 列缺失，使用 'unknown' 作为默认值（后续不再警告）")
+            # 使用线程锁保护类级别标记，避免多线程竞争条件
+            _lock = getattr(BacktestEngine, '_industry_warn_lock', None)
+            if _lock is None:
+                _lock = threading.Lock()
+                BacktestEngine._industry_warn_lock = _lock
+            with _lock:
+                if not getattr(BacktestEngine, '_industry_warned', False):
+                    BacktestEngine._industry_warned = True
+                    logger.warning("[BacktestEngine] industry 列缺失，使用 'unknown' 作为默认值（后续不再警告）")
         factor_cols = ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb']
         for col in factor_cols:
             if col in data.columns:
@@ -1593,7 +1937,17 @@ class BacktestEngine:
         dates = sorted(date_data_map.keys())
 
         # 初始化策略 & 投资组合
-        strategy.on_init(data)
+        # 改进 (2025-06-15ao): 防御策略初始化异常——不终止回测，返回空结果
+        try:
+            strategy.on_init(data)
+        except Exception as e:
+            logger.error(f"[BacktestEngine] 策略初始化失败 ({strategy.name}): {e}")
+            return BacktestResult(
+                metrics=PerformanceMetrics(),
+                equity_curve=[],
+                trades=[],
+                monthly_returns=[],
+            )
         portfolio = Portfolio(cash=self.initial_cash)
         equity = [self.initial_cash]
 
@@ -2563,7 +2917,8 @@ class BacktestEngine:
         log_interval = max(1, n_combos // 10)
 
         # 改进 (2025-06-15z): 先计算一次 data_size，避免重复调用
-        data_size = data.memory_usage(deep=True).sum()
+        # 改进 (2025-06-15aj): deep=False 更准确反映数据传递所需的内存，避免字符串列 deep=True 高估
+        data_size = data.memory_usage(deep=False).sum()
         _pareto_workers = _compute_pareto_workers(data_size, n_combos)
 
         from concurrent.futures import ProcessPoolExecutor, BrokenProcessPool
@@ -2633,100 +2988,153 @@ class BacktestEngine:
             ]
             worker_fn = _run_pareto_combo
 
-        pareto_front = []
-        evaluated_count = 0
-        _last_rebuild_size = 0
+        # 改进 (2025-06-15ai): try/finally 确保 data_path 临时文件无论评估是否成功都会被清理
+        try:
+            pareto_front = []
+            evaluated_count = 0
+            # 改进 (2025-06-15ae): 初始化为 rebuild_threshold，避免 last_rebuild_size=0 时
+            # len(front) >= 0*1.2 永远为 True 的语义问题（虽然 rebuild_threshold 会阻止触发）
+            _last_rebuild_size = 150
 
-        # 改进 (2025-06-15s): 自适应阈值：小组合数或轻量数据直接串行评估，避免进程启动开销
-        use_parallel = n_combos >= 50 and data_size > 100_000
-        if not use_parallel:
-            logger.info(f"[Pareto] {n_combos} 组合 / {data_size / 1000:.0f}KB 数据，直接串行评估")
-            for idx, args_tuple in enumerate(args_list):
-                try:
-                    result_dict, metrics_dict = worker_fn(args_tuple)
-                    item = OptimizationResultItem(**result_dict)
-                    pareto_front, _last_rebuild_size = _update_pareto_front(
-                        pareto_front, item, metrics_dict, pareto_metrics,
-                        last_rebuild_size=_last_rebuild_size
-                    )
-                    evaluated_count += 1
-                    if evaluated_count % log_interval == 0 or evaluated_count == n_combos:
-                        logger.info(f"Pareto 评估进度: {evaluated_count}/{n_combos}")
-                    if on_progress is not None and (evaluated_count % 10 == 0 or evaluated_count == n_combos):
-                        try:
-                            on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
-                        except Exception:
-                            pass
-                except Exception as ex:
-                    logger.warning(f"[Pareto] 组合 {idx} 串行评估失败: {ex}")
-        else:
-            # 改进 (2025-06-15o): chunksize 按 worker 数分配，限制最大为 10
-            chunksize = max(1, min(10, len(args_list) // _pareto_workers))
-
-            try:
-                with ProcessPoolExecutor(max_workers=_pareto_workers) as executor:
-                    for idx, (result_dict, metrics_dict) in enumerate(
-                        executor.map(worker_fn, args_list, chunksize=chunksize)
-                    ):
+            # 改进 (2025-06-15s): 自适应阈值：小组合数或轻量数据直接串行评估，避免进程启动开销
+            use_parallel = n_combos >= 50 and data_size > 100_000
+            if not use_parallel:
+                logger.info(f"[Pareto] {n_combos} 组合 / {data_size / 1000:.0f}KB 数据，直接串行评估")
+                # 改进 (2025-06-15ah): 进度发送采样，避免高频 IPC 开销
+                _progress_interval = max(1, n_combos // 20)
+                for idx, args_tuple in enumerate(args_list):
+                    try:
+                        result_dict, metrics_dict = worker_fn(args_tuple)
+                        # 改进 (2025-06-15ai): 跳过 worker 返回的错误标记（异常透传）
+                        if result_dict is None:
+                            continue
                         item = OptimizationResultItem(**result_dict)
                         pareto_front, _last_rebuild_size = _update_pareto_front(
                             pareto_front, item, metrics_dict, pareto_metrics,
                             last_rebuild_size=_last_rebuild_size
                         )
-
                         evaluated_count += 1
                         if evaluated_count % log_interval == 0 or evaluated_count == n_combos:
                             logger.info(f"Pareto 评估进度: {evaluated_count}/{n_combos}")
-                        if on_progress is not None:
-                            _pct_now = (evaluated_count * 100 // max(n_combos, 1))
-                            if _pct_now % 5 == 0 or evaluated_count == n_combos:
-                                try:
-                                    on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
-                                except Exception:
-                                    pass
-            except BrokenProcessPool as e:
-                logger.error(f"[Pareto] 子进程崩溃，回退到顺序评估: {e}")
-                # 改进 (2025-06-15q): 从崩溃位置继续，避免重复评估已完成的组合
-                # 安全性说明：worker_fn 在父进程中直接调用是安全的，因为：
-                # 1. _run_pareto_combo / _run_pareto_combo_file 是模块级纯函数，无全局状态修改
-                # 2. 每个调用都会创建独立的 BacktestEngine 实例，互不干扰
-                # 3. data（或 data_path）是只读的，不会被 worker_fn 修改
-                _crashed_idx = evaluated_count
-                for idx, args_tuple in enumerate(args_list[_crashed_idx:], start=_crashed_idx):
-                    try:
-                        result_dict, metrics_dict = worker_fn(args_tuple)
-                        item = OptimizationResultItem(**result_dict)
-                        pareto_front, _last_rebuild_size = _update_pareto_front(
-                            pareto_front, item, metrics_dict, pareto_metrics,
-                            last_rebuild_size=_last_rebuild_size
-                        )
-                        evaluated_count += 1
-                        # 改进 (2025-06-15p): 顺序回退时每 10 个组合触发一次进度回调
-                        if on_progress is not None and (evaluated_count % 10 == 0 or evaluated_count == n_combos):
+                        # 改进 (2025-06-15ah): 每 5% 或最小间隔发送进度，避免高频 IPC
+                        if on_progress is not None and (evaluated_count % _progress_interval == 0 or evaluated_count == n_combos):
                             try:
-                                on_progress(evaluated_count, n_combos, f"Pareto 顺序回退 {evaluated_count}/{n_combos}")
+                                on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
                             except Exception:
                                 pass
                     except Exception as ex:
-                        logger.warning(f"[Pareto] 组合 {idx} 顺序评估失败: {ex}")
+                        logger.warning(f"[Pareto] 组合 {idx} 串行评估失败: {ex}")
+            else:
+                # 改进 (2025-06-15o): chunksize 按 worker 数分配，限制最大为 10
+                chunksize = max(1, min(10, len(args_list) // _pareto_workers))
 
-        # 改进 (2025-06-15t): 内联清理临时文件
-        if data_path is not None and os.path.exists(data_path):
-            os.unlink(data_path)
-            logger.debug(f"[Pareto] 临时 parquet 文件已清理: {data_path}")
+                try:
+                    with ProcessPoolExecutor(max_workers=_pareto_workers) as executor:
+                        # 改进 (2025-06-15ah): 进度采样阈值，避免高频 IPC
+                        _next_progress_pct = 0
+                        # 改进 (2025-06-15ah): 批量收集结果，减少 Pareto 更新开销
+                        _batch = []
+                        for idx, (result_dict, metrics_dict) in enumerate(
+                            executor.map(worker_fn, args_list, chunksize=chunksize)
+                        ):
+                            # 改进 (2025-06-15ai): 跳过 worker 返回的错误标记（异常透传）
+                            if result_dict is None:
+                                continue
+                            item = OptimizationResultItem(**result_dict)
+                            _batch.append((item, metrics_dict))
+                            # 每 chunksize 个或最后一个时批量更新
+                            if len(_batch) >= chunksize or idx == len(args_list) - 1:
+                                pareto_front, _last_rebuild_size = _update_pareto_front_batch(
+                                    pareto_front, _batch, pareto_metrics,
+                                    last_rebuild_size=_last_rebuild_size
+                                )
+                                evaluated_count += len(_batch)
+                                # 改进 (2025-06-15al): 重用 _batch 列表，减少 GC 压力
+                                _batch.clear()
+
+                            if evaluated_count % log_interval == 0 or evaluated_count == n_combos:
+                                logger.info(f"Pareto 评估进度: {evaluated_count}/{n_combos}")
+                            if on_progress is not None:
+                                _pct_now = (evaluated_count * 100 // max(n_combos, 1))
+                                # 改进 (2025-06-15ah): 每 5% 或最后一个才发送进度，避免高频 IPC
+                                if _pct_now >= _next_progress_pct or evaluated_count == n_combos:
+                                    _next_progress_pct = (_pct_now // 5 + 1) * 5
+                                    try:
+                                        on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
+                                    except Exception:
+                                        pass
+                except BrokenProcessPool as e:
+                    logger.error(f"[Pareto] 子进程崩溃，回退到顺序评估: {e}")
+                    # 改进 (2025-06-15q): 从崩溃位置继续，避免重复评估已完成的组合
+                    # 安全性说明：worker_fn 在父进程中直接调用是安全的，因为：
+                    # 1. _run_pareto_combo / _run_pareto_combo_file 是模块级纯函数，无全局状态修改
+                    # 2. 每个调用都会创建独立的 BacktestEngine 实例，互不干扰
+                    # 3. data（或 data_path）是只读的，不会被 worker_fn 修改
+                    _crashed_idx = evaluated_count
+                    for idx, args_tuple in enumerate(args_list[_crashed_idx:], start=_crashed_idx):
+                        try:
+                            result_dict, metrics_dict = worker_fn(args_tuple)
+                            # 改进 (2025-06-15ai): 跳过 worker 返回的错误标记（异常透传）
+                            if result_dict is None:
+                                continue
+                            item = OptimizationResultItem(**result_dict)
+                            pareto_front, _last_rebuild_size = _update_pareto_front(
+                                pareto_front, item, metrics_dict, pareto_metrics,
+                                last_rebuild_size=_last_rebuild_size
+                            )
+                            evaluated_count += 1
+                            # 改进 (2025-06-15ah): 回退路径也使用采样进度，避免高频 IPC
+                            if on_progress is not None and (evaluated_count % max(1, n_combos // 20) == 0 or evaluated_count == n_combos):
+                                try:
+                                    on_progress(evaluated_count, n_combos, f"Pareto 顺序回退 {evaluated_count}/{n_combos}")
+                                except Exception:
+                                    pass
+                        except Exception as ex:
+                            logger.warning(f"[Pareto] 组合 {idx} 顺序评估失败: {ex}")
+        finally:
+            # 改进 (2025-06-15ai): finally 确保临时文件无论评估是否成功都会被清理
+            if data_path is not None and os.path.exists(data_path):
+                try:
+                    os.unlink(data_path)
+                    logger.debug(f"[Pareto] 临时 parquet 文件已清理: {data_path}")
+                except Exception as e:
+                    logger.warning(f"[Pareto] 临时文件清理失败: {data_path} ({e})")
 
         # 改进 (2025-06-15ab): Pareto 前沿按首个指标排序后再截断 top_n，避免任意截断
         # 改进 (2025-06-15ad): 优先按 optimization_config.optimize_metric 排序，更符合用户预期
+        # 改进 (2025-06-15ae): top_n 下限防御——多目标优化时确保每个指标有足够样本保留权衡解
         _opt_metric = getattr(optimization_config, 'optimize_metric', None)
         _sort_metric = _opt_metric if _opt_metric and _opt_metric in pareto_metrics else (pareto_metrics[0] if pareto_metrics else 'sharpe_ratio')
         _reverse_sort = _sort_metric != 'max_drawdown_pct'
         _sorted_front = sorted(
             pareto_front,
-            key=lambda x: x[1].get(_sort_metric, 0.0) if isinstance(x[1], dict) else getattr(x[1], _sort_metric, 0.0),
+            key=lambda x: x[1].get(_sort_metric, 0.0),
             reverse=_reverse_sort,
         )
-        top_results = [item for item, _ in _sorted_front[:optimization_config.top_n]]
-        best_item = top_results[0] if top_results else None
+        _min_top_n = len(pareto_metrics) * 3
+        _effective_top_n = max(optimization_config.top_n, _min_top_n)
+        if len(pareto_metrics) > 1 and optimization_config.top_n < _min_top_n:
+            logger.warning(
+                f"[Pareto] top_n={optimization_config.top_n} 小于多目标最小样本 {_min_top_n}，"
+                f"自动提升至 {_effective_top_n} 以保留权衡解"
+            )
+        top_results = [item for item, _ in _sorted_front[:_effective_top_n]]
+
+        # 改进 (2025-06-15ag): 使用 crowding distance 选择 best_item，
+        # 优先选择最独特的权衡解（而非简单按首个指标排序的第一个）
+        # 改进 (2025-06-15ao): 确保 best_item 也在 top_results 中，保持一致性
+        if len(pareto_metrics) > 1 and len(pareto_front) > 2:
+            _front_metrics_only = [me for _, me in pareto_front]
+            _cd = _crowding_distance(_front_metrics_only, pareto_metrics)
+            _best_idx = max(range(len(pareto_front)), key=lambda i: _cd[i])
+            best_item = pareto_front[_best_idx][0]
+        else:
+            best_item = top_results[0] if top_results else None
+
+        # 防御: 截断导致 best_item 不在 top_results 中时，回退到 top_results[0]
+        if best_item and best_item not in top_results:
+            logger.debug(f"[Pareto] best_item 不在 top_results 中，回退到 top_results[0]")
+            best_item = top_results[0] if top_results else None
 
         opt_result = OptimizationResult(
             strategy_name=strategy_cls.name,
@@ -2776,6 +3184,8 @@ class BacktestEngine:
         start_time = time.time()
         max_iter = optimization_config.max_iterations
         _top_n = optimization_config.top_n
+        if _top_n <= 0:
+            raise ValueError(f"optimization_config.top_n 必须大于 0，当前值: {_top_n}")
         _buffer = _BoundedResultBuffer(max_size=_top_n * 2, metric_key=metric_key)
 
         def _objective(trial):

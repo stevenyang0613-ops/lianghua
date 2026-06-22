@@ -45,6 +45,92 @@ class TestXibuSevenDimensionStrategy:
             'date': datetime.now().date(),
         })
 
+    def test_get_market_weights_bull(self, strategy):
+        """测试 _get_market_weights 牛市权重调整"""
+        from app.strategies.xibu_seven_dimension import _get_market_weights
+        sw, bw = _get_market_weights('bull', strategy.STOCK_WEIGHTS, strategy.BOND_WEIGHTS)
+        assert sw['momentum'] == 0.35
+        assert sw['fundamental'] == 0.02
+        assert bw == strategy.BOND_WEIGHTS
+
+    def test_get_market_weights_bear(self, strategy):
+        """测试 _get_market_weights 熊市权重调整"""
+        from app.strategies.xibu_seven_dimension import _get_market_weights
+        sw, bw = _get_market_weights('bear', strategy.STOCK_WEIGHTS, strategy.BOND_WEIGHTS)
+        assert sw['momentum'] == 0.20
+        assert sw['fundamental'] == 0.17
+        assert bw == strategy.BOND_WEIGHTS
+
+    def test_get_market_weights_neutral(self, strategy):
+        """测试 _get_market_weights 震荡市权重不变"""
+        from app.strategies.xibu_seven_dimension import _get_market_weights
+        sw, bw = _get_market_weights('neutral', strategy.STOCK_WEIGHTS, strategy.BOND_WEIGHTS)
+        assert sw == strategy.STOCK_WEIGHTS
+        assert bw == strategy.BOND_WEIGHTS
+
+    def test_get_market_weights_does_not_mutate_original(self, strategy):
+        """测试 _get_market_weights 不修改原始字典"""
+        from app.strategies.xibu_seven_dimension import _get_market_weights
+        original_sw = dict(strategy.STOCK_WEIGHTS)
+        original_bw = dict(strategy.BOND_WEIGHTS)
+        sw, bw = _get_market_weights('bull', strategy.STOCK_WEIGHTS, strategy.BOND_WEIGHTS)
+        assert strategy.STOCK_WEIGHTS == original_sw
+        assert strategy.BOND_WEIGHTS == original_bw
+        # 确认返回的是新字典
+        assert sw is not strategy.STOCK_WEIGHTS
+        assert bw is not strategy.BOND_WEIGHTS
+
+    def test_param_validation_invalid_hold_count(self):
+        """测试 hold_count 超出范围时抛出 ValueError"""
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        with pytest.raises(ValueError, match="hold_count"):
+            XibuSevenDimensionStrategy(hold_count=0)  # 0 < min 1
+        with pytest.raises(ValueError, match="hold_count"):
+            XibuSevenDimensionStrategy(hold_count=200)  # 200 > max 100
+
+    def test_param_validation_invalid_min_credit_score(self):
+        """测试 min_credit_score 超出范围时抛出 ValueError"""
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        with pytest.raises(ValueError, match="min_credit_score"):
+            XibuSevenDimensionStrategy(min_credit_score=-10)
+        with pytest.raises(ValueError, match="min_credit_score"):
+            XibuSevenDimensionStrategy(min_credit_score=150)
+
+    def test_param_validation_invalid_aum_level(self):
+        """测试 aum_level 不是允许值时抛出 ValueError"""
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        with pytest.raises(ValueError, match="aum_level"):
+            XibuSevenDimensionStrategy(aum_level="invalid")
+
+    def test_param_validation_invalid_market_env(self):
+        """测试 market_env 不是允许值时抛出 ValueError"""
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        with pytest.raises(ValueError, match="market_env"):
+            XibuSevenDimensionStrategy(market_env="unknown")
+
+    def test_param_validation_valid_params(self):
+        """测试有效参数正常初始化"""
+        from app.strategies.xibu_seven_dimension import XibuSevenDimensionStrategy
+        s = XibuSevenDimensionStrategy(
+            hold_count=30,
+            min_credit_score=70.0,
+            aum_level="large",
+            market_env="bull",
+            position_sizing="equal_weight",
+        )
+        assert s.get_param('hold_count') == 30
+        assert s.get_param('min_credit_score') == 70.0
+        assert s.get_param('aum_level') == "large"
+        assert s.get_param('market_env') == "bull"
+        assert s.get_param('position_sizing') == "equal_weight"
+
+    def test_calc_vectorized_market_env_none(self, strategy, sample_data):
+        """测试 calc_vectorized 传入 market_env=None 时默认为 neutral"""
+        scores, vetoed = strategy.calc_vectorized(sample_data, market_env=None)
+        # 不抛出异常即为成功
+        assert isinstance(scores, list)
+        assert isinstance(vetoed, list)
+
     def test_strategy_init(self, strategy):
         """测试策略初始化"""
         assert strategy.name == "西部七维打分策略"

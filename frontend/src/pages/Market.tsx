@@ -170,70 +170,71 @@ export default function Market() {
     return filteredBonds.slice(start, start + PAGE_SIZE)
   }, [filteredBonds, useVirtual, currentPage])
 
+  // 静态列定义 — 不依赖 columnSort 的部分，只计算一次
+  const staticColumnDefs = useMemo<Omit<VirtualColumn<ConvertibleQuote>, 'sortOrder'>[]>(() => [
+    { key: 'code', dataIndex: 'code', title: '代码', width: 110, sortable: true, sorter: (a, b) => String(a.code ?? '').localeCompare(String(b.code ?? '')) },
+    { key: 'name', dataIndex: 'name', title: '名称', width: 100, sortable: true, sorter: (a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
+    { key: 'price', dataIndex: 'price', title: '最新价', width: 100, sortable: true, sorter: (a, b) => ((a.price ?? 0) as number) - ((b.price ?? 0) as number), render: (v: unknown, r: ConvertibleQuote) => {
+      const color = (r.change_pct ?? 0) > 0 ? '#cf1322' : (r.change_pct ?? 0) < 0 ? '#389e0d' : undefined
+      return <span style={{ color, fontWeight: 600, fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(v as number)}</span>
+    }},
+    { key: 'change_pct', dataIndex: 'change_pct', title: '涨跌幅', width: 95, sortable: true, sorter: (a, b) => ((a.change_pct ?? 0) as number) - ((b.change_pct ?? 0) as number), render: (v: unknown) => {
+      const n = v as number ?? 0
+      const color = n > 0 ? '#cf1322' : n < 0 ? '#389e0d' : undefined
+      return <span style={{ color, fontWeight: 600, fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{n > 0 ? '+' : ''}{fmt(n)}%</span>
+    }},
+    { key: 'premium_ratio', dataIndex: 'premium_ratio', title: '溢价率', width: 85, sortable: true, sorter: (a, b) => ((a.premium_ratio ?? 0) as number) - ((b.premium_ratio ?? 0) as number), render: (v: unknown) => {
+      const n = v as number ?? 0
+      const color = n < 0 ? '#cf1322' : n > 50 ? '#389e0d' : undefined
+      return <span style={{ color, fontWeight: 600, fontSize: 13 }}>{fmt(n)}%</span>
+    }},
+    { key: 'dual_low', dataIndex: 'dual_low', title: '双低', width: 75, sortable: true, sorter: (a, b) => ((a.dual_low ?? 0) as number) - ((b.dual_low ?? 0) as number), render: (v: unknown) => {
+      const n = v as number ?? 0
+      const color = n < 130 ? '#52c41a' : n > 180 ? '#faad14' : undefined
+      return <span style={{ color, fontWeight: 600, fontSize: 13 }}>{fmt(n)}</span>
+    }},
+    { key: 'volume', dataIndex: 'volume', title: '成交额(亿)', width: 95, sortable: true, sorter: (a, b) => ((a.volume ?? 0) as number) - ((b.volume ?? 0) as number), render: (v: unknown) => {
+      const n = v as number ?? 0
+      return n > 0
+        ? <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(n)}</span>
+        : <span style={{ color: '#bbb', fontSize: 13 }}>休市</span>
+    }},
+    { key: 'remaining_years', dataIndex: 'remaining_years', title: '剩余年限', width: 80, sortable: true, sorter: (a, b) => ((a.remaining_years ?? 0) as number) - ((b.remaining_years ?? 0) as number), render: (v: unknown) => {
+      const n = v as number ?? 0
+      return n > 0
+        ? <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(n, 1)}</span>
+        : <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
+    }},
+    { key: 'forced_call_days', dataIndex: 'forced_call_days', title: '强赎', width: 60, sortable: true, sorter: (a, b) => ((a.forced_call_days ?? 0) as number) - ((b.forced_call_days ?? 0) as number), render: (v: unknown, r: ConvertibleQuote) => {
+      const n = v as number ?? 0
+      if (n <= 0) return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
+      const color = n >= 10 ? '#ff4d4f' : n >= 5 ? '#faad14' : '#1677ff'
+      return <a style={{ color, fontWeight: 600, fontSize: 13 }} onClick={() => { setForcedCallBond(r); setForcedCallVisible(true) }}>{n}/15</a>
+    }},
+    { key: 'redemption_countdown', dataIndex: 'last_trade_date', title: '赎回倒计时', width: 95, sortable: true, render: (_v: unknown, r: ConvertibleQuote) => {
+      if (!r.is_called || !r.last_trade_date) return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
+      const now = new Date()
+      const lastTrade = new Date(r.last_trade_date)
+      const daysLeft = Math.ceil((lastTrade.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      if (daysLeft < 0) return <Tag color="red" style={{ fontSize: 12 }}>已退市</Tag>
+      if (daysLeft <= 3) return <Tag color="red" style={{ fontSize: 12 }}>{daysLeft}天</Tag>
+      if (daysLeft <= 10) return <Tag color="orange" style={{ fontSize: 12 }}>{daysLeft}天</Tag>
+      return <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{daysLeft}天</span>
+    }},
+    { key: 'call_status', dataIndex: 'call_status', title: '强赎状态', width: 80, sortable: true, sorter: (a, b) => String(a.call_status ?? '').localeCompare(String(b.call_status ?? '')), render: (v: unknown, r: ConvertibleQuote) => {
+      if (r.is_called) return <Tag color="red" style={{ fontSize: 12 }}>已公告强赎</Tag>
+      if (v) return <Tag color="orange" style={{ fontSize: 12 }}>{String(v)}</Tag>
+      return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
+    }},
+  ], []) // 空依赖 — 这些定义不随任何状态变化
+
+  // 仅将当前排序状态合并到列定义中 — 避免触发全部列重建
   const virtualColumns: VirtualColumn<ConvertibleQuote>[] = useMemo(() => {
-    const orderOf = (key: string): SortOrder => columnSort.key === key ? columnSort.order : null
-    const numSorter = (key: keyof ConvertibleQuote) => (a: ConvertibleQuote, b: ConvertibleQuote) => {
-      const av = (a[key] as number | null | undefined) ?? 0
-      const bv = (b[key] as number | null | undefined) ?? 0
-      return (typeof av === 'number' ? av : 0) - (typeof bv === 'number' ? bv : 0)
-    }
-    return [
-      { key: 'code', dataIndex: 'code', title: '代码', width: 110, sortable: true, sortOrder: orderOf('code'), sorter: (a, b) => String(a.code ?? '').localeCompare(String(b.code ?? '')) },
-      { key: 'name', dataIndex: 'name', title: '名称', width: 100, sortable: true, sortOrder: orderOf('name'), sorter: (a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')) },
-      { key: 'price', dataIndex: 'price', title: '最新价', width: 100, sortable: true, sortOrder: orderOf('price'), sorter: numSorter('price'), render: (v: unknown, r: ConvertibleQuote) => {
-        const color = (r.change_pct ?? 0) > 0 ? '#cf1322' : (r.change_pct ?? 0) < 0 ? '#389e0d' : undefined
-        return <span style={{ color, fontWeight: 600, fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(v as number)}</span>
-      }},
-      { key: 'change_pct', dataIndex: 'change_pct', title: '涨跌幅', width: 95, sortable: true, sortOrder: orderOf('change_pct'), sorter: numSorter('change_pct'), render: (v: unknown) => {
-        const n = v as number ?? 0
-        const color = n > 0 ? '#cf1322' : n < 0 ? '#389e0d' : undefined
-        return <span style={{ color, fontWeight: 600, fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{n > 0 ? '+' : ''}{fmt(n)}%</span>
-      }},
-      { key: 'premium_ratio', dataIndex: 'premium_ratio', title: '溢价率', width: 85, sortable: true, sortOrder: orderOf('premium_ratio'), sorter: numSorter('premium_ratio'), render: (v: unknown) => {
-        const n = v as number ?? 0
-        const color = n < 0 ? '#cf1322' : n > 50 ? '#389e0d' : undefined
-        return <span style={{ color, fontWeight: 600, fontSize: 13 }}>{fmt(n)}%</span>
-      }},
-      { key: 'dual_low', dataIndex: 'dual_low', title: '双低', width: 75, sortable: true, sortOrder: orderOf('dual_low'), sorter: numSorter('dual_low'), render: (v: unknown) => {
-        const n = v as number ?? 0
-        const color = n < 130 ? '#52c41a' : n > 180 ? '#faad14' : undefined
-        return <span style={{ color, fontWeight: 600, fontSize: 13 }}>{fmt(n)}</span>
-      }},
-      { key: 'volume', dataIndex: 'volume', title: '成交额(亿)', width: 95, sortable: true, sortOrder: orderOf('volume'), sorter: numSorter('volume'), render: (v: unknown) => {
-        const n = v as number ?? 0
-        return n > 0
-          ? <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(n)}</span>
-          : <span style={{ color: '#bbb', fontSize: 13 }}>休市</span>
-      }},
-      { key: 'remaining_years', dataIndex: 'remaining_years', title: '剩余年限', width: 80, sortable: true, sortOrder: orderOf('remaining_years'), sorter: numSorter('remaining_years'), render: (v: unknown) => {
-        const n = v as number ?? 0
-        return n > 0
-          ? <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{fmt(n, 1)}</span>
-          : <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
-      }},
-      { key: 'forced_call_days', dataIndex: 'forced_call_days', title: '强赎', width: 60, sortable: true, sortOrder: orderOf('forced_call_days'), sorter: numSorter('forced_call_days'), render: (v: unknown, r: ConvertibleQuote) => {
-        const n = v as number ?? 0
-        if (n <= 0) return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
-        const color = n >= 10 ? '#ff4d4f' : n >= 5 ? '#faad14' : '#1677ff'
-        return <a style={{ color, fontWeight: 600, fontSize: 13 }} onClick={() => { setForcedCallBond(r); setForcedCallVisible(true) }}>{n}/15</a>
-      }},
-      { key: 'redemption_countdown', dataIndex: 'last_trade_date', title: '赎回倒计时', width: 95, sortable: true, sortOrder: orderOf('last_trade_date'), render: (_v: unknown, r: ConvertibleQuote) => {
-        if (!r.is_called || !r.last_trade_date) return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
-        const now = new Date()
-        const lastTrade = new Date(r.last_trade_date)
-        const daysLeft = Math.ceil((lastTrade.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-        if (daysLeft < 0) return <Tag color="red" style={{ fontSize: 12 }}>已退市</Tag>
-        if (daysLeft <= 3) return <Tag color="red" style={{ fontSize: 12 }}>{daysLeft}天</Tag>
-        if (daysLeft <= 10) return <Tag color="orange" style={{ fontSize: 12 }}>{daysLeft}天</Tag>
-        return <span style={{ fontFamily: 'SF Mono, Monaco, Consolas, monospace', fontSize: 13 }}>{daysLeft}天</span>
-      }},
-      { key: 'call_status', dataIndex: 'call_status', title: '强赎状态', width: 80, sortable: true, sortOrder: orderOf('call_status'), sorter: (a, b) => String(a.call_status ?? '').localeCompare(String(b.call_status ?? '')), render: (v: unknown, r: ConvertibleQuote) => {
-        if (r.is_called) return <Tag color="red" style={{ fontSize: 12 }}>已公告强赎</Tag>
-        if (v) return <Tag color="orange" style={{ fontSize: 12 }}>{String(v)}</Tag>
-        return <span style={{ color: '#bbb', fontSize: 13 }}>-</span>
-      }},
-    ]
-  }, [columnSort])
+    return staticColumnDefs.map(col => ({
+      ...col,
+      sortOrder: columnSort.key === col.key ? columnSort.order : null,
+    }))
+  }, [staticColumnDefs, columnSort])
 
   const handleFilterChange = useCallback((newFilters: FilterValues) => {
     setFilters(newFilters)

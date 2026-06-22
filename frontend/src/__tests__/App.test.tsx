@@ -11,63 +11,72 @@ vi.mock('../stores/useUserStore', () => ({
 vi.mock('../utils/electron', () => ({
   isElectron: () => false,
 }))
-vi.mock('../indexedDBStorage', () => ({
+vi.mock('../utils/indexedDBStorage', () => ({
   initDB: vi.fn(),
-  indexedDBStorage: {},
+  indexedDBStorage: { startAutoCleanup: vi.fn() },
 }))
-vi.mock('../alertNotification', () => ({
-  alertManager: { addRule: vi.fn(), getRules: vi.fn(() => []) },
+vi.mock('../utils/alertNotification', () => ({
+  alertManager: { addRule: vi.fn(), getRules: vi.fn(() => []), init: vi.fn() },
   initPredefinedRules: vi.fn(),
 }))
-vi.mock('../monitoring', () => ({
-  monitoring: {},
+vi.mock('../utils/monitoring', () => ({
+  monitoring: { init: vi.fn() },
   trackWebVitals: vi.fn(),
 }))
-vi.mock('../logCollector', () => ({
-  logCollector: { init: vi.fn() },
+vi.mock('../utils/logCollector', () => ({
+  logCollector: { configure: vi.fn() },
 }))
-vi.mock('../performanceOptimization', () => ({
+vi.mock('../utils/performanceOptimization', () => ({
   initPerformanceOptimization: vi.fn(),
 }))
-vi.mock('../backgroundSync', () => ({
+vi.mock('../utils/backgroundSync', () => ({
   initBackgroundSync: vi.fn(),
 }))
-vi.mock('../smartSync', () => ({
+vi.mock('../utils/smartSync', () => ({
   initNetworkMonitor: vi.fn(),
 }))
-vi.mock('../cacheWarmup', () => ({
+vi.mock('../utils/cacheWarmup', () => ({
   initWarmup: vi.fn(),
 }))
-vi.mock('../notifications', () => ({
-  notificationService: { requestPermission: vi.fn() },
+vi.mock('../utils/notifications', () => ({
+  notificationService: { init: vi.fn() },
 }))
-vi.mock('../errorLogger', () => ({
+vi.mock('../utils/errorLogger', () => ({
   setupGlobalErrorHandler: vi.fn(),
 }))
-vi.mock('../wsInstances', () => ({
-  marketWs: { connect: vi.fn(), disconnect: vi.fn() },
-  signalsWs: { connect: vi.fn(), disconnect: vi.fn() },
+vi.mock('../utils/wsInstances', () => ({
+  marketWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
+  signalsWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
+  refreshWsToken: vi.fn(),
 }))
-vi.mock('../routePreload', () => ({
+vi.mock('../utils/routePreload', () => ({
   preloadByPriority: vi.fn(),
-  setupSmartPreload: vi.fn(),
+  setupSmartPreload: vi.fn(() => vi.fn()),
 }))
-vi.mock('../offlineQueue', () => ({
+vi.mock('../utils/offlineQueue', () => ({
   initOfflineQueue: vi.fn(),
 }))
-vi.mock('../locales', () => ({
+vi.mock('../utils/locales', () => ({
   initLocale: vi.fn(),
 }))
-vi.mock('../hotkeys', () => ({
+vi.mock('../utils/hotkeys', () => ({
   initHotkeys: vi.fn(),
 }))
-vi.mock('../prefetchStrategy', () => ({
+vi.mock('../utils/prefetchStrategy', () => ({
   initPrefetchStrategy: vi.fn(),
 }))
-vi.mock('../dataCache', () => ({
-  onNetworkChange: vi.fn(),
-  checkNetworkStatus: vi.fn(() => true),
+vi.mock('../utils/dataCache', () => ({
+  onNetworkChange: vi.fn(() => vi.fn()),
+  checkNetworkStatus: vi.fn(() => ({ online: true })),
   isOfflineMode: vi.fn(() => false),
+}))
+// Mock indexedDB for test environment
+vi.mock('../utils/healthCheck', () => ({
+  startHealthCheck: vi.fn(() => vi.fn()),
+}))
+// Mock firstScreenOptimize
+vi.mock('../utils/firstScreenOptimize', () => ({
+  initFirstScreenOptimize: vi.fn(),
 }))
 
 import App from '../App'

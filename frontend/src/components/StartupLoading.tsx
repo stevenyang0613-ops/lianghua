@@ -66,7 +66,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
   // Electron 环境下启动时清除离线模式残留
   useEffect(() => {
     isMountedRef.current = true
-    if (window.electronAPI?.httpRequest) {
+    if (window.electronAPI) {
       localStorage.removeItem('offline_mode')
     }
     return () => { isMountedRef.current = false }
@@ -141,6 +141,8 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     let cancelled = false
     let retries = 0
     const maxRetries = 120
+    // stepInterval 引用：在清理时统一停止
+    let stepInterval: ReturnType<typeof setInterval> | null = null
     // AbortController 用于取消 probeDirectBackend 请求
     const probeAbortController = new AbortController()
     // 指数退避：Electron 环境后端启动需 6-10 分钟，逐步拉长重试间隔
@@ -175,7 +177,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
       }
 
       // 步骤动画
-      const stepInterval = setInterval(() => {
+      stepInterval = setInterval(() => {
         if (!cancelled && step < LOADING_STEPS.length - 1) {
           setStep((s) => Math.min(s + 0.5, LOADING_STEPS.length - 1))
         }
@@ -277,6 +279,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     check()
     return () => {
       cancelled = true
+      if (stepInterval) clearInterval(stepInterval)
       probeAbortController.abort()
     }
     // 注意：step 不应在依赖数组中，否则会导致无限循环
@@ -492,7 +495,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 32,
     fontWeight: 700,
     margin: 0,
-    background: '#fff',
     color: '#fff',
     letterSpacing: 2,
     textShadow: '0 2px 8px rgba(0,0,0,0.2)',

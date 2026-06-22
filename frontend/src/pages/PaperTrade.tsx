@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, RiseOutlined, FallOutlined, FundOutlined, SettingOutlined, DeleteOutlined, RocketOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
@@ -8,6 +8,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { fetchPaperAccounts, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount } from '../services/api'
 import { useEverRun } from '../hooks/useEverRun'
+import { useElectron } from '../hooks/useElectron'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -44,7 +45,7 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
       setOrders(ordRes.orders || [])
       setEquity(eqRes.points || [])
       setSignals(sigRes.signals || [])
-    } catch (e: any) { console.warn('Load paper trade data failed:', e) }
+    } catch (e: unknown) { console.warn('Load paper trade data failed:', e) }
     finally { setLoading(false) }
   }, [accountId])
 
@@ -54,22 +55,22 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
   const handleStart = async () => {
     if (!accountId) return
     try { await startPaperAccount(accountId); message.success('模拟交易已启动'); onRefresh() }
-    catch (e: any) { message.error('启动失败: ' + (e.message || '')) }
+    catch (e: unknown) { message.error('启动失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
   const handleStop = async () => {
     if (!accountId) return
     try { await stopPaperAccount(accountId); message.success('模拟交易已停止'); onRefresh() }
-    catch (e: any) { message.error('停止失败: ' + (e.message || '')) }
+    catch (e: unknown) { message.error('停止失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
   const handleReset = async () => {
     if (!accountId) return
     try { await resetPaperAccount(accountId); message.success('账户已重置'); onRefresh(); loadData() }
-    catch (e: any) { message.error('重置失败: ' + (e.message || '')) }
+    catch (e: unknown) { message.error('重置失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
   const handleDelete = async () => {
     if (!accountId) return
     try { await deletePaperAccount(accountId); message.success('账户已删除'); onRefresh() }
-    catch (e: any) { message.error('删除失败: ' + (e.message || '')) }
+    catch (e: unknown) { message.error('删除失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
   const handleSaveParams = async () => {
     if (!accountId) return
@@ -77,7 +78,7 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
       const values = await paramsForm.validateFields()
       await updatePaperParams(accountId, values)
       message.success('参数已保存')
-    } catch (e: any) { message.error('保存参数失败: ' + (e.message || '')) }
+    } catch (e: unknown) { message.error('保存参数失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
 
   if (!account) return <Card><Empty description="账户未创建" /></Card>
@@ -284,6 +285,12 @@ export default function PaperTrade() {
   const [dismissRefreshWarning, setDismissRefreshWarning] = useState(() => {
     try { return sessionStorage.getItem('lianghua_dismiss_refresh_warning') === 'true' } catch { return true }
   })
+  // useRef 解决闭包过期问题：warningShownAt 在 loadAccounts 内部被设置，
+  // 不能加入 useCallback deps（否则无限循环），用 ref 避免 stale closure
+  const warningShownRef = useRef(warningShownAt)
+  warningShownRef.current = warningShownAt
+  const { isElectron, showNotification, restartBackend } = useElectron()
+
   // setState 函数是稳定引用，无需列入 useCallback 依赖
   const handleDismissWarning = useCallback(() => {
     setDismissRefreshWarning(true)
@@ -296,26 +303,64 @@ export default function PaperTrade() {
   const [loadingAccounts, setLoadingAccounts] = useState(true)
   const [activeTab, setActiveTab] = useState('xuanji_twelve')
 
+  // useRef 缓存上次响应值，避免 30s 轮询导致 React 重渲染波纹
+  const prevSnapshotRef = useRef<{ accounts: PaperAccountData[]; failCount: number; totalFails: number; threshold: number } | null>(null)
+
   const loadAccounts = useCallback(async () => {
     try {
       const res = await fetchPaperAccounts()
-      setAccounts(res.accounts || [])
+      const accounts = res.accounts || []
       const newFailCount = res.refresh_fail_count || 0
       const newTotalFails = res.refresh_total_fails || 0
-      setRefreshFailCount(newFailCount)
-      setRefreshTotalFails(newTotalFails)
-      setRefreshTotalFailThreshold(res.refresh_total_fail_threshold || 30)
+      const newThreshold = res.refresh_total_fail_threshold || 30
+
+      // 仅数值变化时 setState，避免每次 API 调用都触发重渲染
+      const prev = prevSnapshotRef.current
+      if (
+        !prev ||
+        prev.accounts.length !== accounts.length ||
+        prev.failCount !== newFailCount ||
+        prev.totalFails !== newTotalFails ||
+        prev.threshold !== newThreshold
+      ) {
+        setAccounts(accounts)
+        setRefreshFailCount(newFailCount)
+        setRefreshTotalFails(newTotalFails)
+        setRefreshTotalFailThreshold(newThreshold)
+        prevSnapshotRef.current = {
+          accounts,
+          failCount: newFailCount,
+          totalFails: newTotalFails,
+          threshold: newThreshold,
+        }
+      }
       if (import.meta.env.DEV && res.refresh_total_fail_threshold) {
         console.debug('[PaperTrade] Threshold synced:', res.refresh_total_fail_threshold, 'total fails:', newTotalFails)
       }
-      // 记录警告首次出现的时间
-      if (newFailCount >= 5 && warningShownAt === null) {
+
+      // 桌面原生通知：连续失败首次达到 5 次时弹出
+      if (newFailCount === 5 && isElectron) {
+        showNotification?.(
+          '持仓价格刷新异常',
+          `行情刷新已连续失败 5 次，持仓价格可能不是最新。累计失败 ${newTotalFails} 次。`
+        )
+      }
+      // 严重异常：累计失败达到阈值时弹出
+      if (newTotalFails >= (res.refresh_total_fail_threshold || 30) && newFailCount > 0 && isElectron) {
+        showNotification?.(
+          '持仓价格刷新严重异常',
+          `累计失败已达 ${newTotalFails} 次，建议重启后端服务。`
+        )
+      }
+
+      // 记录警告首次出现的时间（用 ref 避免闭包过期）
+      if (newFailCount >= 5 && warningShownRef.current === null) {
         setWarningShownAt(Date.now())
       }
       // 警告恢复由 useEffect 的 setTimeout 统一管理（最小显示 10 秒）
-    } catch (e: any) { console.warn('Load paper accounts failed:', e) }
+    } catch (e: unknown) { console.warn('Load paper accounts failed:', e) }
     finally { setLoadingAccounts(false) }
-  }, [])
+  }, [isElectron, showNotification])
 
   useEffect(() => { loadAccounts() }, [loadAccounts])
 
@@ -345,7 +390,16 @@ export default function PaperTrade() {
           closable
           onClose={handleDismissWarning}
           message={refreshTotalFails >= refreshTotalFailThreshold ? "持仓价格刷新严重异常" : "持仓价格刷新连续失败"}
-          description={`行情数据刷新已连续失败 ${refreshFailCount} 次${refreshTotalFails >= Math.floor(refreshTotalFailThreshold / 3) ? `，累计失败 ${refreshTotalFails} 次` : ''}，持仓价格可能不是最新。请检查网络连接或重启应用。`}
+          description={
+            <span>
+              行情数据刷新已连续失败 {refreshFailCount} 次{refreshTotalFails >= Math.floor(refreshTotalFailThreshold / 3) ? `，累计失败 ${refreshTotalFails} 次` : ''}，持仓价格可能不是最新。请检查网络连接或重启应用。
+              {refreshTotalFails >= refreshTotalFailThreshold && isElectron && (
+                <Button size="small" danger style={{ marginLeft: 12 }} onClick={async () => { try { await restartBackend() } catch {} }}>
+                  重启后端
+                </Button>
+              )}
+            </span>
+          }
           style={{ marginBottom: 12 }}
         />
       )}

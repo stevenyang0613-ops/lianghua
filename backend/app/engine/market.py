@@ -198,6 +198,17 @@ class MarketEngine:
                     if maturity and maturity < now:
                         skipped_stopped += 1
                         continue
+                    # Bug 10 fix: DuckDB JSON column returns parsed Python objects (list/dict),
+                    # NOT strings. json.loads() on an already-parsed list raises TypeError.
+                    _concepts_raw = r.get("concepts")
+                    if _concepts_raw is None:
+                        concepts_val = None
+                    elif isinstance(_concepts_raw, (list, dict)):
+                        concepts_val = _concepts_raw  # already parsed
+                    elif isinstance(_concepts_raw, str) and _concepts_raw.strip():
+                        concepts_val = json.loads(_concepts_raw)
+                    else:
+                        concepts_val = None
                     bonds.append(ConvertibleQuote(
                         code=code,
                         name=name,
@@ -247,8 +258,7 @@ class MarketEngine:
                         event_score=r.get("event_score"),
                         event_detail=r.get("event_detail"),
                         stock_name=str(r.get("stock_name") or ""),
-                        # Bug 10 fix: read back concepts from JSON column
-                        concepts=json.loads(r["concepts"]) if r.get("concepts") else None,
+                        concepts=concepts_val,
                         # 14 new columns (added 2026-06-21)
                         hv=r.get("hv"),
                         rating_score=r.get("rating_score"),

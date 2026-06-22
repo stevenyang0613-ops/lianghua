@@ -160,8 +160,9 @@ class VetoFilter:
 
         # 连续涨停检查(3个一字涨停)
         if stock.limit_up and stock.change_pct >= 9.9:
-            # 需要历史数据判断是否连续，这里简化处理
-            pass  # TODO: 需要历史数据支持
+            consecutive_limit_up = getattr(stock, 'consecutive_limit_up_days', 0)
+            if consecutive_limit_up >= 3:
+                reasons.append(f"连续涨停{consecutive_limit_up}天（一字板）")
 
         return len(reasons) == 0, reasons
 

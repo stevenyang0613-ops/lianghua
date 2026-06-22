@@ -7,7 +7,7 @@ import axios from 'axios'
 
 // API 基础配置
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -48,10 +48,10 @@ export const strategyAPI = {
     sortBy?: string
     page?: number
     pageSize?: number
-  }) => api.get('/strategies', { params }),
+  }) => api.get('/strategies-share', { params }),
 
   /** 获取策略详情 */
-  getStrategy: (id: string) => api.get(`/strategies/${id}`),
+  getStrategy: (id: string) => api.get(`/strategies-share/${id}`),
 
   /** 创建策略 */
   createStrategy: (data: {
@@ -62,7 +62,7 @@ export const strategyAPI = {
     config: Record<string, unknown>
     visibility: string
     price?: number
-  }) => api.post('/strategies', data),
+  }) => api.post('/strategies-share', data),
 
   /** 更新策略 */
   updateStrategy: (id: string, data: Partial<{
@@ -71,10 +71,10 @@ export const strategyAPI = {
     code: string
     config: Record<string, unknown>
     status: string
-  }>) => api.put(`/strategies/${id}`, data),
+  }>) => api.put(`/strategies-share/${id}`, data),
 
   /** 删除策略 */
-  deleteStrategy: (id: string) => api.delete(`/strategies/${id}`),
+  deleteStrategy: (id: string) => api.delete(`/strategies-share/${id}`),
 
   /** 订阅策略 */
   subscribe: (strategyId: string, settings: {
@@ -82,37 +82,37 @@ export const strategyAPI = {
     notifications: boolean
     realTrading: boolean
     accounts: string[]
-  }) => api.post(`/strategies/${strategyId}/subscribe`, settings),
+  }) => api.post(`/strategies-share/${strategyId}/subscribe`, settings),
 
   /** 取消订阅 */
-  unsubscribe: (strategyId: string) => api.delete(`/strategies/${strategyId}/subscribe`),
+  unsubscribe: (strategyId: string) => api.delete(`/strategies-share/${strategyId}/subscribe`),
 
   /** 点赞 */
-  like: (strategyId: string) => api.post(`/strategies/${strategyId}/like`),
+  like: (strategyId: string) => api.post(`/strategies-share/${strategyId}/like`),
 
   /** 评分 */
   rate: (strategyId: string, rating: number, review?: string) =>
-    api.post(`/strategies/${strategyId}/rate`, { rating, review }),
+    api.post(`/strategies-share/${strategyId}/rate`, { rating, review }),
 
   /** 评论 */
   addComment: (strategyId: string, content: string, parentId?: string) =>
-    api.post(`/strategies/${strategyId}/comments`, { content, parentId }),
+    api.post(`/strategies-share/${strategyId}/comments`, { content, parentId }),
 
   /** 获取评论 */
   getComments: (strategyId: string, page?: number, pageSize?: number) =>
-    api.get(`/strategies/${strategyId}/comments`, { params: { page, pageSize } }),
+    api.get(`/strategies-share/${strategyId}/comments`, { params: { page, pageSize } }),
 
   /** Fork 策略 */
   fork: (strategyId: string, newName?: string) =>
-    api.post(`/strategies/${strategyId}/fork`, { newName }),
+    api.post(`/strategies-share/${strategyId}/fork`, { newName }),
 
   /** 获取推荐策略 */
   getRecommended: (limit?: number) =>
-    api.get('/strategies/recommended', { params: { limit } }),
+    api.get('/strategies-share/recommended', { params: { limit } }),
 
   /** 获取热门标签 */
   getPopularTags: (limit?: number) =>
-    api.get('/strategies/tags', { params: { limit } }),
+    api.get('/strategies-share/tags', { params: { limit } }),
 }
 
 // =====================
@@ -152,7 +152,7 @@ export const aiAPI = {
   }, onChunk: (text: string) => void): Promise<void> => {
     return new Promise((resolve, reject) => {
       const eventSource = new EventSource(
-        `/api/ai/stream?data=${encodeURIComponent(JSON.stringify(data))}`
+        `/api/v1/ai/stream?data=${encodeURIComponent(JSON.stringify(data))}`
       )
 
       eventSource.onmessage = (event) => {

@@ -87,8 +87,10 @@ class Settings(BaseSettings):
         if not self.JWT_SECRET_KEY:
             jwt_token_file = Path.home() / ".lianghua" / ".jwt_secret"
             if jwt_token_file.exists():
-                self.JWT_SECRET_KEY = jwt_token_file.read_text().strip()
-            else:
+                val = jwt_token_file.read_text().strip()
+                if val:
+                    self.JWT_SECRET_KEY = val
+            if not self.JWT_SECRET_KEY:
                 self.JWT_SECRET_KEY = secrets.token_urlsafe(32)
                 jwt_token_file.parent.mkdir(parents=True, exist_ok=True)
                 jwt_token_file.write_text(self.JWT_SECRET_KEY)
@@ -103,8 +105,10 @@ class Settings(BaseSettings):
                 local_token = Path(__file__).parent.parent / "data" / ".ws_token"
                 token_file = home_token if home_token.exists() else local_token
                 if token_file.exists():
-                    self.ws_auth_token = token_file.read_text().strip()
-                else:
+                    val = token_file.read_text().strip()
+                    if val:
+                        self.ws_auth_token = val
+                if not self.ws_auth_token:
                     self.ws_auth_token = secrets.token_urlsafe(32)
                     token_file = home_token
                     token_file.parent.mkdir(parents=True, exist_ok=True)

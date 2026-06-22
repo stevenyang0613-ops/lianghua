@@ -2,12 +2,13 @@
  * 报告中心页面
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Card, Table, Button, Space, Modal, Form, Select, Input, Tag, Typography, Row, Col, Statistic, Popconfirm, Empty, message, DatePicker, Checkbox } from 'antd'
 import { FileTextOutlined, DownloadOutlined, DeleteOutlined, PlusOutlined, FileExcelOutlined, FilePdfOutlined, FileUnknownOutlined, ReloadOutlined } from '@ant-design/icons'
 import { generateReport, getReports, deleteReport, clearReports, downloadReport, REPORT_TYPE_OPTIONS, REPORT_FORMAT_OPTIONS, type GeneratedReport, type ReportConfig } from '../utils/reportGenerator'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import { useMarketStore } from '../stores/useMarketStore'
 
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
@@ -19,6 +20,7 @@ export default function ReportCenter() {
   const [createModalVisible, setCreateModalVisible] = useState(false)
   const [form] = Form.useForm()
   const [generating, setGenerating] = useState(false)
+  const allBonds = useMarketStore((s) => s.allBonds)
 
   const loadReports = () => {
     setReports(getReports())
@@ -33,27 +35,35 @@ export default function ReportCenter() {
       setGenerating(true)
 
       try {
-        // 报告生成需要真实数据支持，请等待数据源就绪后重试
-        // TODO: 实现真实数据生成逻辑后删除此早期返回
-        message.warning('报告生成需要真实数据支持，请等待数据源就绪后重试')
-        setGenerating(false)
-        return
+        // 使用当前行情数据生成报告
+        const bondsData = allBonds.map(b => ({
+          code: b.code,
+          name: b.name,
+          price: b.price,
+          change_pct: b.change_pct,
+          premium_ratio: b.premium_ratio,
+          dual_low: b.dual_low,
+          volume: b.volume,
+          remaining_years: b.remaining_years,
+          ytm: b.ytm,
+          is_called: b.is_called,
+          forced_call_days: b.forced_call_days,
+        }))
 
-        // 以下为占位代码，等待数据源就绪后启用：
-        // const config: ReportConfig = {
-        //   title: values.title,
-        //   type: values.type,
-        //   format: values.format,
-        //   data: [],
-        //   includeCharts: values.includeCharts || false,
-        //   dateRange: values.dateRange?.map((d: dayjs.Dayjs) => d.format('YYYY-MM-DD')) as [string, string],
-        // }
-        // const report = generateReport(config)
-        // setCreateModalVisible(false)
-        // form.resetFields()
-        // loadReports()
-        // message.success('报告生成成功')
-        // downloadReport(report)
+        const config: ReportConfig = {
+          title: values.title || `${values.type}报告_${dayjs().format('YYYYMMDD')}`,
+          type: values.type,
+          format: values.format || 'csv',
+          data: bondsData as unknown as Record<string, unknown>[],
+          includeCharts: values.includeCharts || false,
+          dateRange: values.dateRange?.map((d: dayjs.Dayjs) => d.format('YYYY-MM-DD')) as [string, string] | undefined,
+        }
+        const report = generateReport(config)
+        setCreateModalVisible(false)
+        form.resetFields()
+        loadReports()
+        message.success(`报告 "${config.title}" 生成成功`)
+        downloadReport(report)
       } catch (err) {
         message.error('报告生成失败: ' + String(err))
       } finally {

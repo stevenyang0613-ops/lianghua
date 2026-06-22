@@ -25,7 +25,8 @@ async def _get_mx():
     global _mx_adapter
     if _mx_adapter is None:
         from app.data.adapters.mx_adapter import MXAdapter
-        _mx_adapter = MXAdapter()
+        from app.data.adapters.base import DataSourceConfig
+        _mx_adapter = MXAdapter(DataSourceConfig(name="mx"))
         await _mx_adapter.connect()
     return _mx_adapter
 
@@ -39,7 +40,7 @@ async def query_mx_data(req: MXQueryRequest, request: Request):
             raise HTTPException(status_code=400, detail="MX_APIKEY 未配置")
         
         mx = await _get_mx()
-        result = await mx.query(req.query, req.data_type)
+        result = await mx.query_natural(req.query, req.data_type)
         
         if not result.get("success"):
             raise HTTPException(status_code=502, detail=result.get("error", "查询失败"))
@@ -57,7 +58,7 @@ async def mx_status():
     """检查MX服务状态"""
     try:
         mx = await _get_mx()
-        return await mx.status()
+        return await mx.health_check()
     except Exception as e:
         return {
             "configured": bool(os.environ.get("MX_APIKEY", "")),

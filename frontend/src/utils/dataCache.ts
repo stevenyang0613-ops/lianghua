@@ -45,7 +45,10 @@ function openDB(): Promise<IDBDatabase> {
 
     const request = indexedDB.open(DB_NAME, DB_VERSION)
 
-    request.onerror = () => reject(request.error)
+    request.onerror = () => {
+      console.error('[DataCache] IndexedDB open failed:', request.error)
+      reject(request.error)
+    }
     request.onsuccess = () => {
       db = request.result
       // 清理旧 localStorage 缓存条目

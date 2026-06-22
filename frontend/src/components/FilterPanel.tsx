@@ -34,9 +34,8 @@ function FilterPanel({ onChange }: FilterPanelProps) {
   const [activeKey, setActiveKey] = useState<string[]>()
   const [currentPreset, setCurrentPreset] = useState<string>()
 
-  const handleValuesChange = () => {
-    const values = form.getFieldsValue()
-    onChange(values)
+  const handleValuesChange = (_changedValues: unknown, allValues: FilterValues) => {
+    onChange(allValues)
   }
 
   const handleReset = () => {

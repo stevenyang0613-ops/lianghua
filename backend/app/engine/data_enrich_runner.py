@@ -82,6 +82,8 @@ if _AKSHARE_PROXY_ENABLED:
             hook_domains=_HOOK_DOMAINS,
         )
         logger.info(f"[Proxy] AKShare proxy patch installed (gateway={_AKSHARE_PROXY_GATEWAY}, retry={_AKSHARE_PROXY_RETRY})")
+        if not _AKSHARE_PROXY_TOKEN or len(_AKSHARE_PROXY_TOKEN) < 12:
+            logger.warning("[Proxy] AKSHARE_PROXY_TOKEN looks empty/demo; East Money APIs may fail. Set LH_AKSHARE_PROXY_TOKEN to a valid token.")
     except Exception as e:
         logger.warning(f"[Proxy] AKShare proxy patch install failed: {e}")
 else:

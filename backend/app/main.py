@@ -58,6 +58,9 @@ if _AKSHARE_PROXY_ENABLED:
             hook_domains=_HOOK_DOMAINS,
         )
         print(f"[Main] AKShare proxy patch installed (gateway={_AKSHARE_PROXY_GATEWAY}, retry={_AKSHARE_PROXY_RETRY})")
+        # 提示用户：若使用硬编码/demo token，East Money 接口可能授权失败
+        if not _AKSHARE_PROXY_TOKEN or len(_AKSHARE_PROXY_TOKEN) < 12:
+            print("[Main] WARNING: AKSHARE_PROXY_TOKEN looks empty/demo; East Money APIs may fail. Set LH_AKSHARE_PROXY_TOKEN to a valid token.")
     except Exception as e:
         print(f"[Main] AKShare proxy patch install failed: {e}")
 else:
@@ -175,11 +178,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from typing import Any
 
 
 class SafeJSONResponse(JSONResponse):
     """自动将 NaN/Infinity 转为 None 的 JSON 响应"""
-    def render(self, content: any) -> bytes:
+    def render(self, content: Any) -> bytes:
         import json
         cleaned = _clean_nan(content)
         return json.dumps(cleaned, ensure_ascii=False, allow_nan=False).encode(self.charset)
@@ -575,6 +579,8 @@ async def lifespan(app: FastAPI):
                     start_new_session=True,
                 )
                 _enrich_procs.append(p)
+                app.state.enrich_procs = _enrich_procs
+                app.state.enrich_log = _enrich_log
                 logger.info("[Startup] DataEnrich runner subprocess started (spot/vol/fund-flow/bond-price)")
             except Exception as e:
                 logger.warning(f"[Startup] DataEnrich runner subprocess start failed: {e}")
@@ -664,6 +670,48 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler stopped")
     except Exception as e:
         logger.error(f"Error stopping scheduler: {e}")
+
+    # Shutdown ThreadPoolExecutors to prevent resource leaks
+    try:
+        executor.shutdown(wait=False)
+        logger.info("Executor shut down")
+    except Exception as e:
+        logger.error(f"Error shutting down executor: {e}")
+    try:
+        bg_executor.shutdown(wait=False)
+        logger.info("Background executor shut down")
+    except Exception as e:
+        logger.error(f"Error shutting down background executor: {e}")
+
+    # Cleanup enrich subprocesses
+    try:
+        enrich_procs = getattr(app.state, "enrich_procs", None)
+        if enrich_procs:
+            for p in enrich_procs:
+                try:
+                    p.terminate()
+                    logger.info(f"Terminated enrich subprocess {p.pid}")
+                except Exception:
+                    pass
+            # Wait briefly then SIGKILL if still alive
+            import time
+            time.sleep(0.5)
+            for p in enrich_procs:
+                if p.poll() is None:
+                    try:
+                        p.kill()
+                        logger.info(f"Killed enrich subprocess {p.pid}")
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.error(f"Error cleaning up enrich subprocesses: {e}")
+    try:
+        enrich_log = getattr(app.state, "enrich_log", None)
+        if enrich_log and not enrich_log.closed:
+            enrich_log.close()
+            logger.info("Enrich log file closed")
+    except Exception as e:
+        logger.error(f"Error closing enrich log: {e}")
 
     try:
         storage.close()
@@ -755,7 +803,7 @@ async def spa_fallback(request: Request, call_next):
     return response
 
 
-def _health_response() -> dict:
+def _health_response(request: Request | None = None) -> dict:
     engine_running = False
     db_ok = False
     try:
@@ -770,19 +818,22 @@ def _health_response() -> dict:
             db_ok = True
     except Exception:
         pass
-    return {
+    result = {
         "status": "ok",
         "app": _settings.app_name,
         "version": _settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
-        # NOTE: ws_auth_token 仅在 127.0.0.1 本地暴露。
-        # 若将来开放远程访问，必须移除此字段或加鉴权保护，否则可被 SSRF 窃取。
-        "ws_auth_token": _settings.ws_auth_token,
     }
+    # ws_auth_token 仅在本地请求中返回，避免 SSRF 窃取
+    if request is not None:
+        client = request.client
+        if client and client.host in ("127.0.0.1", "::1", "localhost"):
+            result["ws_auth_token"] = _settings.ws_auth_token
+    return result
 
 
 @app.get("/health")
 @app.get("/api/v1/health")
-async def health_v1():
-    return _health_response()
+async def health_v1(request: Request):
+    return _health_response(request)

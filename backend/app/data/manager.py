@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import os
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -322,8 +323,8 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
             is_primary=True,
         )
 
-    # 注册巨潮资讯 - 公告数据源
-    if config.get('cninfo', {}).get('enabled', True):
+    # 注册巨潮资讯 - 公告数据源（默认关闭：cninfo 在 macOS sandbox 下 py_mini_racer 失败，见 AGENTS.md #48）
+    if config.get('cninfo', {}).get('enabled', os.environ.get('LH_CNINFO_ENABLED', '').lower() in ('1', 'true', 'yes')):
         from .adapters.cninfo_adapter import CNInfoAdapter
         adapter = CNInfoAdapter(DataSourceConfig(name='cninfo'))
         manager.register(
@@ -339,10 +340,31 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
     if config.get('mx', {}).get('enabled', True):
         try:
             from .adapters.mx_adapter import MXAdapter
-            adapter = MXAdapter()
+            # 剥离 enabled 等配置级 key，只保留 api_key 等用户参数
+            mx_cfg = config.get('mx', {})
+            mx_extra = {k: v for k, v in mx_cfg.items() if k not in ('enabled', 'timeout')}
+            adapter = MXAdapter(DataSourceConfig(
+                name='mx',
+                timeout=mx_cfg.get('timeout', 30),
+                extra=mx_extra,
+            ))
             connected = await adapter.connect()
             if connected:
-                logger.info(f'[DataSource] Registered: mx (priority=80, primary=True, api_key={adapter._api_key[:8]}...)')
+                # 降级模式下降低优先级，避免空查询触发failover
+                priority = 120 if getattr(adapter, '_degraded_mode', False) else 80
+                manager.register(
+                    name='mx',
+                    adapter=adapter,
+                    priority=priority,
+                    data_types=[
+                        DataType.QUOTE, DataType.STOCK, DataType.FINANCIAL,
+                        DataType.CONVERTIBLE, DataType.ANNOUNCEMENT,
+                    ],
+                    is_primary=False,
+                    failover_to='eastmoney',
+                )
+                mode = 'degraded' if getattr(adapter, '_degraded_mode', False) else 'full'
+                logger.info(f'[DataSource] Registered: mx (priority={priority}, mode={mode}, primary=False, failover=eastmoney)')
             else:
                 logger.info('[DataSource] MX adapter skipped: MX_APIKEY not set')
         except Exception as e:
@@ -385,7 +407,7 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
         from .adapters.tdx_data_adapter import TdxDataAdapter
         adapter = TdxDataAdapter(DataSourceConfig(
             name='tdx',
-            timeout=config.get('tdx', {}).get('timeout', 5),
+            timeout=config.get('tdx', {}).get('timeout', 10),
         ))
         manager.register(
             name='tdx',

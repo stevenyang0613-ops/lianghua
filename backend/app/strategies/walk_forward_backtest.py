@@ -11,6 +11,7 @@ Walk-Forward回测验证框架 V3.0
 """
 
 from dataclasses import dataclass, field
+import math
 from datetime import datetime
 from typing import Optional, Callable
 import pandas as pd
@@ -152,9 +153,13 @@ class WalkForwardValidator:
         daily_values: list[float] = []
         dates = sorted(data['date'].unique())
 
-        for date in dates:
+        for idx, date in enumerate(dates):
             day_data = data[data['date'] == date]
-            day_signals = [s for s in signals if s.get('date') == date or date in str(s.get('date', ''))]
+            # 如果信号包含 date 字段则按日期匹配，否则假设所有信号都属于当前日期
+            day_signals = [s for s in signals if s.get('date') == date or str(date) in str(s.get('date', ''))]
+            if not day_signals and signals and idx == 0:
+                # 兼容性回退：信号没有 date 字段，将第一天信号视为当前日期
+                day_signals = signals
 
             # 执行信号
             for sig in day_signals:
@@ -164,6 +169,8 @@ class WalkForwardValidator:
 
                 if action == 'buy' and code not in positions:
                     # 买入
+                    if not price or price <= 0 or (isinstance(price, float) and math.isnan(price)):
+                        continue
                     volume = int(capital * 0.02 / price)  # 单只2%仓位
                     if volume > 0:
                         cost = self._apply_transaction_cost(volume * price)
@@ -255,15 +262,17 @@ class WalkForwardValidator:
                     None
                 )
                 if buy_trade:
-                    days = (datetime.strptime(t['date'], '%Y-%m-%d') -
-                            datetime.strptime(buy_trade['date'], '%Y-%m-%d')).days
+                    def _to_date_str(d):
+                        return d.strftime('%Y-%m-%d') if hasattr(d, 'strftime') else str(d)
+                    days = (datetime.strptime(_to_date_str(t['date']), '%Y-%m-%d') -
+                            datetime.strptime(_to_date_str(buy_trade['date']), '%Y-%m-%d')).days
                     holding_days.append(days)
 
         avg_holding_days = np.mean(holding_days) if holding_days else 0
 
         return BacktestResult(
-            start_date=dates[0] if dates else '',
-            end_date=dates[-1] if dates else '',
+            start_date=dates[0].strftime('%Y-%m-%d') if hasattr(dates[0], 'strftime') else str(dates[0]) if dates else '',
+            end_date=dates[-1].strftime('%Y-%m-%d') if hasattr(dates[-1], 'strftime') else str(dates[-1]) if dates else '',
             total_return=round(total_return, 4),
             annual_return=round(annual_return, 4),
             max_drawdown=round(max_drawdown, 4),

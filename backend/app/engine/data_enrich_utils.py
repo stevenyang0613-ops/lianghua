@@ -326,7 +326,7 @@ def load_refresh_metrics(metrics_file: Path) -> dict:
         data = load_cache(metrics_file)
         if not isinstance(data, dict):
             return {}
-        return {k: v for k, v in data.items() if not k.startswith("_") and isinstance(v, dict)}
+        return {k: v for k, v in data.items() if k != "_ts" and isinstance(v, dict)}
     except Exception as e:
         logger.debug(f"[Metrics] Failed to load {metrics_file}: {e}")
         return {}

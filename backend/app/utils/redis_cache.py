@@ -326,4 +326,4 @@ def rate_limit(max_requests: int = 100, window: int = 60, key_prefix: str = "rat
     return decorator
 
 
-export = redis_cache
+__all__ = ["redis_cache"]
