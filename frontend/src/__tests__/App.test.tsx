@@ -47,7 +47,7 @@ vi.mock('../utils/notifications', () => ({
   notificationService: { init: vi.fn() },
 }))
 vi.mock('../utils/errorLogger', () => ({
-  setupGlobalErrorHandler: vi.fn(),
+  setupGlobalErrorHandler: vi.fn(() => vi.fn()),
 }))
 vi.mock('../utils/wsInstances', () => ({
   marketWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
@@ -68,7 +68,7 @@ vi.mock('../utils/locales', () => ({
   initLocale: vi.fn(),
 }))
 vi.mock('../utils/hotkeys', () => ({
-  initHotkeys: vi.fn(),
+  initHotkeys: vi.fn(() => vi.fn()),
 }))
 vi.mock('../utils/prefetchStrategy', () => ({
   initPrefetchStrategy: vi.fn(),

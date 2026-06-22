@@ -98,7 +98,7 @@ function VirtualTableInner<T>({
     const actualIndex = startIndex + index
     return (
       <div
-        key={typeof rowKey === 'function' ? rowKey(record) : String((record as Record<string, unknown>)[rowKey as string]) || actualIndex}
+        key={typeof rowKey === 'function' ? rowKey(record) : (rowKey ? String((record as Record<string, unknown>)[rowKey]) || actualIndex : actualIndex)}
         style={{
           height: rowHeight,
           display: 'flex',

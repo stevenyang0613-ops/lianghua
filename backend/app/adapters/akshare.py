@@ -369,6 +369,17 @@ class AKShareAdapter(DataSourceAdapter):
 
     @staticmethod
     def _safe_float(value) -> float:
+        """将任意输入安全转换为 float，缺失/无效输入返回 0.0
+
+        ⚠️ 注意：返回 0.0 在两个场景下含义不同：
+          - 数据源返回 0（合法值，如 change_pct=0%）
+          - 数据源缺失/解析失败（应理解为"无数据"）
+
+        对真实 0 与缺失敏感的字段（如价格、转股价），请使用 `_safe_float_opt`
+        让下游通过 None 区分"真实 0"和"缺失"。_is_stopped_trading 已实现对
+        price=0 的兜底逻辑（remaining_years==0 时保留，>=1.0 时判定停牌），
+        所以本方法在大多场景下仍然安全。
+        """
         if value is None or value == '' or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
             return 0.0
         try:
@@ -385,6 +396,11 @@ class AKShareAdapter(DataSourceAdapter):
 
         用于价格/转股价/正股价等"0 是非法值"的字段，
         让下游 safe_score / has_data 优先级能正确区分"真实 0"和"缺失"。
+
+        ⚠️ 注意：调用方所在字段的 schema 必须声明为 Optional[float]，
+        否则 Pydantic 校验会失败（None 不能赋值给 float=0.0 字段）。
+        ConvertibleQuote 等模型当前仍使用 float=0.0，需先用 _safe_float，
+        后续迁移到 Optional[float] 后可切换此方法。
         """
         if value is None or value == '':
             return None

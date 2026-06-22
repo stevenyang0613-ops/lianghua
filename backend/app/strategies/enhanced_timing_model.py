@@ -530,7 +530,7 @@ class EnhancedTimingModel:
 
         # 4. 布林带位置
         bb = data.bollinger_position
-        if 0 < bb < 1:
+        if not math.isnan(bb) and 0 <= bb <= 1:
             if bb < 0.1: oversold_signals += 2
             elif bb < 0.25: oversold_signals += 1
             elif bb > 0.9: overbought_signals += 2
@@ -602,7 +602,7 @@ class EnhancedTimingModel:
         
         # 1.1 转债溢价率中位数评分
         premium = data.cb_median_premium
-        if premium > 0:
+        if not math.isnan(premium):
             premium_score = linear_score(premium, 10, 50, invert=True)
             premium_signal = "bullish" if premium < 20 else "bearish" if premium > 35 else "neutral"
             premium_desc = f"溢价率中位数{premium:.1f}%，{'低' if premium<20 else '中' if premium<35 else '高'}估区间"
@@ -697,7 +697,7 @@ class EnhancedTimingModel:
             name="盈利超预期比例", score=surprise_score, weight=0.25,
             category="fundamental", raw_value=surprise,
             signal="bullish" if surprise > 0.6 else "bearish" if surprise < 0.4 else "neutral",
-            description=f"盈利超预期公司占比{surprise*100:.0f}%" if surprise > 0 else "无数据",
+            description=f"盈利超预期公司占比{surprise*100:.0f}%" if not math.isnan(surprise) else "无数据",
         ))
         
         # 2.2 GDP增速贡献
@@ -800,7 +800,7 @@ class EnhancedTimingModel:
         # 3.2 融资融券余额占比（均值回归：过低=情绪冰点=机会=高分，过高=过热=风险=低分）
         # NOTE: math.isnan(mb_ratio) checks DATA FIELD availability
         mb_ratio = data.margin_buy_ratio
-        if math.isnan(mb_ratio) or mb_ratio <= 0:
+        if math.isnan(mb_ratio):
             mb_chip_score = 50.0
             mb_chip_signal = "neutral"
             mb_chip_desc = "无融资买入数据"
@@ -848,7 +848,7 @@ class EnhancedTimingModel:
         # 用PE分位作为供给压力的间接指标（线性插值避免阶梯跳跃）
         # NOTE: math.isnan(pe_pct) checks DATA FIELD availability
         pe_pct = data.stock_pe_percentile
-        if math.isnan(pe_pct) or pe_pct <= 0:
+        if math.isnan(pe_pct):
             supply_score = 50.0
         else:
             # 低PE分位=供给压力小=看多=高分；高PE分位=供给压力大=看空=低分
@@ -887,7 +887,7 @@ class EnhancedTimingModel:
         
         # 4.1 转债市场日均成交额
         cb_amount = data.cb_avg_daily_amount
-        if cb_amount > 0:
+        if not math.isnan(cb_amount):
             cb_amount_score = sigmoid_score(cb_amount, 1.5, steepness=1.0)
             cb_amount_desc = f"转债日均成交额{cb_amount:.2f}亿，{'活跃' if cb_amount>2.0 else '低迷' if cb_amount<0.5 else '正常'}"
         else:
@@ -950,7 +950,7 @@ class EnhancedTimingModel:
         
         # 4.5 全市场成交额趋势（亿元）
         turnover = data.market_turnover
-        if turnover > 0:
+        if not math.isnan(turnover):
             if turnover >= 10000:
                 t_score = 75  # 高度活跃
             elif turnover >= 5000:
@@ -1012,7 +1012,7 @@ class EnhancedTimingModel:
         
         # 5.1 Shibor隔夜利率（反向）
         shibor = data.shibor_overnight
-        if shibor > 0:
+        if not math.isnan(shibor):
             shibor_score = linear_score(shibor, 1.0, 3.5, invert=True)
             shibor_signal = "bullish" if shibor < 1.5 else "bearish" if shibor > 2.5 else "neutral"
             shibor_desc = f"Shibor隔夜{shibor:.2f}%，{'极度宽松' if shibor<1.5 else '正常' if shibor<2.5 else '偏紧'}"
@@ -1029,7 +1029,7 @@ class EnhancedTimingModel:
         
         # 5.2 10年期国债收益率（反向）
         yield_10y = data.treasury_10y_yield
-        if yield_10y > 0:
+        if not math.isnan(yield_10y):
             yield_score = linear_score(yield_10y, 2.0, 4.0, invert=True)
             yield_signal = "bullish" if yield_10y < 2.5 else "bearish" if yield_10y > 3.5 else "neutral"
             yield_desc = f"10年国债{yield_10y:.2f}%，{'流动性充裕' if yield_10y<2.5 else '中性' if yield_10y<3.0 else '流动性收紧'}"
@@ -1046,7 +1046,7 @@ class EnhancedTimingModel:
         
         # 5.3 2年期国债收益率（短期利率锚）
         yield_2y = data.treasury_2y_yield
-        if yield_2y > 0:
+        if not math.isnan(yield_2y):
             y2_score = linear_score(yield_2y, 1.5, 3.5, invert=True)
             y2_signal = "bullish" if yield_2y < 2.0 else "bearish" if yield_2y > 3.0 else "neutral"
             y2_desc = f"2年国债{yield_2y:.2f}%，短端利率{'低位' if yield_2y<2.0 else '偏高' if yield_2y>3.0 else '适中'}"
@@ -1160,7 +1160,7 @@ class EnhancedTimingModel:
         
         # 5.3 RSI评分（增强看空灵敏度）
         rsi = data.rsi_14
-        if 0 < rsi < 100:
+        if not math.isnan(rsi) and 0 <= rsi <= 100:
             if rsi <= 20:
                 rsi_score = 90  # 超卖反弹机会
             elif rsi <= 35:  # 收紧阈值：35以下偏冷
@@ -1188,7 +1188,7 @@ class EnhancedTimingModel:
         
         # 5.4 布林带位置评分（增强看空灵敏度）
         bb = data.bollinger_position
-        if 0 < bb < 1:
+        if not math.isnan(bb) and 0 <= bb <= 1:
             if bb <= 0.15:  # 收紧下轨
                 bb_score = 80
             elif bb <= 0.3:
@@ -2366,8 +2366,8 @@ def convert_from_legacy_data(
     
     # 从 MacroData 补充（扩展版 V2.0）
     if macro_data:
-        # 国债收益率：>0 才有效，否则保持 NaN
-        if math.isnan(data.treasury_10y_yield) or data.treasury_10y_yield <= 0:
+        # 国债收益率：有效值才填充，否则保持 NaN
+        if math.isnan(data.treasury_10y_yield):
             val = getattr(macro_data, 'treasury_10y_yield', float('nan'))
             if val > 0:
                 data.treasury_10y_yield = val
@@ -2380,9 +2380,11 @@ def convert_from_legacy_data(
             'cb_index_current', 'cb_index_change', 'cb_index_ma20', 'cb_index_ma60',
             'cb_below_par_count', 'cb_count', 'cb_ytm_median',
         ):
-            if (isinstance(getattr(data, attr, 0), float) and math.isnan(getattr(data, attr, 0))) or getattr(data, attr, 0) == 0:
-                val = getattr(macro_data, attr, 0)
+            current = getattr(data, attr, float('nan'))
+            if isinstance(current, float) and math.isnan(current):
+                val = getattr(macro_data, attr, float('nan'))
                 # 修复：不能仅用 if val: 判断，因为 0 是合法值，且 float('nan') != 0
+                # 但需要区分"macro_data 中不存在该字段"（默认值 nan）和"存在但值为 0"
                 if not (isinstance(val, float) and math.isnan(val)):
                     setattr(data, attr, val)
         if math.isnan(data.pmi) or data.pmi <= 0:
@@ -2530,14 +2532,14 @@ def convert_from_legacy_data(
         val = getattr(macro_data, 'earnings_surprise_ratio', float('nan'))
         if not math.isnan(val):
             data.earnings_surprise_ratio = val
-        val = getattr(macro_data, 'policy_signal_score', 0)
-        if val > 0:
+        val = getattr(macro_data, 'policy_signal_score', float('nan'))
+        if not math.isnan(val):
             data.policy_signal_score = val
-        val = getattr(macro_data, 'event_impact_score', 0)
-        if val > 0:
+        val = getattr(macro_data, 'event_impact_score', float('nan'))
+        if not math.isnan(val):
             data.event_impact_score = val
-        val = getattr(macro_data, 'industry_cycle_score', 0)
-        if val > 0:
+        val = getattr(macro_data, 'industry_cycle_score', float('nan'))
+        if not math.isnan(val):
             data.industry_cycle_score = val
     
     # 从 bonds_df 计算补充指标
@@ -2545,7 +2547,7 @@ def convert_from_legacy_data(
         if 'premium_ratio' in bonds_df.columns:
             premiums = bonds_df['premium_ratio'].dropna()
             if len(premiums) > 0:
-                if math.isnan(data.cb_median_premium) or data.cb_median_premium <= 0:
+                if math.isnan(data.cb_median_premium):
                     data.cb_median_premium = float(premiums.median())
                 data.cb_avg_premium = float(premiums.mean())
 
@@ -2572,7 +2574,7 @@ def convert_from_legacy_data(
                 data.cb_avg_daily_amount = float(volumes.sum() / len(volumes))
     
     data.data_completeness = min(1.0, sum([
-        0.05 if data.cb_median_premium > 0 else 0,
+        0.05 if not math.isnan(data.cb_median_premium) else 0,
         0.03 if (data.cb_ytm_available is True or (data.cb_ytm_available is None and not math.isnan(data.cb_ytm_median))) else 0,  # 三态: True/推断/False
         0.05 if data.treasury_10y_yield > 0 else 0,
         0.04 if 0 < data.pmi < 100 else 0,
@@ -2584,26 +2586,26 @@ def convert_from_legacy_data(
         0.04 if data.cb_median_price > 0 else 0,
         0.03 if data.cb_count > 0 else 0,
         0.04 if data.shibor_overnight > 0 else 0,
-        0.04 if data.m2_growth > 0 else 0,
-        0.04 if (not math.isnan(data.cpi) and data.cpi > 0) or not math.isnan(data.ppi) else 0,
+        0.04 if not math.isnan(data.m2_growth) else 0,
+        0.04 if (not math.isnan(data.cpi)) or not math.isnan(data.ppi) else 0,
         0.03 if not math.isnan(data.social_financing_growth) else 0,
         0.03 if not math.isnan(data.gdp_growth) else 0,
         0.04 if data.credit_spread > 0 else 0,
-        0.03 if data.term_spread > 0 else 0,
+        0.03 if not math.isnan(data.term_spread) else 0,
         # 以下字段数据源当前不可用，按中性值返回；不扣减完整度也不额外加分
         0.03 if data.margin_buy_ratio > 0 else 0,
         0.04 if data.stock_pe_median > 0 and data.stock_pb_median > 0 else 0,
-        0.03 if data.stock_pe_percentile > 0 and data.stock_pb_percentile > 0 else 0,
+        0.03 if not math.isnan(data.stock_pe_percentile) and not math.isnan(data.stock_pb_percentile) else 0,
         0.03 if not math.isnan(data.industrial_output) else 0,
         0.03 if not math.isnan(data.retail_sales) else 0,
         0.03 if not math.isnan(data.export_growth) else 0,
-        0.02 if data.pcr_ratio > 0 else 0,
-        0.02 if data.vix_index > 0 else 0,
-        0.03 if data.rsi_14 > 0 else 0,
-        0.02 if data.bollinger_position > 0 else 0,
-        0.02 if data.volume_ratio > 0 else 0,
-        0.02 if data.advance_decline_ratio > 0 else 0,
-        0.02 if data.limit_up_count > 0 or data.limit_down_count > 0 else 0,
+        0.02 if not math.isnan(data.pcr_ratio) else 0,
+        0.02 if not math.isnan(data.vix_index) else 0,
+        0.03 if not math.isnan(data.rsi_14) else 0,
+        0.02 if not math.isnan(data.bollinger_position) else 0,
+        0.02 if not math.isnan(data.volume_ratio) else 0,
+        0.02 if not math.isnan(data.advance_decline_ratio) else 0,
+        0.02 if not math.isnan(data.limit_up_count) or not math.isnan(data.limit_down_count) else 0,
     ]))
     
     data.updated_at = datetime.now()

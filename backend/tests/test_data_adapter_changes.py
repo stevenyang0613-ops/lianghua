@@ -13,6 +13,7 @@
 9. PE/PB/turnover extraction
 10. _compute_greeks IV estimation
 """
+import math
 import pytest
 import numpy as np
 import pandas as pd
@@ -57,13 +58,13 @@ class TestNaNHandling:
     def test_macro_data_defaults(self):
         from app.services.macro_data import MacroData
         data = MacroData()
-        assert data.pmi_current == 0.0
-        assert data.cpi == 0.0
-        assert data.m2_growth == 0.0
-        assert data.gdp_growth == 0.0
-        assert data.stock_pe_percentile == 0.0
-        assert data.stock_pb_percentile == 0.0
-        assert data.industry_net_inflow == 0.0
+        assert math.isnan(data.pmi_current)
+        assert math.isnan(data.cpi)
+        assert math.isnan(data.m2_growth)
+        assert math.isnan(data.gdp_growth)
+        assert math.isnan(data.stock_pe_percentile)
+        assert math.isnan(data.stock_pb_percentile)
+        assert math.isnan(data.industry_net_inflow)
         assert data.policy_signal_score == 50.0
         assert data.event_impact_score == 50.0
         assert data.industry_cycle_score == 50.0

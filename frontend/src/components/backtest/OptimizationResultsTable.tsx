@@ -42,8 +42,11 @@ const OptimizationResultsTable = memo(function OptimizationResultsTable({
       title: <Tooltip title={optMetricLabel}>目标<i style={{ marginLeft: 4 }}>{optMetricLabel}</i></Tooltip>,
       key: 'target',
       width: 100,
-      render: (_: any, record: OptimizationResultItem) => {
-        const val = (record as any)[optResult?.optimize_metric ?? ''] ?? 0
+      render: (_: unknown, record: OptimizationResultItem) => {
+        const metricKey = optResult?.optimize_metric ?? ''
+        const val = metricKey
+          ? ((record as unknown as Record<string, unknown>)[metricKey] as number | undefined) ?? 0
+          : 0
         return (
           <Text style={{ color: '#1890ff' }} strong>
             {typeof val === 'number' ? fmt(val) : val}

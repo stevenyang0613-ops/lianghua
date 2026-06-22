@@ -24,6 +24,10 @@ class PrefetchManager {
   private isProcessing: boolean = false
   private maxHistorySize = 100
   private prefetchCache: Set<string> = new Set()
+  private _checkInterval: ReturnType<typeof setInterval> | null = null
+  private _popstateHandler: (() => void) | null = null
+  private _clickHandler: ((e: MouseEvent) => void) | null = null
+  private _loadHandler: (() => void) | null = null
 
   constructor() {
     // 监听路由变化
@@ -47,12 +51,13 @@ class PrefetchManager {
     this.recordBehavior(window.location.pathname, 'navigate')
 
     // 监听 popstate
-    window.addEventListener('popstate', () => {
+    this._popstateHandler = () => {
       this.recordBehavior(window.location.pathname, 'navigate')
-    })
+    }
+    window.addEventListener('popstate', this._popstateHandler)
 
     // 监听点击事件（捕获阶段）
-    document.addEventListener('click', (e) => {
+    this._clickHandler = (e: MouseEvent) => {
       const target = e.target as HTMLElement
       const link = target.closest('a')
       if (link && link.href) {
@@ -62,7 +67,8 @@ class PrefetchManager {
         // 预测并预取
         this.predictAndPrefetch(path)
       }
-    }, true)
+    }
+    document.addEventListener('click', this._clickHandler, true)
   }
 
   /**
@@ -174,18 +180,19 @@ class PrefetchManager {
     }
 
     // 定期检查队列
-    setInterval(() => {
+    this._checkInterval = setInterval(() => {
       if (this.prefetchQueue.length > 0 && !this.isProcessing) {
         processQueue()
       }
     }, 5000)
 
     // 页面加载完成后开始预取
-    window.addEventListener('load', () => {
+    this._loadHandler = () => {
       if ('requestIdleCallback' in window) {
         requestIdleCallback(processQueue)
       }
-    })
+    }
+    window.addEventListener('load', this._loadHandler)
   }
 
   /**
@@ -289,6 +296,22 @@ class PrefetchManager {
    */
   destroy(): void {
     this.clearCache()
+    if (this._checkInterval) {
+      clearInterval(this._checkInterval)
+      this._checkInterval = null
+    }
+    if (this._popstateHandler) {
+      window.removeEventListener('popstate', this._popstateHandler)
+      this._popstateHandler = null
+    }
+    if (this._clickHandler) {
+      document.removeEventListener('click', this._clickHandler, true)
+      this._clickHandler = null
+    }
+    if (this._loadHandler) {
+      window.removeEventListener('load', this._loadHandler)
+      this._loadHandler = null
+    }
   }
 }
 

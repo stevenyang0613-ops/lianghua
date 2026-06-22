@@ -3239,7 +3239,7 @@ def _refresh_stock_name_cache():
 @_with_metrics
 def _refresh_main_biz_cache():
     """刷新主营业务缓存 — 从 _industry_map 回退，或尝试 THS 行业明细"""
-    global _main_biz_cache
+    global _main_biz_map
     try:
         logger.info('[DataEnrich] Refreshing main business...')
         result = {}
@@ -3266,25 +3266,25 @@ def _refresh_main_biz_cache():
             except Exception as ths_e:
                 logger.debug(f'[DataEnrich] Main biz THS fallback failed: {ths_e}')
         if result:
-            _set_global_map('_main_biz_cache', result, replace=True)
+            _set_global_map('_main_biz_map', result, replace=True)
             _save_cache(_MAIN_BIZ_CACHE, result)
             logger.info(f'[DataEnrich] Main biz: {len(result)} entries')
             return len(result)
         else:
-            if not _main_biz_cache:
+            if not _main_biz_map:
                 _load_main_biz_cache()
-            return len(_main_biz_cache) if _main_biz_cache else 0
+            return len(_main_biz_map) if _main_biz_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Main biz refresh failed: {e}')
-        if not _main_biz_cache:
+        if not _main_biz_map:
             _load_main_biz_cache()
-        return len(_main_biz_cache) if _main_biz_cache else 0
+        return len(_main_biz_map) if _main_biz_map else 0
 
 
 @_with_metrics
 def _refresh_analyst_rank_cache():
     """刷新分析师排名缓存 — 东方财富分析师指数"""
-    global _analyst_rank_cache
+    global _analyst_rank_map
     try:
         logger.info('[DataEnrich] Refreshing analyst rank...')
         result = {}
@@ -3305,24 +3305,24 @@ def _refresh_analyst_rank_cache():
         except Exception as em_e:
             logger.warning(f'[DataEnrich] Analyst rank EM failed: {em_e}')
         if result:
-            _set_global_map('_analyst_rank_cache', result, replace=True)
+            _set_global_map('_analyst_rank_map', result, replace=True)
             _save_cache(_ANALYST_RANK_CACHE, result)
             return len(result)
         else:
-            if not _analyst_rank_cache:
-                _load_analyst_rank_cache()
-            return len(_analyst_rank_cache) if _analyst_rank_cache else 0
+            if not _analyst_rank_map:
+                _load_analyst_rank_map()
+            return len(_analyst_rank_map) if _analyst_rank_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Analyst rank refresh failed: {e}')
-        if not _analyst_rank_cache:
-            _load_analyst_rank_cache()
-        return len(_analyst_rank_cache) if _analyst_rank_cache else 0
+        if not _analyst_rank_map:
+            _load_analyst_rank_map()
+        return len(_analyst_rank_map) if _analyst_rank_map else 0
 
 
 @_with_metrics
 def _refresh_macro_cpi_cache():
     """刷新宏观 CPI 缓存"""
-    global _macro_cpi_cache
+    global _macro_cpi_map
     try:
         logger.info('[DataEnrich] Refreshing macro CPI...')
         result = {}
@@ -3342,24 +3342,24 @@ def _refresh_macro_cpi_cache():
         except Exception as cpi_e:
             logger.warning(f'[DataEnrich] Macro CPI failed: {cpi_e}')
         if result:
-            _set_global_map('_macro_cpi_cache', result, replace=True)
+            _set_global_map('_macro_cpi_map', result, replace=True)
             _save_cache(_MACRO_CPI_CACHE, result)
             return len(result)
         else:
-            if not _macro_cpi_cache:
-                _load_macro_cpi_cache()
-            return len(_macro_cpi_cache) if _macro_cpi_cache else 0
+            if not _macro_cpi_map:
+                _load_macro_cpi_map()
+            return len(_macro_cpi_map) if _macro_cpi_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro CPI refresh failed: {e}')
-        if not _macro_cpi_cache:
-            _load_macro_cpi_cache()
-        return len(_macro_cpi_cache) if _macro_cpi_cache else 0
+        if not _macro_cpi_map:
+            _load_macro_cpi_map()
+        return len(_macro_cpi_map) if _macro_cpi_map else 0
 
 
 @_with_metrics
 def _refresh_macro_ppi_cache():
     """刷新宏观 PPI 缓存"""
-    global _macro_ppi_cache
+    global _macro_ppi_map
     try:
         logger.info('[DataEnrich] Refreshing macro PPI...')
         result = {}
@@ -3379,24 +3379,24 @@ def _refresh_macro_ppi_cache():
         except Exception as ppi_e:
             logger.warning(f'[DataEnrich] Macro PPI failed: {ppi_e}')
         if result:
-            _set_global_map('_macro_ppi_cache', result, replace=True)
+            _set_global_map('_macro_ppi_map', result, replace=True)
             _save_cache(_MACRO_PPI_CACHE, result)
             return len(result)
         else:
-            if not _macro_ppi_cache:
-                _load_macro_ppi_cache()
-            return len(_macro_ppi_cache) if _macro_ppi_cache else 0
+            if not _macro_ppi_map:
+                _load_macro_ppi_map()
+            return len(_macro_ppi_map) if _macro_ppi_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro PPI refresh failed: {e}')
-        if not _macro_ppi_cache:
-            _load_macro_ppi_cache()
-        return len(_macro_ppi_cache) if _macro_ppi_cache else 0
+        if not _macro_ppi_map:
+            _load_macro_ppi_map()
+        return len(_macro_ppi_map) if _macro_ppi_map else 0
 
 
 @_with_metrics
 def _refresh_macro_m2_cache():
     """刷新宏观 M2 缓存"""
-    global _macro_m2_cache
+    global _macro_m2_map
     try:
         logger.info('[DataEnrich] Refreshing macro M2...')
         result = {}
@@ -3418,24 +3418,24 @@ def _refresh_macro_m2_cache():
         except Exception as m2_e:
             logger.warning(f'[DataEnrich] Macro M2 failed: {m2_e}')
         if result:
-            _set_global_map('_macro_m2_cache', result, replace=True)
+            _set_global_map('_macro_m2_map', result, replace=True)
             _save_cache(_MACRO_M2_CACHE, result)
             return len(result)
         else:
-            if not _macro_m2_cache:
-                _load_macro_m2_cache()
-            return len(_macro_m2_cache) if _macro_m2_cache else 0
+            if not _macro_m2_map:
+                _load_macro_m2_map()
+            return len(_macro_m2_map) if _macro_m2_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro M2 refresh failed: {e}')
-        if not _macro_m2_cache:
-            _load_macro_m2_cache()
-        return len(_macro_m2_cache) if _macro_m2_cache else 0
+        if not _macro_m2_map:
+            _load_macro_m2_map()
+        return len(_macro_m2_map) if _macro_m2_map else 0
 
 
 @_with_metrics
 def _refresh_macro_lpr_cache():
     """刷新宏观 LPR 缓存"""
-    global _macro_lpr_cache
+    global _macro_lpr_map
     try:
         logger.info('[DataEnrich] Refreshing macro LPR...')
         result = {}
@@ -3455,18 +3455,18 @@ def _refresh_macro_lpr_cache():
         except Exception as lpr_e:
             logger.warning(f'[DataEnrich] Macro LPR failed: {lpr_e}')
         if result:
-            _set_global_map('_macro_lpr_cache', result, replace=True)
+            _set_global_map('_macro_lpr_map', result, replace=True)
             _save_cache(_MACRO_LPR_CACHE, result)
             return len(result)
         else:
-            if not _macro_lpr_cache:
-                _load_macro_lpr_cache()
-            return len(_macro_lpr_cache) if _macro_lpr_cache else 0
+            if not _macro_lpr_map:
+                _load_macro_lpr_map()
+            return len(_macro_lpr_map) if _macro_lpr_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro LPR refresh failed: {e}')
-        if not _macro_lpr_cache:
-            _load_macro_lpr_cache()
-        return len(_macro_lpr_cache) if _macro_lpr_cache else 0
+        if not _macro_lpr_map:
+            _load_macro_lpr_map()
+        return len(_macro_lpr_map) if _macro_lpr_map else 0
 
 
 # ==================== 全局状态 ====================
@@ -3561,7 +3561,7 @@ def _compute_field_coverage() -> dict[str, float]:
         "industry", "pe", "pb", "roe", "gpm", "dual_low", "premium_ratio",
         "conversion_value", "revenue_yoy", "profit_yoy",
         # 扩展字段
-        "turnover_rate",
+        "turnover_rate", "outstanding_scale",
         # 重要：stock_price / stock_change_pct 不计入自检
         # 它们通常由 WebSocket 实时推送，而非缓存注入；
         # 自检无法区分"实时推送值"与"缓存注入的旧值"。
@@ -3623,7 +3623,7 @@ async def enrich_quotes(bonds: list) -> list:
         ("_load_stock_name_cache", "_name_loaded"),
         ("_load_pledge_cache", "_pledge_loaded"),
         ("_load_fund_flow_cache", "_fund_flow_loaded"),
-        ("_load_main_biz_cache", "_main_biz_loaded"),
+        ("_load_main_biz_map", "_main_biz_loaded"),
     ):
         if not globals().get(_loaded_flag):
             try:
@@ -3722,9 +3722,9 @@ async def enrich_quotes(bonds: list) -> list:
                 b.pb = spot["pb"]
             if spot.get("turnover_rate") is not None:
                 b.turnover_rate = spot["turnover_rate"]
-            if b.stock_price is None and spot.get("price"):
+            if (not b.stock_price or b.stock_price == 0) and spot.get("price"):
                 b.stock_price = spot["price"]
-            if b.stock_change_pct is None and spot.get("change_pct"):
+            if (not b.stock_change_pct or b.stock_change_pct == 0) and spot.get("change_pct"):
                 b.stock_change_pct = spot["change_pct"]
 
         if b.industry is None:
@@ -3878,16 +3878,16 @@ async def enrich_quotes(bonds: list) -> list:
                 b.conversion_price = bp["conversion_price"]
             if bp.get("conversion_value") is not None and bp.get("conversion_value", 0) > 0 and (not b.conversion_value or b.conversion_value == 0):
                 b.conversion_value = bp["conversion_value"]
-            if bp.get("premium_ratio") is not None and b.premium_ratio is None:
+            if bp.get("premium_ratio") is not None and (not b.premium_ratio or b.premium_ratio == 0):
                 b.premium_ratio = bp["premium_ratio"]
             if bp.get("dual_low") is not None and bp.get("dual_low", 0) > 0 and (not b.dual_low or b.dual_low == 0):
                 b.dual_low = bp["dual_low"]
             # YTM: JSL ytm=0 可能是数据缺失而非真实 0%，
             # 使用 remaining_years > 0 作为启发式判断（未到期债券的 ytm=0 极罕见）
             _bp_ytm = bp.get("ytm")
-            if _bp_ytm is not None and b.ytm is None:
+            if _bp_ytm is not None and (not b.ytm or b.ytm == 0):
                 b.ytm = _bp_ytm
-            elif _bp_ytm == 0 and bp.get("remaining_years", 0) > 0 and b.ytm is None:
+            elif _bp_ytm == 0 and bp.get("remaining_years", 0) > 0 and (not b.ytm or b.ytm == 0):
                 # 未到期债券 ytm=0 可能是有效数据，但标记为不确定
                 b.ytm = 0.0
             if bp.get("volume") is not None and bp.get("volume", 0) > 0 and (not b.volume or b.volume == 0):
@@ -4474,7 +4474,8 @@ async def start_background_refresh():
                 cmd = [_sys.executable, runner_script,
                        "--north", "--margin", "--lhb", "--block-trade",
                        "--holder-num", "--restricted-release",
-                       "--fund-flow", "--vol", "--mgmt", "--earnings-forecast"]
+                       "--fund-flow", "--vol", "--mgmt", "--earnings-forecast",
+                       "--spot", "--bond-price"]
                 proc = None
                 try:
                     proc = subprocess.Popen(
@@ -4797,7 +4798,8 @@ def _refresh_earnings_express_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "yoy_change_pct": None,
+                    "revenue_yoy": None,
+                    "net_profit_yoy": None,
                     "year": None,
                     "_data_source": "zero_fill",
                 }
@@ -5026,7 +5028,7 @@ def _refresh_margin_cache():
                 # 若当前交易所已有数据，保留首次出现（通常 SSE/SZSE 不重叠）
                 if code not in result:
                     result[code] = {
-                        "margin_balance": balance if balance is not None else 0,
+                        "margin_balance": balance,  # 保留 None 让前端区分"无数据"
                         "_data_source": f"{exchange}_{date_str}",
                     }
                     filled += 1
@@ -5038,7 +5040,7 @@ def _refresh_margin_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "margin_balance": 0,
+                    "margin_balance": None,  # 用 None 区分"无融资余额"和"0 元"
                     "_data_source": "zero_fill",
                 }
 
@@ -5108,7 +5110,7 @@ def _refresh_lhb_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "lhb_count": 0,
+                    "lhb_count": None,  # 用 None 区分"未上榜"和"上榜 0 次"
                     "_prev_count": 0,
                     "_delta": 0,
                     "_data_source": "zero_fill",
@@ -5194,7 +5196,10 @@ def _refresh_holder_num_cache():
             _ensure_bond_stock_codes()
         bond_codes = sorted(_bond_stock_codes) if _bond_stock_codes else []
         all_codes = bond_codes[:]
-        if len(all_codes) < 1000:
+        # 限制到 300 只股票（top 300 个按代码排序），避免单股 API 慢导致 5+ 分钟
+        # periodic runner 后续会补全剩余 854 只
+        MAX_HOLDER_CODES = 300
+        if len(all_codes) < MAX_HOLDER_CODES:
             try:
                 df_all = _run_with_timeout(
                     ak.stock_info_a_code_name,
@@ -5205,7 +5210,7 @@ def _refresh_holder_num_cache():
                     a_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
                     seen = set(all_codes)
                     for c in a_codes:
-                        if c not in seen and len(all_codes) < 1000:
+                        if c not in seen and len(all_codes) < MAX_HOLDER_CODES:
                             all_codes.append(c)
                             seen.add(c)
             except Exception:
@@ -5426,7 +5431,7 @@ def _refresh_restricted_release_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "restricted_release_amount": 0,
+                    "restricted_release_amount": None,  # 用 None 区分"无解禁"和"解禁 0 股"
                     "_data_source": "zero_fill",
                 }
         if result:

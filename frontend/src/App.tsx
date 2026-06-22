@@ -105,7 +105,7 @@ export default function App() {
     // 初始化通知服务
     notificationService.init()
     // 设置全局错误处理
-    setupGlobalErrorHandler()
+    const errorHandlerCleanup = setupGlobalErrorHandler()
 
     // 网络状态监听
     const networkCleanup = onNetworkChange((online) => {
@@ -139,7 +139,7 @@ export default function App() {
     initLocale()
     initThemeSystem()
     // 初始化快捷键
-    initHotkeys()
+    const hotkeysCleanup = initHotkeys()
     // 初始化预取策略
     initPrefetchStrategy()
     // 初始化监控服务
@@ -164,6 +164,8 @@ export default function App() {
     const healthCleanup = startHealthCheck()
 
       return () => {
+        errorHandlerCleanup()
+        hotkeysCleanup()
         networkCleanup()
         preloadCleanup()
         healthCleanup()

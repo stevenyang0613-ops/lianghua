@@ -11,7 +11,7 @@ vi.mock('../components/StatusBar', () => ({
 vi.mock('../components/DetailPanel', () => ({
   default: () => null,
 }))
-vi.mock('../components/ThemeToggle', () => ({
+vi.mock('../components/OfflineIndicator', () => ({
   default: () => null,
 }))
 vi.mock('../components/AlertPanel', () => ({

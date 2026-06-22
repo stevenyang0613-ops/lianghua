@@ -586,7 +586,7 @@ export default function BacktestComparison({ backtestResults, onRerun, onExport 
 
           {/* 图表 */}
           <Card style={{ marginBottom: 16 }}>
-            <Tabs activeKey={config.chartType} onChange={(key) => setConfig(prev => ({ ...prev, chartType: key as any }))}>
+            <Tabs activeKey={config.chartType} onChange={(key) => setConfig(prev => ({ ...prev, chartType: key as ComparisonConfig['chartType'] }))}>
               <TabPane tab={<span><LineChartOutlined />权益曲线</span>} key="equity">
                 <ReactECharts
                   option={getEquityChartOption()}

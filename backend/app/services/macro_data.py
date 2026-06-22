@@ -47,81 +47,81 @@ logger = logging.getLogger(__name__)
 class MacroData:
     """宏观市场数据快照"""
     # === 国债收益率 ===
-    treasury_10y_yield: float = 0.0
-    treasury_5y_yield: float = 0.0
-    treasury_2y_yield: float = 0.0
-    credit_spread_aa: float = 0.0
+    treasury_10y_yield: float = float('nan')
+    treasury_5y_yield: float = float('nan')
+    treasury_2y_yield: float = float('nan')
+    credit_spread_aa: float = float('nan')
 
     # === Shibor ===
-    shibor_overnight: float = 0.0
-    shibor_1w: float = 0.0
-    shibor_1m: float = 0.0
+    shibor_overnight: float = float('nan')
+    shibor_1w: float = float('nan')
+    shibor_1m: float = float('nan')
 
     # === 宏观 ===
-    pmi_current: float = 0.0
-    pmi_prev: float = 0.0
-    cpi: float = 0.0
-    ppi: float = 0.0
-    m2_growth: float = 0.0
-    social_financing_growth: float = 0.0
-    gdp_growth: float = 0.0
+    pmi_current: float = float('nan')
+    pmi_prev: float = float('nan')
+    cpi: float = float('nan')
+    ppi: float = float('nan')
+    m2_growth: float = float('nan')
+    social_financing_growth: float = float('nan')
+    gdp_growth: float = float('nan')
 
     # === 转债市场 ===
-    cb_median_premium: float = 0.0
-    cb_avg_daily_amount: float = 0.0
-    cb_index_change: float = 0.0
-    cb_index_current: float = 0.0
-    cb_index_ma20: float = 0.0
-    cb_index_ma60: float = 0.0
+    cb_median_premium: float = float('nan')
+    cb_avg_daily_amount: float = float('nan')
+    cb_index_change: float = float('nan')
+    cb_index_current: float = float('nan')
+    cb_index_ma20: float = float('nan')
+    cb_index_ma60: float = float('nan')
     cb_below_par_count: float = float('nan')
-    cb_median_price: float = 0.0
+    cb_median_price: float = float('nan')
     cb_count: float = float('nan')
 
     # === 正股市场 ===
-    stock_index_current: float = 0.0
-    stock_index_change: float = 0.0
-    stock_index_change_20d: float = 0.0     # 近20日累计涨跌幅(%)
-    stock_index_change_60d: float = 0.0     # 近60日累计涨跌幅(%)
-    max_dd_20d: float = 0.0                 # 近20日最大回撤(%)
-    stock_index_ma20: float = 0.0
-    stock_index_ma60: float = 0.0
-    stock_pe_median: float = 0.0
-    stock_pb_median: float = 0.0
-    stock_pe_percentile: float = 0.0
-    stock_pb_percentile: float = 0.0
+    stock_index_current: float = float('nan')
+    stock_index_change: float = float('nan')
+    stock_index_change_20d: float = float('nan')     # 近20日累计涨跌幅(%)
+    stock_index_change_60d: float = float('nan')     # 近60日累计涨跌幅(%)
+    max_dd_20d: float = float('nan')                 # 近20日最大回撤(%)
+    stock_index_ma20: float = float('nan')
+    stock_index_ma60: float = float('nan')
+    stock_pe_median: float = float('nan')
+    stock_pb_median: float = float('nan')
+    stock_pe_percentile: float = float('nan')
+    stock_pb_percentile: float = float('nan')
 
     # === 资金流向 ===
-    north_bound_net_flow: float = 0.0
-    main_force_net_flow: float = 0.0
-    margin_balance: float = 0.0
-    margin_balance_change: float = 0.0
-    margin_buy_ratio: float = 0.0
-    industry_net_inflow: float = 0.0
+    north_bound_net_flow: float = float('nan')
+    main_force_net_flow: float = float('nan')
+    margin_balance: float = float('nan')
+    margin_balance_change: float = float('nan')
+    margin_buy_ratio: float = float('nan')
+    industry_net_inflow: float = float('nan')
 
     # === 宏观扩展 ===
-    industrial_output: float = 0.0
-    retail_sales: float = 0.0
-    export_growth: float = 0.0
+    industrial_output: float = float('nan')
+    retail_sales: float = float('nan')
+    export_growth: float = float('nan')
 
     # === 情绪扩展 ===
-    pcr_ratio: float = 0.0
-    vix_index: float = 0.0
-    new_accounts: float = 0.0
+    pcr_ratio: float = float('nan')
+    vix_index: float = float('nan')
+    new_accounts: float = float('nan')
 
     # === 技术指标（从指数日线自动计算）===
     ma_arrangement: str = "neutral"
     macd_signal: str = "neutral"
-    rsi_14: float = 0.0
-    bollinger_position: float = 0.0
-    volume_ratio: float = 0.0
+    rsi_14: float = float('nan')
+    bollinger_position: float = float('nan')
+    volume_ratio: float = float('nan')
 
     # === 指数日线（用于技术指标计算）===
     stock_index_df: Optional[pd.DataFrame] = None
     cb_index_df: Optional[pd.DataFrame] = None
 
     # === 消息面/基本面扩展 ===
-    institutional_holding_change: float = 0.0
-    earnings_surprise_ratio: float = 0.0
+    institutional_holding_change: float = float('nan')
+    earnings_surprise_ratio: float = float('nan')
     policy_signal_score: float = 50.0
     event_impact_score: float = 50.0
     industry_cycle_score: float = 50.0
@@ -131,7 +131,7 @@ class MacroData:
     decline_count: float = float('nan')
     new_high_60d: float = float('nan')
     new_low_60d: float = float('nan')
-    market_turnover: float = 0.0
+    market_turnover: float = float('nan')
 
     updated_at: Optional[datetime] = None
     data_completeness: float = 0.0
@@ -317,12 +317,12 @@ class MacroDataService:
             ("m2", not math.isnan(data.m2_growth), 0.05),
             ("social_fin", not math.isnan(data.social_financing_growth), 0.04),
             ("gdp", not math.isnan(data.gdp_growth), 0.04),
-            ("shibor", data.shibor_overnight > 0, 0.04),
-            ("credit_spread", data.credit_spread_aa > 0, 0.04),
+            ("shibor", not math.isnan(data.shibor_overnight), 0.04),
+            ("credit_spread", not math.isnan(data.credit_spread_aa), 0.04),
             ("market_stats", not math.isnan(data.advance_count) or not math.isnan(data.decline_count), 0.04),
             ("cb_index", data.cb_index_current > 0, 0.05),
             ("stock_index", data.stock_index_current > 0, 0.05),
-            ("cb_stats", data.cb_median_premium > 0, 0.04),
+            ("cb_stats", not math.isnan(data.cb_median_premium), 0.04),
             ("north_bound", not math.isnan(data.north_bound_net_flow), 0.02),
             ("margin", data.margin_balance > 0, 0.05),
             ("market_turnover", data.market_turnover > 0, 0.03),
@@ -334,10 +334,10 @@ class MacroDataService:
             ("industrial", not math.isnan(data.industrial_output), 0.04),
             ("retail", not math.isnan(data.retail_sales), 0.04),
             ("export", not math.isnan(data.export_growth), 0.04),
-            ("pcr", data.pcr_ratio > 0, 0.03),
-            ("vix", data.vix_index > 0, 0.03),
-            ("technical", data.rsi_14 > 0, 0.05),
-            ("term_spread", data.treasury_10y_yield > 0 and data.treasury_2y_yield > 0, 0.04),
+            ("pcr", not math.isnan(data.pcr_ratio), 0.03),
+            ("vix", not math.isnan(data.vix_index), 0.03),
+            ("technical", not math.isnan(data.rsi_14), 0.05),
+            ("term_spread", not math.isnan(data.treasury_10y_yield) and not math.isnan(data.treasury_2y_yield), 0.04),
         ]
         total = sum(w for _, ok, w in checks if ok)
         return min(1.0, total)
@@ -590,7 +590,7 @@ class MacroDataService:
             return round(current, 2), round(change, 2), round(ma20, 2), round(ma60, 2), df
         except Exception as e:
             logger.warning(f"[MacroData] CB index fetch failed: {e}")
-            return float('nan'), float('nan'), float('nan'), 0.0, None
+            return float('nan'), float('nan'), float('nan'), float('nan'), None
 
     def _fetch_stock_index(self) -> Tuple[float, float, float, float, float, float, float, Optional[pd.DataFrame]]:
         try:
@@ -623,15 +623,25 @@ class MacroDataService:
                     round(max_dd_20d, 2), df)
         except Exception as e:
             logger.warning(f"[MacroData] HS300 index fetch failed: {e}")
-            return float('nan'), float('nan'), float('nan'), 0.0, 0.0, 0.0, 0.0, None
+            return float('nan'), float('nan'), float('nan'), float('nan'), float('nan'), float('nan'), float('nan'), None
 
     def _fill_cb_stats_from_jsl(self, data: MacroData) -> None:
         """从集思录转债指数获取真实的中位数溢价、价格、成交额、破面数"""
         try:
             if ak is None:
+                data.cb_median_premium = float('nan')
+                data.cb_median_price = float('nan')
+                data.cb_avg_daily_amount = float('nan')
+                data.cb_count = float('nan')
+                data.cb_below_par_count = float('nan')
                 return
             df = ak.bond_cb_index_jsl()
             if df is None or df.empty:
+                data.cb_median_premium = float('nan')
+                data.cb_median_price = float('nan')
+                data.cb_avg_daily_amount = float('nan')
+                data.cb_count = float('nan')
+                data.cb_below_par_count = float('nan')
                 return
             latest = df.iloc[-1]
             data.cb_median_premium = round(float(latest.get('mid_premium_rt', 0)), 2)
@@ -641,6 +651,11 @@ class MacroDataService:
             data.cb_below_par_count = float(int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0)))
         except Exception as e:
             logger.warning(f"[MacroData] CB stats from JSL failed: {e}")
+            data.cb_median_premium = float('nan')
+            data.cb_median_price = float('nan')
+            data.cb_avg_daily_amount = float('nan')
+            data.cb_count = float('nan')
+            data.cb_below_par_count = float('nan')
 
     def _fetch_north_bound_flow(self) -> float:
         """北向资金净流入（亿元）"""

@@ -157,7 +157,23 @@ interface RetryStats {
 
 const RETRY_STATS_KEY = 'retry_stats'
 
+// 防抖：内存缓冲 + 500ms 合并写入
+let _pendingStats: RetryStats | null = null
+let _statsFlushTimer: number | null = null
+
+function _flushRetryStats(): void {
+  if (_statsFlushTimer) {
+    clearTimeout(_statsFlushTimer)
+    _statsFlushTimer = null
+  }
+  if (_pendingStats) {
+    localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats))
+    _pendingStats = null
+  }
+}
+
 export function getRetryStats(): RetryStats {
+  _flushRetryStats() // 读取前先 flush，确保数据一致
   const saved = localStorage.getItem(RETRY_STATS_KEY)
   return safeJsonParse<RetryStats>(saved, {
     totalAttempts: 0,
@@ -168,17 +184,37 @@ export function getRetryStats(): RetryStats {
 }
 
 export function recordRetryAttempt(success: boolean): void {
-  const stats = getRetryStats()
-  stats.totalAttempts++
-  stats.lastRetryTime = Date.now()
-
-  if (success) {
-    stats.successfulRetries++
-  } else {
-    stats.failedRetries++
+  // 使用内存缓冲，避免高频写入 localStorage
+  if (_pendingStats === null) {
+    // 从 localStorage 加载已有数据
+    const saved = localStorage.getItem(RETRY_STATS_KEY)
+    _pendingStats = safeJsonParse<RetryStats>(saved, {
+      totalAttempts: 0,
+      successfulRetries: 0,
+      failedRetries: 0,
+      lastRetryTime: null,
+    })
   }
 
-  localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(stats))
+  _pendingStats.totalAttempts++
+  _pendingStats.lastRetryTime = Date.now()
+
+  if (success) {
+    _pendingStats.successfulRetries++
+  } else {
+    _pendingStats.failedRetries++
+  }
+
+  // 防抖：500ms 后写入
+  if (_statsFlushTimer) {
+    clearTimeout(_statsFlushTimer)
+  }
+  _statsFlushTimer = window.setTimeout(() => {
+    if (_pendingStats) {
+      localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats))
+      _pendingStats = null
+    }
+  }, 500)
 }
 
 export default {

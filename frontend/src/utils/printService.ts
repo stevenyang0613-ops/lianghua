@@ -91,13 +91,17 @@ export async function printElement(
   printWindow.document.write(printContent)
   printWindow.document.close()
 
-  // 监听打印完成
+  // 监听打印完成（最多等待 60 秒，避免 interval 无限堆积）
+  let elapsed = 0
+  const CHECK_INTERVAL = 500
+  const MAX_PRINT_WAIT_MS = 60_000
   const checkClosed = setInterval(() => {
-    if (printWindow.closed) {
+    elapsed += CHECK_INTERVAL
+    if (printWindow.closed || elapsed >= MAX_PRINT_WAIT_MS) {
       clearInterval(checkClosed)
       opts.afterPrint?.()
     }
-  }, 500)
+  }, CHECK_INTERVAL)
 }
 
 /**

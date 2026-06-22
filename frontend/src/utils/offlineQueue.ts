@@ -25,6 +25,9 @@ class OfflineQueueManager {
   private maxRetries: number = 3
   private processingInterval: ReturnType<typeof setInterval> | null = null
 
+  private _onlineHandler: (() => void) | null = null
+  private _offlineHandler: (() => void) | null = null
+
   /**
    * 初始化
    */
@@ -32,13 +35,15 @@ class OfflineQueueManager {
     this.db = await this.openDB()
 
     // 监听网络状态
-    window.addEventListener('online', () => {
+    this._onlineHandler = () => {
       this.isOnline = true
       this.processQueue()
-    })
-    window.addEventListener('offline', () => {
+    }
+    this._offlineHandler = () => {
       this.isOnline = false
-    })
+    }
+    window.addEventListener('online', this._onlineHandler)
+    window.addEventListener('offline', this._offlineHandler)
 
     // 定期检查队列
     this.processingInterval = setInterval(() => {
@@ -311,6 +316,14 @@ class OfflineQueueManager {
     if (this.processingInterval) {
       clearInterval(this.processingInterval)
       this.processingInterval = null
+    }
+    if (this._onlineHandler) {
+      window.removeEventListener('online', this._onlineHandler)
+      this._onlineHandler = null
+    }
+    if (this._offlineHandler) {
+      window.removeEventListener('offline', this._offlineHandler)
+      this._offlineHandler = null
     }
   }
 }

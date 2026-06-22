@@ -28,6 +28,7 @@ class HotkeyManager {
   private hotkeys: Map<string, HotkeyDefinition> = new Map()
   private enabled: boolean = true
   private currentScope: string = 'global'
+  private _keydownListener: ((event: KeyboardEvent) => void) | null = null
 
   constructor() {
     this.setupListener()
@@ -37,7 +38,19 @@ class HotkeyManager {
    * 设置键盘监听
    */
   private setupListener(): void {
-    document.addEventListener('keydown', this.handleKeyDown.bind(this))
+    this._keydownListener = this.handleKeyDown.bind(this)
+    document.addEventListener('keydown', this._keydownListener)
+  }
+
+  /**
+   * 销毁键盘监听（清理所有快捷键和事件监听器）
+   */
+  destroy(): void {
+    this.hotkeys.clear()
+    if (this._keydownListener) {
+      document.removeEventListener('keydown', this._keydownListener)
+      this._keydownListener = null
+    }
   }
 
   /**
@@ -330,8 +343,18 @@ export const defaultHotkeys: HotkeyDefinition[] = [
 /**
  * 初始化快捷键
  */
-export function initHotkeys(): void {
+export function initHotkeys(): () => void {
   hotkeyManager.registerAll(defaultHotkeys)
+  return () => {
+    hotkeyManager.destroy()
+  }
+}
+
+/**
+ * 销毁快捷键（显式清理，供 React cleanup 使用）
+ */
+export function destroyHotkeys(): void {
+  hotkeyManager.destroy()
 }
 
 /**

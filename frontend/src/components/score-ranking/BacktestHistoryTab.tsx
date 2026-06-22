@@ -704,7 +704,7 @@ export default React.memo(function BacktestHistoryTab() {
                       {
                         type: 'boxplot', data: boxplotData.map(b => b.boxplot),
                         itemStyle: { color: '#fff', borderColor: '#333', borderWidth: 1 },
-                      } as any,
+                      },
                       {
                         type: 'scatter', data: boxplotData.flatMap((b, i) => b.outliers.map(o => [i, o])),
                         symbolSize: 6, itemStyle: { color: '#ff4d4f' },

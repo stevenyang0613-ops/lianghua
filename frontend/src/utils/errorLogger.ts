@@ -124,9 +124,9 @@ export function getErrorStats(): {
 }
 
 // 全局错误监听
-export function setupGlobalErrorHandler(): void {
+export function setupGlobalErrorHandler(): () => void {
   // JavaScript 错误
-  window.addEventListener('error', (event) => {
+  const errorHandler = (event: ErrorEvent) => {
     logError({
       type: 'javascript',
       message: event.message,
@@ -140,10 +140,11 @@ export function setupGlobalErrorHandler(): void {
     })
     // 阻止错误继续传播，避免触发全局页面崩溃
     event.preventDefault()
-  })
+  }
+  window.addEventListener('error', errorHandler)
 
   // Promise 未捕获错误
-  window.addEventListener('unhandledrejection', (event) => {
+  const rejectionHandler = (event: PromiseRejectionEvent) => {
     const error = event.reason
     logError({
       type: 'javascript',
@@ -156,10 +157,11 @@ export function setupGlobalErrorHandler(): void {
     })
     // 阻止未处理的 Promise rejection 继续传播，避免连锁崩溃
     event.preventDefault()
-  })
+  }
+  window.addEventListener('unhandledrejection', rejectionHandler)
 
   // 资源加载错误
-  window.addEventListener('error', (event) => {
+  const resourceErrorHandler = (event: ErrorEvent) => {
     if (event.target !== window) {
       const target = event.target as HTMLElement
       logError({
@@ -172,7 +174,15 @@ export function setupGlobalErrorHandler(): void {
         },
       })
     }
-  }, true)
+  }
+  window.addEventListener('error', resourceErrorHandler, true)
+
+  // 返回清理函数
+  return () => {
+    window.removeEventListener('error', errorHandler)
+    window.removeEventListener('unhandledrejection', rejectionHandler)
+    window.removeEventListener('error', resourceErrorHandler, true)
+  }
 }
 
 // API 错误记录

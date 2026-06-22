@@ -60,7 +60,7 @@ def _safe_sum(items: list, attr: str) -> float:
 
 def _count_valid(items: list, attr: str) -> int:
     """Count items where attribute is not None."""
-    return sum(1 for q in items if _val(q, attr) is not None)
+    return sum(1 for q in items if _val(q, attr, None) is not None)
 
 
 def _count_positive(items: list, attr: str) -> int:
@@ -75,7 +75,7 @@ def _count_negative(items: list, attr: str) -> int:
 
 def _momentum_dispersion(items: list, attr: str = "momentum_20d") -> float:
     """Compute stdev of momentum values within a group. Returns 0 if < 2 values."""
-    vals = [_val(q, attr, 0) for q in items if _val(q, attr) is not None]
+    vals = [_val(q, attr, 0) for q in items if _val(q, attr, None) is not None]
     return round(statistics.stdev(vals), 2) if len(vals) >= 2 else 0.0
 
 
@@ -490,6 +490,8 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "block_trade_amount": getattr(q, "block_trade_amount", None),
             "holder_num_change": getattr(q, "holder_num_change", None),
             "eps_forecast": getattr(q, "eps_forecast", None),
+            "profit_yoy": getattr(q, "profit_yoy", None),
+            "revenue_yoy": getattr(q, "revenue_yoy", None),
             "restricted_release_amount": getattr(q, "restricted_release_amount", None),
         }
 
@@ -550,6 +552,8 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "block_trade_amount": r.get("block_trade_amount"),
             "holder_num_change": r.get("holder_num_change"),
             "eps_forecast": r.get("eps_forecast"),
+            "profit_yoy": r.get("profit_yoy"),
+            "revenue_yoy": r.get("revenue_yoy"),
             "restricted_release_amount": r.get("restricted_release_amount"),
         }
 
@@ -643,6 +647,8 @@ async def get_quote_by_code(request: Request, code: str):
             "block_trade_amount": getattr(q, "block_trade_amount", None),
             "holder_num_change": getattr(q, "holder_num_change", None),
             "eps_forecast": getattr(q, "eps_forecast", None),
+            "profit_yoy": getattr(q, "profit_yoy", None),
+            "revenue_yoy": getattr(q, "revenue_yoy", None),
             "restricted_release_amount": getattr(q, "restricted_release_amount", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -704,6 +710,8 @@ async def get_quote_by_code(request: Request, code: str):
             "block_trade_amount": r.get("block_trade_amount"),
             "holder_num_change": r.get("holder_num_change"),
             "eps_forecast": r.get("eps_forecast"),
+            "profit_yoy": r.get("profit_yoy"),
+            "revenue_yoy": r.get("revenue_yoy"),
             "restricted_release_amount": r.get("restricted_release_amount"),
             "timestamp": str(r.get("timestamp", "")),
         }
@@ -1214,10 +1222,10 @@ def _build_stock_from_cache(stock_code: str) -> dict:
         "momentum_20d": mom.get("20d", 0) or 0,
         "momentum_60d": mom.get("60d", 0) or 0,
         "turnover_rate": spot.get("turnover_rate", 0) or 0,
-        "net_capital_flow": flow.get("net_main") or None,
-        "net_capital_flow_pct": flow.get("net_main_pct") or None,
-        "net_super_flow": flow.get("net_super") or None,
-        "net_big_flow": flow.get("net_big") or None,
+        "net_capital_flow": flow.get("net_main") if flow.get("net_main") is not None else None,
+        "net_capital_flow_pct": flow.get("net_main_pct") if flow.get("net_main_pct") is not None else None,
+        "net_super_flow": flow.get("net_super") if flow.get("net_super") is not None else None,
+        "net_big_flow": flow.get("net_big") if flow.get("net_big") is not None else None,
         "volume": spot.get("volume", 0) or 0,
         "debt_ratio": debt.get("debt_ratio", 0) if isinstance(debt, dict) else 0,
         "iv": volatility or 0,
@@ -1275,8 +1283,8 @@ async def get_stock_industries(request: Request, fields: str = Query(None, descr
                 "turnover_rate": _val(q, "turnover_rate", 0),
                 "net_capital_flow": _val(q, "net_capital_flow", None),
                 "net_capital_flow_pct": _val(q, "net_capital_flow_pct", None),
-                "net_super_flow": _val(q, "net_super_flow", None) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_super"),
-                "net_big_flow": _val(q, "net_big_flow", None) or data_enrich._fund_flow_map.get(stock_code, {}).get("net_big"),
+                "net_super_flow": _val(q, "net_super_flow", None) if _val(q, "net_super_flow", None) is not None else data_enrich._fund_flow_map.get(stock_code, {}).get("net_super"),
+                "net_big_flow": _val(q, "net_big_flow", None) if _val(q, "net_big_flow", None) is not None else data_enrich._fund_flow_map.get(stock_code, {}).get("net_big"),
                 "volume": _val(q, "volume", 0),
                 "debt_ratio": _val(q, "debt_ratio", 0),
                 "iv": _val(q, "iv", 0) or data_enrich._vol_map.get(stock_code, 0) or 0,
@@ -1690,6 +1698,8 @@ async def get_data_sources_status(request: Request):
             _NORTH_CACHE, _MARGIN_CACHE, _LHB_CACHE, _BLOCK_TRADE_CACHE,
             _HOLDER_NUM_CACHE, _EARNINGS_FORECAST_CACHE, _EARNINGS_EXPRESS_CACHE,
             _RESTRICTED_RELEASE_CACHE,
+            _MAIN_BIZ_CACHE, _ANALYST_RANK_CACHE, _MACRO_CPI_CACHE,
+            _MACRO_PPI_CACHE, _MACRO_M2_CACHE, _MACRO_LPR_CACHE,
         )
         cache_dir = _INDUSTRY_CACHE.parent
         sources = {

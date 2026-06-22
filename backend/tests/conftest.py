@@ -51,3 +51,45 @@ def auth_headers(test_token: str) -> dict:
 def auto_auth_headers(request, auth_headers: dict) -> dict:
     """为非异步测试使用的认证头"""
     return auth_headers
+
+
+_DE_TOUCHED = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_module_state(request):
+    """测试结束后重置模块级全局状态，防止测试间状态污染。
+
+    历史问题：data_enrich.py 和 enhanced_timing_model.py 等模块使用模块级
+    dict/set 作为内存缓存。如果上一个测试写入了数据，下一个测试看到的就是
+    污染后的状态，导致"独立运行通过、批量运行失败"的 flaky tests。
+
+    实现：只对使用了 data_enrich 模块的测试生效（按需 lazy import），
+    避免对所有测试增加 import 开销（~30s）。
+    """
+    global _DE_TOUCHED
+    yield  # 测试运行
+    if _DE_TOUCHED:
+        try:
+            from app.engine import data_enrich as de
+            if hasattr(de, 'reset_module_state_for_testing'):
+                de.reset_module_state_for_testing()
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _track_de_touch(request):
+    """跟踪是否触达了 data_enrich 模块。如果测试代码 import 了它，
+    标记 _DE_TOUCHED=True 让下一个测试结束时执行 reset。
+    """
+    global _DE_TOUCHED
+    # 在测试开始前检查 sys.modules，判断测试是否使用 data_enrich
+    import sys
+    touched_before = 'app.engine.data_enrich' in sys.modules
+    yield
+    if not touched_before and 'app.engine.data_enrich' in sys.modules:
+        # 测试期间触达了 data_enrich
+        _DE_TOUCHED = True

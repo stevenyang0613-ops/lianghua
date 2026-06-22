@@ -35,6 +35,7 @@ class MonitoringService {
   private performanceQueue: PerformanceReport[] = []
   private actionQueue: UserAction[] = []
   private flushInterval: ReturnType<typeof setInterval> | null = null
+  private beforeunloadHandler: (() => void) | null = null
   private maxQueueSize = 50
 
   /**
@@ -52,9 +53,10 @@ class MonitoringService {
     }, 10000)
 
     // 监听页面关闭
-    window.addEventListener('beforeunload', () => {
+    this.beforeunloadHandler = () => {
       this.flush()
-    })
+    }
+    window.addEventListener('beforeunload', this.beforeunloadHandler)
   }
 
   /**
@@ -199,6 +201,10 @@ class MonitoringService {
     if (this.flushInterval) {
       clearInterval(this.flushInterval)
       this.flushInterval = null
+    }
+    if (this.beforeunloadHandler) {
+      window.removeEventListener('beforeunload', this.beforeunloadHandler)
+      this.beforeunloadHandler = null
     }
     this.flush()
   }

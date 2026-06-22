@@ -119,6 +119,12 @@ _METRICS_NAME_MAP = {
     "_refresh_earnings_forecast_cache": "_refresh_earnings_forecast_cache",
     "_refresh_earnings_express_cache": "_refresh_earnings_express_cache",
     "_refresh_restricted_release_cache": "_refresh_restricted_release_cache",
+    "_refresh_main_biz_cache": "_refresh_main_biz_cache",
+    "_refresh_analyst_rank_cache": "_refresh_analyst_rank_cache",
+    "_refresh_macro_cpi_cache": "_refresh_macro_cpi_cache",
+    "_refresh_macro_ppi_cache": "_refresh_macro_ppi_cache",
+    "_refresh_macro_m2_cache": "_refresh_macro_m2_cache",
+    "_refresh_macro_lpr_cache": "_refresh_macro_lpr_cache",
 }
 
 
@@ -181,6 +187,12 @@ _TTL = {
     "earnings_express": 3600 * 24,
     "restricted_release": 86400 * 3,
     "bond_price": 300,
+    "main_biz": 86400 * 7,
+    "analyst_rank": 86400 * 7,
+    "macro_cpi": 86400 * 7,
+    "macro_ppi": 86400 * 7,
+    "macro_m2": 86400 * 7,
+    "macro_lpr": 86400 * 7,
 }
 
 
@@ -207,7 +219,7 @@ except Exception:
     pass
 
 
-def _try_tdx_spot_fallback(codes: list[str], pe_map: dict, pb_map: dict, tr_map: dict, price_map: dict):
+def _try_tdx_spot_fallback(codes: list[str], pe_map: dict, pb_map: dict, price_map: dict):
     """从 TDX 补充缺失的行情/PE/PB 数据（最后一道防线）"""
     if not codes or not _TRY_TDX_IMPORTED:
         return
@@ -401,7 +413,7 @@ def _refresh_spot_cache():
 
     import requests
     import time
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor
     _headers_em = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/'}
     _headers_tx = {"Referer": "https://finance.qq.com", "User-Agent": "Mozilla/5.0"}
 
@@ -588,7 +600,7 @@ def _refresh_spot_cache():
             bond_codes = [c for c in all_codes if len(c) == 6]
             pe_map_tdx = {c: result[c]["pe"] for c in result if result[c].get("pe") is not None}
             pb_map_tdx = {c: result[c]["pb"] for c in result if result[c].get("pb") is not None}
-            _try_tdx_spot_fallback(bond_codes, pe_map_tdx, pb_map_tdx, {}, {})
+            _try_tdx_spot_fallback(bond_codes, pe_map_tdx, pb_map_tdx, result)
             for c, pe in pe_map_tdx.items():
                 if c not in result:
                     result[c] = {}
@@ -600,7 +612,10 @@ def _refresh_spot_cache():
                 if result[c].get("pb") is None and pb is not None:
                     result[c]["pb"] = pb
 
-        _save_cache(cache_path, result)
+        if len(result) > 100:
+            _save_cache(cache_path, result)
+        else:
+            logger.warning(f"[Spot] Only {len(result)} stocks fetched, skipping cache overwrite to protect existing data")
         return len(result)
     except Exception as e:
         logger.warning(f"[Spot] Fetch failed: {e}")
@@ -784,10 +799,10 @@ def _refresh_fund_flow_cache():
                 net_big = r2m("今日大单净流入-净额")
                 if net_main is not None or net_main_pct is not None or net_super is not None or net_big is not None:
                     result[code] = {
-                        "net_main": net_main if net_main is not None and net_main != 0 else None,
-                        "net_main_pct": net_main_pct if net_main_pct is not None and net_main_pct != 0 else None,
-                        "net_super": net_super if net_super is not None and net_super != 0 else None,
-                        "net_big": net_big if net_big is not None and net_big != 0 else None,
+                        "net_main": net_main if net_main is not None else None,
+                        "net_main_pct": net_main_pct if net_main_pct is not None else None,
+                        "net_super": net_super if net_super is not None else None,
+                        "net_big": net_big if net_big is not None else None,
                     }
             _save_cache(cache_path, result)
             non_null = sum(1 for v in result.values() if isinstance(v, dict) and v.get("net_main") is not None)
@@ -889,7 +904,10 @@ def _refresh_volatility_cache():
                 if len(result) % 200 == 0:
                     _save_cache(cache_path, result)
                     logger.info(f"[Vol] Progress: {len(result)}/{len(all_codes)}")
-            except Exception:
+            except Exception as e:
+                # 限制日志频率：每 100 次失败记录一次，避免大量日志
+                if idx % 100 == 0:
+                    logger.warning(f"[Vol] {code} failed: {type(e).__name__}: {e}")
                 continue
 
             # Gentle delay every 20 calls to avoid rate limiting
@@ -959,7 +977,7 @@ def _refresh_mgmt_cache():
     """
     cache_path = _CACHE_FILES["mgmt"]
     cached = _load_cache(cache_path)
-    if _fresh(_TTL["mgmt"], cached, cache_path) and len(cached) > 10:
+    if _fresh(_TTL["mgmt"], cached, cache_path) and cached and len(cached) > 10:
         logger.info(f"[Mgmt] Cache fresh ({len(cached)} stocks), skipping")
         return len(cached)
 
@@ -1006,7 +1024,7 @@ def _refresh_mgmt_cache():
     if len(result) < 200:
         try:
             # stock_ggcg_em 可能拉取 290 页数据极慢，加 timeout 保护
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+            from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(ak.stock_ggcg_em, symbol="全部")
                 df_ggcg = future.result(timeout=60)
@@ -1421,7 +1439,7 @@ def _refresh_momentum_cache():
     try:
         import time as _time
         import json as _json
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
         logger.info("[Momentum] Computing from TDX kline (primary) + Sina hist (fallback)...")
 
         # 获取所有股票代码
@@ -1710,6 +1728,243 @@ def _refresh_stock_name_cache():
         return 0
 
 
+# ============================================================
+# Data source: Main business cache
+# ============================================================
+def _refresh_main_biz_cache():
+    """刷新主营业务缓存 — 从 industry 映射回退"""
+    cache_path = _CACHE_DIR / "stock_main_biz.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("main_biz", 86400 * 7), cached, cache_path):
+        logger.info(f"[MainBiz] Cache fresh ({len(cached)} entries), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        result = {}
+        # Step 1: 从已有的 industry 缓存回退
+        industry_path = _CACHE_DIR / "industry.json"
+        industry_cached = _load_cache(industry_path)
+        if industry_cached:
+            result = industry_cached.copy()
+            logger.info(f"[MainBiz] Loaded {len(result)} from industry fallback")
+        # Step 2: THS 行业明细补充
+        if len(result) < 50:
+            try:
+                logger.info("[MainBiz] Industry too small, trying THS industry detail...")
+                df = ak.stock_industry_detail_ths()
+                if df is not None and not df.empty:
+                    cols = set(df.columns.astype(str))
+                    expected_cols = {"代码", "主营业务", "行业", "板块名称"}
+                    if not any(c in cols for c in expected_cols):
+                        logger.warning(f"[MainBiz] THS columns mismatch: got {list(cols)[:10]}, expected any of {expected_cols}")
+                    for _, r in df.iterrows():
+                        code = str(r.get("代码", "")).strip().zfill(6)
+                        biz = str(r.get("主营业务", "") or r.get("行业", "") or r.get("板块名称", "")).strip()
+                        if code and biz and code not in result:
+                            result[code] = biz
+                    logger.info(f"[MainBiz] THS overlay: {len(result)} total")
+            except Exception as ths_e:
+                logger.debug(f"[MainBiz] THS fallback failed: {ths_e}")
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[MainBiz] Updated: {len(result)} entries")
+            return len(result)
+        else:
+            logger.warning("[MainBiz] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[MainBiz] Fetch failed: {e}")
+        return 0
+
+
+# ============================================================
+# Data source: Analyst rank cache
+# ============================================================
+def _refresh_analyst_rank_cache():
+    """刷新分析师排名缓存 — 东方财富分析师指数"""
+    cache_path = _CACHE_DIR / "stock_analyst_rank.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("analyst_rank", 86400 * 7), cached, cache_path):
+        logger.info(f"[AnalystRank] Cache fresh ({len(cached)} analysts), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        logger.info("[AnalystRank] Refreshing from ak.stock_analyst_rank_em...")
+        df = ak.stock_analyst_rank_em()
+        result = {}
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                name = str(r.get("分析师名称", "") or r.get("分析师", "")).strip()
+                idx = str(r.get("年度指数", "") or r.get("指数", "")).strip()
+                ret = str(r.get("收益率", "") or r.get("年度收益率", "")).strip()
+                if name:
+                    result[name] = {
+                        "annual_index": idx,
+                        "annual_return": ret,
+                        "industry": str(r.get("行业", "")).strip(),
+                    }
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[AnalystRank] Updated: {len(result)} analysts")
+            return len(result)
+        else:
+            logger.warning("[AnalystRank] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[AnalystRank] Fetch failed: {e}")
+        return 0
+
+
+# ============================================================
+# Data source: Macro CPI cache
+# ============================================================
+def _refresh_macro_cpi_cache():
+    """刷新宏观 CPI 缓存"""
+    cache_path = _CACHE_DIR / "macro_cpi.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("macro_cpi", 86400 * 7), cached, cache_path):
+        logger.info(f"[MacroCPI] Cache fresh ({len(cached)} months), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        logger.info("[MacroCPI] Refreshing from ak.macro_china_cpi...")
+        df = ak.macro_china_cpi()
+        result = {}
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                month = str(r.get("月份", "") or r.get("时间", "")).strip()
+                val = r.get("全国-当月", None)
+                yoy = r.get("全国-同比增长", None)
+                if month:
+                    result[month] = {
+                        "value": safe_float(val),
+                        "yoy": safe_float(yoy),
+                    }
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[MacroCPI] Updated: {len(result)} months")
+            return len(result)
+        else:
+            logger.warning("[MacroCPI] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[MacroCPI] Fetch failed: {e}")
+        return 0
+
+
+# ============================================================
+# Data source: Macro PPI cache
+# ============================================================
+def _refresh_macro_ppi_cache():
+    """刷新宏观 PPI 缓存"""
+    cache_path = _CACHE_DIR / "macro_ppi.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("macro_ppi", 86400 * 7), cached, cache_path):
+        logger.info(f"[MacroPPI] Cache fresh ({len(cached)} months), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        logger.info("[MacroPPI] Refreshing from ak.macro_china_ppi...")
+        df = ak.macro_china_ppi()
+        result = {}
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                month = str(r.get("月份", "") or r.get("时间", "")).strip()
+                val = r.get("当月", None)
+                yoy = r.get("当月同比增长", None)
+                if month:
+                    result[month] = {
+                        "value": safe_float(val),
+                        "yoy": safe_float(yoy),
+                    }
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[MacroPPI] Updated: {len(result)} months")
+            return len(result)
+        else:
+            logger.warning("[MacroPPI] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[MacroPPI] Fetch failed: {e}")
+        return 0
+
+
+# ============================================================
+# Data source: Macro M2 cache
+# ============================================================
+def _refresh_macro_m2_cache():
+    """刷新宏观 M2 缓存"""
+    cache_path = _CACHE_DIR / "macro_m2.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("macro_m2", 86400 * 7), cached, cache_path):
+        logger.info(f"[MacroM2] Cache fresh ({len(cached)} months), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        logger.info("[MacroM2] Refreshing from ak.macro_china_m2_yearly...")
+        df = ak.macro_china_m2_yearly()
+        result = {}
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                date = str(r.get("日期", "") or r.get("时间", "") or r.get("月份", "")).strip()
+                val = r.get("今值", None)
+                pred = r.get("预测值", None)
+                prev = r.get("前值", None)
+                if date:
+                    result[date] = {
+                        "value": safe_float(val),
+                        "predicted": safe_float(pred),
+                        "previous": safe_float(prev),
+                    }
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[MacroM2] Updated: {len(result)} months")
+            return len(result)
+        else:
+            logger.warning("[MacroM2] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[MacroM2] Fetch failed: {e}")
+        return 0
+
+
+# ============================================================
+# Data source: Macro LPR cache
+# ============================================================
+def _refresh_macro_lpr_cache():
+    """刷新宏观 LPR 缓存"""
+    cache_path = _CACHE_DIR / "macro_lpr.json"
+    cached = _load_cache(cache_path)
+    if _fresh(_TTL.get("macro_lpr", 86400 * 7), cached, cache_path):
+        logger.info(f"[MacroLPR] Cache fresh ({len(cached)} days), skipping")
+        return len(cached)
+    try:
+        import akshare as ak
+        logger.info("[MacroLPR] Refreshing from ak.macro_china_lpr...")
+        df = ak.macro_china_lpr()
+        result = {}
+        if df is not None and not df.empty:
+            for _, r in df.iterrows():
+                date = str(r.get("TRADE_DATE", "") or r.get("日期", "")).strip()
+                lpr1y = r.get("LPR1Y", None)
+                lpr5y = r.get("LPR5Y", None)
+                if date:
+                    result[date] = {
+                        "lpr1y": safe_float(lpr1y),
+                        "lpr5y": safe_float(lpr5y),
+                    }
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[MacroLPR] Updated: {len(result)} days")
+            return len(result)
+        else:
+            logger.warning("[MacroLPR] Empty result")
+            return 0
+    except Exception as e:
+        logger.warning(f"[MacroLPR] Fetch failed: {e}")
+        return 0
+
+
 # ── TDX 概念关键词扩展映射 ──
 _CONCEPT_KEYWORD_MAP: dict[str, list[str]] = {
     "AI": ["智能", "AI", "人工", "算法", "深度"],
@@ -1875,7 +2130,7 @@ def _build_concept_cache():
         total_pairs = sum(len(scodes) for scodes in real.values() if isinstance(scodes, list))
         if len(_rev) >= 300 and (max(_rev.values()) > 100 or total_pairs > 50000):
             logger.info(f'[Concept] Cache already patched ({len(_rev)} concepts, {total_pairs} pairs), skipping')
-            return
+            return len(real)
     import requests as _req
     import time as _t
     import random as _rnd
@@ -1883,7 +2138,6 @@ def _build_concept_cache():
     source_map: dict[str, dict[str, bool]] = {}
     total_ths = 0
     total_em = 0
-    failed_boards: list[tuple[str, str]] = []
 
     _THS_HEADERS = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -2742,7 +2996,7 @@ def _refresh_north_cache():
         # 只在前面几层都失败时才尝试 individual_detail_em (很慢)
         if missing_codes and _actual_indiv < 500:
             try:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
+                from concurrent.futures import ThreadPoolExecutor
                 from datetime import datetime, timedelta
                 end_d = datetime.now().strftime("%Y%m%d")
                 start_d = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
@@ -3629,14 +3883,7 @@ def _refresh_holder_num_cache():
                         if len(str(r.get("code", "")).strip()) == 6 and str(r.get("code", "")).strip().isdigit()]
         except Exception:
             all_codes = list(cached.keys()) if cached else []
-        # bond_stocks 仅用于优先级排序，不改变总量
-        try:
-            df_b = ak.bond_zh_cov()
-            bond_stocks = set(str(r.get("正股代码", "")).strip() for _, r in df_b.iterrows())
-            bond_stocks = {c for c in bond_stocks if len(c) == 6 and c.isdigit()}
-        except Exception:
-            bond_stocks = set()
-        # 排序：可转债正股优先
+        # 排序：可转债正股优先（bond_stocks 已在上方获取）
         priority = [c for c in all_codes if c in bond_stocks]
         others = [c for c in all_codes if c not in bond_stocks]
         all_codes = priority + others
@@ -3704,7 +3951,7 @@ def _refresh_holder_num_cache():
                 pass
             return None
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor
         import time as _t
 
         # Phase 1: Bond stocks with higher parallelism (10 workers)
@@ -3713,7 +3960,14 @@ def _refresh_holder_num_cache():
             with ThreadPoolExecutor(max_workers=10) as ex_bond:
                 futures = {ex_bond.submit(_fetch_one, c): c for c in priority}
                 done = 0
-                for fut in as_completed(futures):
+                done_f, pending_f = concurrent.futures.wait(
+                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending_f:
+                    logger.warning(f"[HolderNum] Phase 1: {len(pending_f)} (of {len(futures)}) futures unfinished after 300s")
+                    for fut in pending_f:
+                        fut.cancel()
+                for fut in done_f:
                     try:
                         v = fut.result(timeout=20)
                         if v and v.get("holder_num"):
@@ -3734,7 +3988,14 @@ def _refresh_holder_num_cache():
                 # Batch 1: Primary API for other stocks
                 futures = {ex.submit(_fetch_one, c): c for c in other_to_fetch}
                 done = 0
-                for fut in as_completed(futures):
+                done_f, pending_f = concurrent.futures.wait(
+                    futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending_f:
+                    logger.warning(f"[HolderNum] Phase 2: {len(pending_f)} (of {len(futures)}) futures unfinished after 300s")
+                    for fut in pending_f:
+                        fut.cancel()
+                for fut in done_f:
                     try:
                         v = fut.result(timeout=20)
                         if v and v.get("holder_num"):
@@ -3751,7 +4012,14 @@ def _refresh_holder_num_cache():
                 missed = [c for c in other_to_fetch if c not in result][:150]
                 logger.info(f"[HolderNum] Trying alternate API for {len(missed)} missed stocks...")
                 fut2 = {ex.submit(_fetch_alt, c): c for c in missed}
-                for f in as_completed(fut2):
+                done_f2, pending_f2 = concurrent.futures.wait(
+                    fut2, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                )
+                if pending_f2:
+                    logger.warning(f"[HolderNum] Alt API: {len(pending_f2)} (of {len(fut2)}) futures unfinished after 180s")
+                    for fut in pending_f2:
+                        fut.cancel()
+                for f in done_f2:
                     try:
                         v = f.result(timeout=20)
                         if v and v.get("holder_num"):
@@ -4124,6 +4392,12 @@ def main():
     parser.add_argument("--earnings-forecast", action="store_true", help="Run earnings forecast cache")
     parser.add_argument("--earnings-express", action="store_true", help="Run earnings express cache")
     parser.add_argument("--restricted-release", action="store_true", help="Run restricted release cache")
+    parser.add_argument("--main-biz", action="store_true", help="Run main business cache")
+    parser.add_argument("--analyst-rank", action="store_true", help="Run analyst rank cache")
+    parser.add_argument("--macro-cpi", action="store_true", help="Run macro CPI cache")
+    parser.add_argument("--macro-ppi", action="store_true", help="Run macro PPI cache")
+    parser.add_argument("--macro-m2", action="store_true", help="Run macro M2 cache")
+    parser.add_argument("--macro-lpr", action="store_true", help="Run macro LPR cache")
     parser.add_argument("--all", action="store_true", help="Run all caches")
     args = parser.parse_args()
 
@@ -4151,7 +4425,7 @@ def main():
         tasks.append(("Outstanding", _refresh_bond_outstanding_cache))
     if args.all or args.call_status:
         tasks.append(("CallStatus", _refresh_call_status_cache))
-    if args.all or getattr(args, 'bond_price', False):
+    if args.all or args.bond_price:
         tasks.append(("BondPrice", _refresh_bond_price_cache))
     if args.all or args.pledge:
         tasks.append(("Pledge", _refresh_pledge_cache))
@@ -4159,19 +4433,19 @@ def main():
         tasks.append(("Momentum", _refresh_momentum_cache))
     if args.all or args.event:
         tasks.append(("Event", _refresh_event_cache))
-    if args.all or getattr(args, 'stock_names', False):
+    if args.all or args.stock_names:
         tasks.append(("StockNames", _refresh_stock_name_cache))
-    if args.all or getattr(args, 'concept', False):
+    if args.all or args.concept:
         tasks.append(("Concept", _build_concept_cache))
-    if args.all or getattr(args, 'north', False):
+    if args.all or args.north:
         tasks.append(("North", _refresh_north_cache))
-    if args.all or getattr(args, 'margin', False):
+    if args.all or args.margin:
         tasks.append(("Margin", _refresh_margin_cache))
-    if args.all or getattr(args, 'lhb', False):
+    if args.all or args.lhb:
         tasks.append(("LHB", _refresh_lhb_cache))
-    if args.all or getattr(args, 'block_trade', False):
+    if args.all or args.block_trade:
         tasks.append(("BlockTrade", _refresh_block_trade_cache))
-    if args.all or getattr(args, 'holder_num', False):
+    if args.all or args.holder_num:
         tasks.append(("HolderNum", _refresh_holder_num_cache))
     if args.all or getattr(args, 'earnings_forecast', False):
         tasks.append(("EarnForecast", _refresh_earnings_forecast_cache))
@@ -4179,6 +4453,18 @@ def main():
         tasks.append(("EarnExpress", _refresh_earnings_express_cache))
     if args.all or getattr(args, 'restricted_release', False):
         tasks.append(("Restricted", _refresh_restricted_release_cache))
+    if args.all or getattr(args, 'main_biz', False):
+        tasks.append(("MainBiz", _refresh_main_biz_cache))
+    if args.all or getattr(args, 'analyst_rank', False):
+        tasks.append(("AnalystRank", _refresh_analyst_rank_cache))
+    if args.all or getattr(args, 'macro_cpi', False):
+        tasks.append(("MacroCPI", _refresh_macro_cpi_cache))
+    if args.all or getattr(args, 'macro_ppi', False):
+        tasks.append(("MacroPPI", _refresh_macro_ppi_cache))
+    if args.all or getattr(args, 'macro_m2', False):
+        tasks.append(("MacroM2", _refresh_macro_m2_cache))
+    if args.all or getattr(args, 'macro_lpr', False):
+        tasks.append(("MacroLPR", _refresh_macro_lpr_cache))
 
     logger.info(f"Starting {len(tasks)} data enrichment tasks...")
     # NOTE: Tasks run sequentially (not concurrently). Spot must finish before
