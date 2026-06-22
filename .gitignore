@@ -115,3 +115,32 @@ force_refresh.py
 !/backend/tests/test_*.py
 backend/app/api/strategy_market_data.json
 _archive/
+
+# Audit and report files
+*.audit_report*.md
+audit_report*.md
+data_audit_report*.md
+frontend-audit*.md
+timing_backtest_report*.md
+
+# Temporary diagnosis scripts
+diag_*.py
+fetch_*.py
+fix_*.sh
+patch_*.py
+start_*.sh
+stop_*.sh
+
+# Backend temporary scripts
+backend/diag_*.py
+backend/refresh_*.sh
+backend/scripts/warm_cache.sh
+backend/bt_*.json
+
+# BSE IPO feature (not yet integrated)
+backend/app/api/bjse_ipo.py
+backend/app/strategies/bjse_ipo.py
+backend/tests/test_bjse_ipo.py
+
+# Docs
+*.docx
