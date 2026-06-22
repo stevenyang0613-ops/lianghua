@@ -114,6 +114,7 @@ _concept_source_loaded = False
 _bond_price_map: dict[str, dict] = {}
 _bond_price_loaded = False
 _coupon_rate_map: dict[str, float] = {}  # bond_code -> coupon_rate (独立缓存，不被 bond_price refresh 覆盖)
+_coupon_rate_loaded = False
 _main_biz_map: dict[str, str] = {}
 _main_biz_loaded = False
 _analyst_rank_map: dict[str, dict] = {}
@@ -465,7 +466,10 @@ def _with_metrics(fn):
             status = "ok" if count and count > 0 else "empty"
             # 新增：completeness (bond_count / bond_total) 让前端知道数据完整度
             # 例如：north_cache 60s 内只完成 109/854，completeness=0.13
-            completeness = round(bond_count / bond_total, 3) if bond_total > 0 else None
+            # 注意：对于 bond_outstanding 这种聚合多数据源（数量 > bond_codes），会 > 100%
+            # 用 min(1.0, ...) 截断到 100%，避免前端显示 "109%" 误导用户
+            raw_completeness = bond_count / bond_total if bond_total > 0 else None
+            completeness = round(min(1.0, raw_completeness), 3) if raw_completeness is not None else None
             # 新增：expected_count — 期望的目标条数
             # - 对于 bond-related maps，期望 = bond_total
             # - 对于全 A 股 maps，期望 = _name_map 大小（~5500）
@@ -482,6 +486,9 @@ def _with_metrics(fn):
                 "completeness": completeness,
                 "expected_count": expected_count,
             } if bond_total > 0 or expected_count > 0 else {}
+            # 添加 completeness_raw 给前端调试用（聚合数据源会出现 >1.0）
+            if raw_completeness is not None and raw_completeness > 1.001:
+                extra["completeness_raw"] = round(raw_completeness, 3)
             # 新增：zero_fill 标识，让前端知道"没数据 vs 有数据但为 0"
             if map_name:
                 with _cache_lock:
@@ -533,6 +540,12 @@ _METRICS_NAME_TO_MAP = {
     "_refresh_holder_num_cache": "_holder_num_map",
     "_refresh_earnings_forecast_cache": "_earnings_forecast_map",
     "_refresh_restricted_release_cache": "_restricted_release_map",
+    "_refresh_main_biz_cache": "_main_biz_map",
+    "_refresh_analyst_rank_cache": "_analyst_rank_map",
+    "_refresh_macro_cpi_cache": "_macro_cpi_map",
+    "_refresh_macro_ppi_cache": "_macro_ppi_map",
+    "_refresh_macro_m2_cache": "_macro_m2_map",
+    "_refresh_macro_lpr_cache": "_macro_lpr_map",
 }
 
 
@@ -3321,12 +3334,12 @@ def _refresh_analyst_rank_cache():
             return len(result)
         else:
             if not _analyst_rank_map:
-                _load_analyst_rank_map()
+                _load_analyst_rank_cache()
             return len(_analyst_rank_map) if _analyst_rank_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Analyst rank refresh failed: {e}')
         if not _analyst_rank_map:
-            _load_analyst_rank_map()
+            _load_analyst_rank_cache()
         return len(_analyst_rank_map) if _analyst_rank_map else 0
 
 
@@ -3358,12 +3371,12 @@ def _refresh_macro_cpi_cache():
             return len(result)
         else:
             if not _macro_cpi_map:
-                _load_macro_cpi_map()
+                _load_macro_cpi_cache()
             return len(_macro_cpi_map) if _macro_cpi_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro CPI refresh failed: {e}')
         if not _macro_cpi_map:
-            _load_macro_cpi_map()
+            _load_macro_cpi_cache()
         return len(_macro_cpi_map) if _macro_cpi_map else 0
 
 
@@ -3395,12 +3408,12 @@ def _refresh_macro_ppi_cache():
             return len(result)
         else:
             if not _macro_ppi_map:
-                _load_macro_ppi_map()
+                _load_macro_ppi_cache()
             return len(_macro_ppi_map) if _macro_ppi_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro PPI refresh failed: {e}')
         if not _macro_ppi_map:
-            _load_macro_ppi_map()
+            _load_macro_ppi_cache()
         return len(_macro_ppi_map) if _macro_ppi_map else 0
 
 
@@ -3434,12 +3447,12 @@ def _refresh_macro_m2_cache():
             return len(result)
         else:
             if not _macro_m2_map:
-                _load_macro_m2_map()
+                _load_macro_m2_cache()
             return len(_macro_m2_map) if _macro_m2_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro M2 refresh failed: {e}')
         if not _macro_m2_map:
-            _load_macro_m2_map()
+            _load_macro_m2_cache()
         return len(_macro_m2_map) if _macro_m2_map else 0
 
 
@@ -3471,12 +3484,12 @@ def _refresh_macro_lpr_cache():
             return len(result)
         else:
             if not _macro_lpr_map:
-                _load_macro_lpr_map()
+                _load_macro_lpr_cache()
             return len(_macro_lpr_map) if _macro_lpr_map else 0
     except Exception as e:
         logger.warning(f'[DataEnrich] Macro LPR refresh failed: {e}')
         if not _macro_lpr_map:
-            _load_macro_lpr_map()
+            _load_macro_lpr_cache()
         return len(_macro_lpr_map) if _macro_lpr_map else 0
 
 
@@ -3536,6 +3549,8 @@ def _populate_field_loader_map():
         "momentum_60d": _load_momentum_cache,
         "event_score": _load_event_cache,
         "outstanding_scale": _load_bond_outstanding_cache,
+        "revenue_yoy": _load_earnings_express_cache,
+        "profit_yoy": _load_earnings_express_cache,
     })
 
 
@@ -3577,9 +3592,10 @@ def _compute_field_coverage() -> dict[str, float]:
         # 它们通常由 WebSocket 实时推送，而非缓存注入；
         # 自检无法区分"实时推送值"与"缓存注入的旧值"。
         "eps_forecast", "mgmt_buy_price", "buyback_amount", "iv",
-        "net_capital_flow", "momentum_5d", "momentum_10d", "momentum_20d",
-        "momentum_60d", "event_score", "debt_ratio", "current_ratio",
-        "stock_name",
+        "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
+        "momentum_5d", "momentum_10d", "momentum_20d",
+        "momentum_60d", "event_score", "event_detail", "debt_ratio", "current_ratio",
+        "stock_name", "cagr", "eps", "bps",
     ]
 
     # 预提取每个 bond 的字段值（避免内层循环中反复 getattr）
@@ -3686,6 +3702,8 @@ async def enrich_quotes(bonds: list) -> list:
             try:
                 await loop.run_in_executor(None, _ext_loader)
                 _ext_ts[_ext_name] = _now
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[DataEnrich] enrich_quotes reload {_ext_name} failed: {e}")
 
@@ -3909,15 +3927,15 @@ async def enrich_quotes(bonds: list) -> list:
                 b.outstanding_scale = bp["outstanding_scale"]
             if bp.get("bond_rating") and not b.rating:
                 b.rating = bp["bond_rating"]
-            if bp.get("remaining_years") is not None and bp.get("remaining_years", 0) > 0 and (not b.remaining_years or b.remaining_years == 0):
+            if bp.get("remaining_years") is not None and bp.get("remaining_years", 0) > 0 and b.remaining_years is None:
                 b.remaining_years = bp["remaining_years"]
-            if bp.get("stock_pb") is not None and (not b.pb or b.pb == 0):
+            if bp.get("stock_pb") is not None and b.pb is None:
                 b.pb = bp["stock_pb"]
             # NOTE: stock_pe / maturity_date 曾是 legacy 字段，当前没有任何 refresh 函数写入它们，
             # 因此删除死代码以避免误导维护者（Audit 2026-06-22）。
         # Fallback: 计算 dual_low = price + premium_ratio（当 JISILU/缓存不提供时）
         # 必须在 if bp: 块外面，因为某些债券不在 bond_price 缓存中
-        if (not b.dual_low or b.dual_low == 0) and b.price and b.premium_ratio is not None:
+        if b.dual_low is None and b.price is not None and b.premium_ratio is not None:
             b.dual_low = round(b.price + b.premium_ratio, 2)
 
         # North-bound capital enrichment
@@ -4037,13 +4055,11 @@ async def enrich_quotes(bonds: list) -> list:
                 if _ee.get("roe") is not None:
                     b.roe = _ee["roe"]
                 # revenue_yoy: 营收同比增长
-                # 注意: 季度快报的 0 值多数是"无该季度数据"而非"0%增长"
-                # 因此跳过 0 值防止前端显示 "0.00%" 造成误解
-                if _ee.get("revenue_yoy") and (b.revenue_yoy is None or b.revenue_yoy == 0):
+                # 使用 is not None 判断，区分"0%增长"和"缺失"
+                if _ee.get("revenue_yoy") is not None and b.revenue_yoy is None:
                     b.revenue_yoy = _ee["revenue_yoy"]
-                # profit_yoy: 净利润同比增长（同上 0 值保护）
-                # 注意：跳过 0 值防止前端显示 "0.00%" 造成误解
-                if _ee.get("net_profit_yoy") and (b.profit_yoy is None or b.profit_yoy == 0):
+                # profit_yoy: 净利润同比增长（同上）
+                if _ee.get("net_profit_yoy") is not None and b.profit_yoy is None:
                     b.profit_yoy = _ee["net_profit_yoy"]
 
         # Restricted release enrichment
@@ -4188,7 +4204,10 @@ async def start_background_refresh():
             "_load_coupon_rate_cache", "_load_north_cache", "_load_margin_cache",
             "_load_lhb_cache", "_load_block_trade_cache", "_load_holder_num_cache",
             "_load_earnings_forecast_cache", "_load_earnings_express_cache",
-            "_load_restricted_release_cache",
+            "_load_restricted_release_cache", "_load_main_biz_cache",
+            "_load_analyst_rank_cache", "_load_macro_cpi_cache",
+            "_load_macro_ppi_cache", "_load_macro_m2_cache",
+            "_load_macro_lpr_cache",
         ):
             try:
                 globals()[_loader_name]()
@@ -4428,6 +4447,12 @@ async def start_background_refresh():
                                 "block_trade_amount": "--block-trade",
                                 "holder_num_change": "--holder-num",
                                 "restricted_release_amount": "--restricted-release",
+                                "net_capital_flow": "--fund-flow",
+                                "iv": "--vol",
+                                "mgmt_buy_price": "--mgmt",
+                                "eps_forecast": "--earnings-forecast",
+                                "revenue_yoy": "--earnings-express",
+                                "profit_yoy": "--earnings-express",
                             }
                             flags = sorted({_field_to_flag[f] for f in still_low if f in _field_to_flag})
                             if flags:
@@ -4504,7 +4529,7 @@ async def start_background_refresh():
                        "--north", "--margin", "--lhb", "--block-trade",
                        "--holder-num", "--restricted-release",
                        "--fund-flow", "--vol", "--mgmt", "--earnings-forecast",
-                       "--spot", "--bond-price"]
+                       "--earnings-express", "--spot", "--bond-price"]
                 proc = None
                 try:
                     proc = subprocess.Popen(
@@ -4570,6 +4595,17 @@ _earnings_forecast_map: dict = {}
 _earnings_express_map: dict = {}
 _restricted_release_map: dict = {}
 
+_north_loaded = False
+_margin_loaded = False
+_lhb_loaded = False
+_block_trade_loaded = False
+_holder_num_loaded = False
+_earnings_forecast_loaded = False
+_earnings_express_loaded = False
+_restricted_release_loaded = False
+_industry_score_map: dict = {}
+_industry_score_loaded = False
+
 
 def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
     """一次完成状态检查和数据加载，避免 cache_status + _load_ext_cache 双重 I/O。
@@ -4625,10 +4661,11 @@ def _is_loadable(status: str) -> bool:
     Rules:
     - "fresh": new data, overwrite
     - "missing": first boot, init empty
-    - "stale": file exists but expired, load it (memory may be empty after restart)
     - "corrupted": file corrupt, treat as missing (clear map)
+    - "stale": handled explicitly by callers BEFORE this check;
+               NOT included here to avoid ambiguity.
     """
-    return status in ("fresh", "missing", "corrupted", "stale")
+    return status in ("fresh", "missing", "corrupted")
 
 
 

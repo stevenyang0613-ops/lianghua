@@ -95,6 +95,13 @@ const NAME_MAP: Record<string, string> = {
   _refresh_holder_num_cache: '股东人数',
   _refresh_earnings_forecast_cache: '业绩预告',
   _refresh_restricted_release_cache: '限售解禁',
+  // 补充数据源 (6 个新增)
+  _refresh_main_biz_cache: '主营业务',
+  _refresh_analyst_rank_cache: '分析师排名',
+  _refresh_macro_cpi_cache: '宏观 CPI',
+  _refresh_macro_lpr_cache: '宏观 LPR',
+  _refresh_macro_m2_cache: '宏观 M2',
+  _refresh_macro_ppi_cache: '宏观 PPI',
 }
 
 function formatName(n: string): string {
