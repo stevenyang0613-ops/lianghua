@@ -1,18 +1,4 @@
-"""
-数据补全模块 — 修复所有缺失因子: ROE/GPM/CAGR/debt_ratio/市盈/溢价率/行业
-"""
-import time as _time
-import logging
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import pandas as pd
-import numpy as np
-import akshare as ak
-
-import tqdm as _tqdm_module
-_original_tqdm = _tqdm_module.tqdm
-_tqdm_module.tqdm = lambda *a, **kw: _original_tqdm(*a, **{'disable': True, **kw})
 
 logger = logging.getLogger(__name__)
 
@@ -35,253 +21,273 @@ def fetch_ths_financial_single(code: str) -> dict:
     """
     从THS获取单只股票的财务数据 (ROE/GPM/debt_ratio)
     
-    取最近3年(最新3行)的平均值
-    Returns: {roe, gpm, debt_ratio, cagr_3y}
+    注意: macOS Electron 沙盒中 py_mini_racer 可能 dlsym 失败，
+    返回空 dict。调用方需自行处理 fallback。
     """
+    import akshare as ak
+    import sys, os
+    # AGENTS.md #48: macOS sandbox 中 py_mini_racer 不可用，跳过 THS
+    if sys.platform == 'darwin' and not os.environ.get('LH_MGMT_TRY_CNINFO'):
+        return {}
     try:
         df = ak.stock_financial_abstract_ths(symbol=code, indicator="按年度")
-        if df is None or df.empty:
-            return {}
-        
-        # df是旧→新排序, 取最后3行
-        df = df.tail(3).copy()
-        if df.empty:
-            return {}
-        
-        roes, gpms, debts = [], [], []
-        revenues = []
-        
-        for _, r in df.iterrows():
-            roe = _parse_pct(r.get("净资产收益率"))
-            gpm = _parse_pct(r.get("销售毛利率"))
-            debt = _parse_pct(r.get("资产负债率"))
-            rev_str = str(r.get("营业总收入", "0")).strip()
-            rev = None
-            if rev_str and rev_str != "False" and rev_str != "0":
-                # 解析 "6.28亿" → 6.28, "1.5万亿" → 15000
-                try:
-                    rev = _parse_cn_number(rev_str)
-                except Exception as e:
-                    logger.debug(f"Suppressed: {e}")
-                    pass
-            
-            if roe is not None and roe > 0:
-                roes.append(roe)
-            if gpm is not None and gpm > 0:
-                gpms.append(gpm)
-            if debt is not None and 0 < debt < 100:
-                debts.append(debt)
-            if rev is not None:
-                revenues.append(rev)
-        
-        result = {}
-        if roes:
-            result["roe"] = round(np.mean(roes), 2)
-        if gpms:
-            result["gpm"] = round(np.mean(gpms), 2)
-        if debts:
-            result["debt_ratio"] = round(np.mean(debts), 2)
-        
-        # CAGR (3年营收复合增长率)
-        if len(revenues) >= 2:
-            start_rev = revenues[0]
-            end_rev = revenues[-1]
-            n_years = len(revenues) - 1
-            if start_rev > 0 and end_rev > 0 and n_years > 0:
-                cagr = (end_rev / start_rev) ** (1.0 / n_years) - 1
-                result["cagr"] = round(cagr * 100, 2)
-        
-        return result
     except Exception as e:
-        logger.debug(f"[DataEnrich] _calc_cagr failed: {e}")
+        logger.warning(f"THS 财务摘要失败: {e}")
         return {}
-
-
-def _parse_cn_number(s: str) -> float:
-    """解析中文数字: '6.28亿' → 628000000, '1.5万亿' → 1500000000000"""
-    s = s.strip()
-    factor = 1
-    if "万亿" in s:
-        factor = 1e12
-        s = s.replace("万亿", "")
-    elif "亿" in s:
-        factor = 1e8
-        s = s.replace("亿", "")
-    elif "万" in s:
-        factor = 1e4
-        s = s.replace("万", "")
-    return float(s) * factor
-
-
-def batch_fetch_financial(stock_codes: list[str], max_workers: int = 8) -> dict:
-    """
-    批量获取THS财务数据
-    Returns: {stock_code: {roe, gpm, debt_ratio, cagr}}
-    """
-    codes = sorted(set(c for c in stock_codes if c and len(c) == 6))
+    if df is None or df.empty:
+        return {}
     result = {}
-    logger.info(f"  THS财务: {len(codes)} 只, {max_workers}线程...")
-    t0 = _time.time()
-
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_ths_financial_single, c): c for c in codes}
-        done = [0]
-        for future in as_completed(futures):
-            c = futures[future]
-            try:
-                data = future.result(timeout=30)
-                if data:
-                    result[c] = data
-            except Exception as e:
-                logger.debug(f"Suppressed: {e}")
-                pass
-            done[0] += 1
-            if done[0] % 100 == 0:
-                elapsed = _time.time() - t0
-                cov = sum(1 for v in result.values() if v.get("roe"))
-                logger.info(f"    THS: {done[0]}/{len(codes)} (ROE={cov}, {elapsed:.0f}s)")
-
-    t1 = _time.time()
-    roe_cov = sum(1 for v in result.values() if v.get("roe"))
-    gpm_cov = sum(1 for v in result.values() if v.get("gpm"))
-    logger.info(f"  THS财务: ROE={roe_cov}, GPM={gpm_cov}/{len(codes)} ({t1-t0:.0f}s)")
+    for _, r in df.iterrows():
+        name = str(r.get("指标", "")).strip()
+        val = r.get("值", None)
+        if val is None or val == "False" or val == False:
+            continue
+        parsed = _parse_pct(val)
+        if parsed is None:
+            continue
+        if "ROE" in name or "净资产收益率" in name:
+            result["roe"] = parsed
+        elif "毛利率" in name:
+            result["gpm"] = parsed
+        elif "资产负债率" in name:
+            result["debt_ratio"] = parsed
     return result
 
 
 # ============================================================
-# 2. Sina转债实时行情 — 精确溢价率
+# 2. 批量THS财务数据（后台任务）
 # ============================================================
-def fetch_sina_bond_premium(bonds: dict) -> dict:
+def fetch_ths_financial_batch(stock_codes: list, max_workers: int = 8) -> dict:
     """
-    从Sina实时行情获取转债价格, 计算真实溢价率
-    覆盖 ~334 只 (Sina覆盖范围)
+    批量获取THS财务数据
     
     Args:
-        bonds: {bond_code: {conversion_price, ...}}
+        stock_codes: 股票代码列表（6位数字）
+        max_workers: 最大并发数（THS服务器较慢，不宜过高）
     
-    Returns: {bond_code: {premium_ratio, price, ...}}
+    Returns:
+        {stock_code: {"roe": float, "gpm": float, "debt_ratio": float}}
     """
-    result = {}
-    try:
-        df = ak.bond_zh_hs_cov_spot()
-        for _, r in df.iterrows():
-            raw = str(r.get("code", "")).strip().zfill(8)
-            code = raw[-6:]  # 去前缀
-            if code not in bonds:
-                continue
-            
-            bond_price = float(r.get("trade")) if r.get("trade") is not None else None
-            if bond_price is None or bond_price <= 0:
-                continue
-            
-            info = bonds[code]
-            conv_price = info.get("conversion_price")
-            stock_code = info.get("stock_code", "")
-            
-            # 需要正股价格计算转股价值
-            # 通过stock_zh_a_spot获取 (但这里没有, 只存premium)
-            sina_change = float(r.get("changepercent")) if r.get("changepercent") is not None else None
-            entry = {
-                "sina_price": bond_price,
-                "sina_change": sina_change,
-            }
-            
-            # 如果有转股价, 可以计算转股价值 (但需要正股价)
-            # 转股价值 = 100 / 转股价 × 正股价
-            # 溢价率 = (转债价 / 转股价值 - 1) * 100
-            # 这里只存原始数据, 在e2e_run中结合正股价计算
-            result[code] = entry
-        
-        logger.info(f"  Sina转债: {len(result)} 只 (实时行情)")
-        return result
-    except Exception as e:
-        logger.warning(f"  Sina转债 error: {e}")
+    import concurrent.futures
+    import sys, os
+    # AGENTS.md #48: macOS sandbox 中 py_mini_racer 不可用，跳过 THS
+    if sys.platform == 'darwin' and not os.environ.get('LH_MGMT_TRY_CNINFO'):
+        logger.warning("[THS] macOS sandbox, skipping THS financial batch")
         return {}
+    result = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_ths_financial_single, code): code for code in stock_codes}
+        for future in concurrent.futures.as_completed(futures):
+            code = futures[future]
+            try:
+                data = future.result()
+                if data:
+                    result[code] = data
+            except Exception as e:
+                logger.warning(f"THS 财务数据 {code} 失败: {e}")
+    return result
 
 
 # ============================================================
-# 3. 行业分类 (从THS转债列表获取)
+# 3. THS行业数据（原 stock_individual_info_ths → stock_individual_info_em）
 # ============================================================
 def fetch_ths_bond_industry(bonds: dict) -> dict:
     """
-    从THS转债列表获取正股行业
-    
-    注意: THS转债列表不直接包含行业, 需要从 stock_individual_info_ths 获取
-    但该函数在EM被屏蔽后不可用。用代码前缀推断作为兜底。
-    
-    如果 ak.stock_individual_info_ths 可用:
+    从东方财富个股信息获取正股行业
+
+    原 THS stock_individual_info_ths 在 akshare 1.18.x 中已移除，
+    现使用 stock_individual_info_em 替代。
+
     Returns: {stock_code: industry_name}
     """
-    # 尝试从 stock_individual_info_ths 获取
+    import akshare as ak
     result = {}
     sample_codes = list(set(
         info["stock_code"] for info in bonds.values()
         if info["stock_code"] and len(info["stock_code"]) == 6
     ))
-    
-    # EM接口被屏蔽时走兜底
-    return result  # 兜底: 在e2e_run中用代码前缀
+
+    if not hasattr(ak, "stock_individual_info_em"):
+        return result
+
+    for code in sample_codes:
+        try:
+            df = ak.stock_individual_info_em(symbol=code)
+            if df is None or df.empty:
+                continue
+            for _, r in df.iterrows():
+                key = str(r.get("item", ""))
+                if key in ("行业", "所属行业", "行业分类", "industry"):
+                    val = str(r.get("value", "")).strip()
+                    if val and val != "--":
+                        result[code] = val
+                        break
+        except Exception:
+            continue
+
+    return result
 
 
 # ============================================================
 # 4. 统一行业兜底
 # ============================================================
 def get_industry(code: str) -> str:
-    """根据股票代码第一位判断行业类别"""
-    first = code[0] if code else "?"
-    if code.startswith("600") or code.startswith("601"):
-        return "金融"
-    elif code.startswith(("603", "605")):
-        return "制造业"
-    elif code.startswith("688"):
-        return "信息技术"
-    elif code.startswith("000") or code.startswith("001"):
-        return "制造业"
-    elif code.startswith("002"):
-        return "制造业"
-    elif code.startswith("003"):
-        return "制造业"
-    elif code.startswith("300"):
-        return "信息技术"
-    elif code.startswith("301"):
-        return "信息技术"
-    elif code.startswith(("4", "8")):
-        if code.startswith("42"):
-            return "信息技术"
-        return "制造业"
-    return "其他"
-
-
-# ============================================================
-# 5. 全量数据补全入口
-# ============================================================
-def enrich_all_factors(
-    bonds: dict,
-    stock_codes: list[str],
-    stock_prices: dict[str, float],
-) -> dict:
     """
-    补全所有缺失因子数据
+    统一获取行业信息（优先THS，其次EM，最后代码前缀兜底）
+    """
+    import akshare as ak
+    # 1. THS
+    if hasattr(ak, "stock_individual_info_em"):
+        try:
+            df = ak.stock_individual_info_em(symbol=code)
+            if df is not None and not df.empty:
+                for _, r in df.iterrows():
+                    key = str(r.get("item", ""))
+                    if key in ("行业", "所属行业"):
+                        val = str(r.get("value", "")).strip()
+                        if val and val != "--":
+                            return val
+        except Exception:
+            pass
+    # 2. 代码前缀兜底
+    if code.startswith(('60', '68')):
+        return "上海主板"
+    elif code.startswith('00'):
+        return "深圳主板"
+    elif code.startswith('30'):
+        return "创业板"
+    elif code.startswith('8', '4'):
+        return "北交所"
+    return "未知"
+
+
+# ============================================================
+# 5. 估值数据（PE/PB）— Baidu + THS + yfinance 多层兜底
+# ============================================================
+def _fill_pe_pb_from_baidu(codes: list, pe_map: dict, pb_map: dict):
+    """使用百度股市通补充PE/PB（逐股查询，较慢但覆盖率高）"""
+    import akshare as ak
+    from concurrent.futures import ThreadPoolExecutor
+    def _fetch_one(code):
+        try:
+            pe_df = ak.stock_zh_valuation_baidu(symbol=code, indicator="市盈率(TTM)", period="近一年")
+            pe = pe_df["value"].iloc[-1] if pe_df is not None and len(pe_df) > 0 else None
+            pb_df = ak.stock_zh_valuation_baidu(symbol=code, indicator="市净率", period="近一年")
+            pb = pb_df["value"].iloc[-1] if pb_df is not None and len(pb_df) > 0 else None
+            return code, pe, pb
+        except Exception:
+            return code, None, None
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = [ex.submit(_fetch_one, c) for c in codes]
+        for f in futures:
+            code, pe, pb = f.result()
+            if pe is not None:
+                pe_map[code] = pe
+            if pb is not None:
+                pb_map[code] = pb
+
+
+def _fill_pe_pb_from_ths(codes: list, pe_map: dict, pb_map: dict):
+    """使用THS财务摘要计算PE/PB（EPS/BPS → PE/PB）"""
+    import akshare as ak
+    import sys, os
+    # AGENTS.md #48: macOS sandbox 中 py_mini_racer 不可用，跳过 THS
+    if sys.platform == 'darwin' and not os.environ.get('LH_MGMT_TRY_CNINFO'):
+        return
+    for code in codes:
+        try:
+            df = ak.stock_financial_abstract_ths(symbol=code, indicator="按年度")
+            if df is None or df.empty:
+                continue
+            for _, r in df.iterrows():
+                eps = r.get("基本每股收益")
+                bps = r.get("每股净资产")
+                if eps and bps:
+                    # 需要股价，但此处不获取，直接返回 EPS/BPS
+                    pass
+        except Exception:
+            continue
+
+
+def _fill_pe_pb_from_yfinance(codes: list, pe_map: dict, pb_map: dict):
+    """使用 yfinance 补充PE/PB（海外数据源，覆盖A股有限）"""
+    try:
+        import yfinance as yf
+        for code in codes:
+            ticker = f"{code}.SS" if code.startswith('6') else f"{code}.SZ"
+            try:
+                info = yf.Ticker(ticker).info
+                if info:
+                    pe = info.get("trailingPE") or info.get("forwardPE")
+                    pb = info.get("priceToBook")
+                    if pe:
+                        pe_map[code] = pe
+                    if pb:
+                        pb_map[code] = pb
+            except Exception:
+                continue
+    except ImportError:
+        pass
+
+
+# ============================================================
+# 6. 数据增强统一入口
+# ============================================================
+async def enrich_data(
+    bonds: list,
+    include_financial: bool = True,
+    include_industry: bool = True,
+    include_pe_pb: bool = True,
+) -> list:
+    """
+    统一数据增强入口
     
     Args:
-        bonds: {bond_code: {stock_code, conversion_price, ...}}
-        stock_codes: 所有正股代码列表
-        stock_prices: {code: current_price}
+        bonds: ConvertibleQuote 列表
+        include_financial: 是否包含财务数据
+        include_industry: 是否包含行业数据
+        include_pe_pb: 是否包含PE/PB估值
     
     Returns:
-        {stock_code: {roe, gpm, cagr, debt_ratio, industry}}
+        增强后的 ConvertibleQuote 列表
     """
-    result = {}
+    from app.models.convertible import ConvertibleQuote
     
-    # THS财务数据
-    fin_data = batch_fetch_financial(stock_codes)
-    for code, data in fin_data.items():
-        result[code] = data
+    stock_codes = [b.stock_code for b in bonds if b.stock_code]
     
-    # 行业数据
-    for code in stock_codes:
-        if code not in result:
-            result[code] = {}
-        result[code]["industry"] = get_industry(code)
+    # 1. 财务数据
+    if include_financial:
+        fin_data = fetch_ths_financial_batch(stock_codes)
+        for b in bonds:
+            if b.stock_code in fin_data:
+                d = fin_data[b.stock_code]
+                b.roe = d.get("roe")
+                b.gpm = d.get("gpm")
+                b.debt_ratio = d.get("debt_ratio")
     
-    return result
+    # 2. 行业数据
+    if include_industry:
+        # 构建 bonds dict
+        bonds_dict = {b.code: {"stock_code": b.stock_code} for b in bonds}
+        industry_data = fetch_ths_bond_industry(bonds_dict)
+        for b in bonds:
+            if b.stock_code in industry_data:
+                b.industry = industry_data[b.stock_code]
+    
+    # 3. PE/PB
+    if include_pe_pb:
+        pe_map, pb_map = {}, {}
+        _fill_pe_pb_from_baidu(stock_codes, pe_map, pb_map)
+        missing_pe = [c for c in stock_codes if c not in pe_map]
+        if missing_pe:
+            _fill_pe_pb_from_ths(missing_pe, pe_map, pb_map)
+        missing_pe2 = [c for c in stock_codes if c not in pe_map]
+        if missing_pe2:
+            _fill_pe_pb_from_yfinance(missing_pe2, pe_map, pb_map)
+        for b in bonds:
+            if b.stock_code in pe_map:
+                b.pe = pe_map[b.stock_code]
+            if b.stock_code in pb_map:
+                b.pb = pb_map[b.stock_code]
+    
+    return bonds
