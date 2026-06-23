@@ -630,8 +630,10 @@ class RiskManager:
         # 可增加仓位
         available_value = max_single_value - current_value
 
-        # 可增加仓位（保守估计：按面值100元计算，实际应从行情获取）
-        estimated_price = current_price if current_price and current_price > 0 else 100.0
+        # 可增加仓位（实际应从行情获取；价格无效时不应默认100，直接返回0）
+        estimated_price = current_price if current_price and current_price > 0 else 0.0
+        if estimated_price <= 0:
+            return 0
         max_qty = int(available_value / estimated_price / 100) * 100
 
         return max(0, max_qty)

@@ -246,6 +246,7 @@ class XuanjiV8Strategy(Strategy):
         current_date = self._dates[idx]
         day_data = data.copy()
         if day_data.empty:
+            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_249\n")
             return None
         
         # 计算当日日期索引
@@ -260,6 +261,7 @@ class XuanjiV8Strategy(Strategy):
             return self._generate_stop_all_signals(day_data)
         
         if self._portfolio_stopped:
+            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_263\n")
             return None
         
         # === 单券止损 ===
@@ -271,6 +273,7 @@ class XuanjiV8Strategy(Strategy):
         
         # === 调仓日才生成信号 ===
         if not is_rebalance:
+            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_274\n")
             return None
         
         # === 前置过滤 ===
@@ -359,8 +362,21 @@ class XuanjiV8Strategy(Strategy):
 
     def _fill_missing_columns(self, day_data: pd.DataFrame) -> None:
         """填充缺失的关键数据列"""
+        # price 不使用100作为默认值，避免把缺失价格误判为真实价格100
+        if 'price' not in day_data.columns:
+            if 'close' in day_data.columns:
+                day_data['price'] = day_data['close']
+            elif 'close_price' in day_data.columns:
+                day_data['price'] = day_data['close_price']
+            else:
+                day_data['price'] = np.nan
+        else:
+            # 对已有 price 中的缺失值按 code 前向/后向填充，无法填充的保持 NaN
+            if day_data['price'].isna().any() and 'code' in day_data.columns:
+                day_data['price'] = day_data.groupby('code')['price'].transform(lambda s: s.ffill().bfill())
+
         defaults = {
-            'price': 100.0, 'premium_ratio': 15.0, 'volume': 100000,
+            'premium_ratio': 15.0, 'volume': 100000,
             'change_pct': 0.0, 'ytm': 1.0, 'remaining_years': 3.0,
             'conversion_value': None, 'conversion_price': None, 'stock_price': None,
             'pe': None, 'pb': None, 'roe': None, 'gpm': None,

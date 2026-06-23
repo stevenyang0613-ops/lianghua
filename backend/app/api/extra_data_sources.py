@@ -4,6 +4,17 @@
 核心问题: bond_value/纯债溢价率/转股价值 在历史回测中长期为 0%
 解决方案: 通过 akshare.bond_zh_cov_value_analysis 从东方财富数据中心获取每只转债的
          300-1500 天的纯债价值、转股价值、纯债溢价率、转股溢价率、收盘价
+
+信息来源:
+  ① 东方财富数据中心 (akshare.bond_zh_cov_value_analysis) — 纯债价值/转股价值历史
+  ② 东方财富数据中心 (datacenter-web.eastmoney.com)      — 转债日K线/转债行情
+  ③ 同花顺 THS (akshare.bond_zh_hs_cov_spot)             — 剩余规模/换手率实时
+  ④ 中证转债指数 (akshare.stock_zh_index_daily)          — 基准对比
+  ⑤ 同花顺财务摘要 (akshare.stock_financial_abstract_ths) — ROE/GPM/EPS/BPS
+  ⑥ 妙想 MX (东方财富官方 API)                           — 自然语言查询行业/财务/行情
+     - mx-data: 金融数据自然语言查询
+     - mx-search: 资讯搜索
+     - 需 MX_APIKEY 配置
 """
 
 import logging

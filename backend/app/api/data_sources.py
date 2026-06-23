@@ -5,12 +5,14 @@
 PE/PB数据:
   ① Baidu valuation (逐股 PE+PB, 多线程) — ~0.85s/只 × 2次, 15线程并行
   ② THS财务摘要 (EPS/BPS推算)             — 最后备选, 季度数据
+  ③ 妙想 MX (自然语言查询 PE/PB)           — 东方财富官方 API, 需 MX_APIKEY
 
 转债行情数据:
   ① THS转债列表 + Sina实时行情           — 主力
   ② Jisilu集思录                         — 溢价率/双低/评级
   ③ Tencent K线 (正股)                    — 正股历史日线
   ④ 正股K线推算转债价格                    — premium ratio 估算法
+  ⑤ 妙想 MX (自然语言查询实时行情)         — 东方财富官方 API, 需 MX_APIKEY
 """
 import os
 import time as _time
