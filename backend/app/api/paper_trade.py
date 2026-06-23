@@ -161,6 +161,17 @@ async def force_rebalance(account_id: str, request: Request):
     """强制策略立即调仓（无视调仓间隔天数限制）"""
     manager = _get_manager(request)
     try:
+        # 先尝试获取行情（引擎可能还没启动刷新循环，直接调用 get_all_quotes 走 storage 回退）
+        engine = getattr(request.app.state, "engine", None)
+        if engine is not None:
+            try:
+                bonds = await engine.get_all_quotes()
+                # 将行情注入 manager 的 market_engine.latest_quotes
+                if bonds and hasattr(engine, 'latest_quotes'):
+                    engine.latest_quotes = bonds
+            except Exception as e:
+                print(f"[ForceRebalance] get_all_quotes fallback failed: {e}")
+
         result = manager.force_rebalance(account_id)
         return result
     except KeyError:

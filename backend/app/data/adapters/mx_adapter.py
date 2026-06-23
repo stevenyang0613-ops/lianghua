@@ -163,7 +163,7 @@ class MXAdapter(DataSourceAdapter):
     # ------------------------------------------------------------------
 
     async def health_check(self) -> Dict[str, Any]:
-        """检查MX服务状态 — 包含实际API连通性验证"""
+        """检查MX服务状态 — 包含实际API连通性验证与有效期管理"""
         base = await super().health_check()
         degraded = getattr(self, '_degraded_mode', False)
         
@@ -194,6 +194,7 @@ class MXAdapter(DataSourceAdapter):
                 status = result.get("status")
                 if status == 0:
                     api_key_valid = True
+                    _set_key_validated_at()  # 记录验证时间
                 else:
                     api_key_error = f"API返回状态码 {status}: {result.get('message', '未知错误')}"
             except Exception as e:
@@ -201,10 +202,25 @@ class MXAdapter(DataSourceAdapter):
                 if "401" in str(e).lower() or "unauthorized" in str(e).lower():
                     api_key_error = "API Key 无效或已过期，请重新配置"
         
+        # Key 有效期管理：计算距离上次验证的天数
+        key_validated_at = _get_key_validated_at()
+        days_since_validated = None
+        key_expiry_warning = None
+        if key_validated_at:
+            days_since_validated = (datetime.now() - key_validated_at).days
+            # 东方财富 API Key 通常有效期为 30-90 天，超过 60 天给出提醒
+            if days_since_validated > 60:
+                key_expiry_warning = f"距离上次验证已 {days_since_validated} 天，建议检查 Key 是否仍有效"
+            elif days_since_validated > 30:
+                key_expiry_warning = f"距离上次验证已 {days_since_validated} 天，Key 可能即将过期"
+        
         base.update({
             "configured": bool(self._api_key),
             "api_key_valid": api_key_valid,
             "api_key_error": api_key_error,
+            "key_validated_at": key_validated_at.isoformat() if key_validated_at else None,
+            "days_since_validated": days_since_validated,
+            "key_expiry_warning": key_expiry_warning,
             "degraded_mode": degraded,
             "api_key_prefix": "***" if self._api_key else "",
             "skills_installed": skill_install_status,
