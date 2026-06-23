@@ -140,6 +140,8 @@ class EventDataSource:
         for callback in list(self._subscribers):
             try:
                 tasks.append(callback(event))
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[EventSource] Broadcast error: {e}")
 
@@ -281,6 +283,8 @@ class EventDataSource:
                 # 等待下次检查
                 await asyncio.sleep(self._config.check_interval)
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[EventSource] Monitoring error: {e}")
                 await asyncio.sleep(60)  # 错误后等待1分钟
@@ -310,6 +314,8 @@ class EventDataSource:
                 event = self._parse_announcement(content, code, name, title, publish_time, 'eastmoney')
                 if event:
                     await self.broadcast(event)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug(f"[EventSource] 公告拉取失败: {e}")
         pass

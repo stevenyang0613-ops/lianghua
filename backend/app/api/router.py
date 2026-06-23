@@ -36,6 +36,12 @@ from app.api.ai import router as ai_router
 from app.api.paper_trade import router as paper_trade_router
 from app.api.metrics import router as metrics_router
 from app.api.strategies import router as strategies_router
+try:
+    from app.api.backtest_results import router as backtest_results_router
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"backtest_results router unavailable ({e}), skipping")
+    backtest_results_router = None
 
 router = APIRouter()
 router.include_router(market_router, prefix="/market", tags=["market"], dependencies=[Depends(verify_token)])
@@ -62,6 +68,8 @@ router.include_router(ai_router, prefix="/ai", tags=["ai"], dependencies=[Depend
 router.include_router(paper_trade_router, prefix="/paper-trade", tags=["paper-trade"], dependencies=[Depends(verify_token)])
 router.include_router(metrics_router, prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(verify_token)])
 router.include_router(strategies_router, prefix="/strategies-share", tags=["strategies-share"], dependencies=[Depends(verify_token)])
+if backtest_results_router is not None:
+    router.include_router(backtest_results_router, prefix="/backtest-results", tags=["backtest-results"], dependencies=[Depends(verify_token)])
 
 # 兼容端点：用户管理（前端 community.ts 调用 /user/*）
 @router.get("/user/profile", dependencies=[Depends(verify_token)])

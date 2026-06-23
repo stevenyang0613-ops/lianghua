@@ -349,24 +349,21 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
                 extra=mx_extra,
             ))
             connected = await adapter.connect()
-            if connected:
-                # 降级模式下降低优先级，避免空查询触发failover
-                priority = 120 if getattr(adapter, '_degraded_mode', False) else 80
-                manager.register(
-                    name='mx',
-                    adapter=adapter,
-                    priority=priority,
-                    data_types=[
-                        DataType.QUOTE, DataType.STOCK, DataType.FINANCIAL,
-                        DataType.CONVERTIBLE, DataType.ANNOUNCEMENT,
-                    ],
-                    is_primary=False,
-                    failover_to='eastmoney',
-                )
-                mode = 'degraded' if getattr(adapter, '_degraded_mode', False) else 'full'
-                logger.info(f'[DataSource] Registered: mx (priority={priority}, mode={mode}, primary=False, failover=eastmoney)')
-            else:
-                logger.info('[DataSource] MX adapter skipped: MX_APIKEY not set')
+            # 降级模式下降低优先级，避免空查询触发failover
+            priority = 120 if getattr(adapter, '_degraded_mode', False) else 80
+            manager.register(
+                name='mx',
+                adapter=adapter,
+                priority=priority,
+                data_types=[
+                    DataType.QUOTE, DataType.STOCK, DataType.FINANCIAL,
+                    DataType.CONVERTIBLE, DataType.ANNOUNCEMENT,
+                ],
+                is_primary=False,
+                failover_to='eastmoney',
+            )
+            mode = 'degraded' if getattr(adapter, '_degraded_mode', False) else 'full'
+            logger.info(f'[DataSource] Registered: mx (priority={priority}, mode={mode}, primary=False, failover=eastmoney)')
         except Exception as e:
             logger.warning(f'[DataSource] MX adapter registration failed: {e}')
 

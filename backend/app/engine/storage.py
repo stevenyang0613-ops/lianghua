@@ -685,10 +685,11 @@ class DataStorage:
         "holder_num_change", "eps_forecast", "eps", "bps",
         "revenue_yoy", "profit_yoy", "restricted_release_amount",
     ]
-    _QH_ALWAYS_OVERWRITE = {"price"}
+    _QH_ALWAYS_OVERWRITE: set[str] = set()  # 空集合：所有字段使用 COALESCE，保留旧值
     _QH_COALESCE_MERGE = {
-        "change_pct", "stock_price", "stock_change_pct", "conversion_value",
-        "premium_ratio", "dual_low", "ytm", "volume", "stock_code", "stock_name", "concepts",
+        "name", "price", "change_pct", "stock_price", "stock_change_pct", "conversion_value",
+        "premium_ratio", "dual_low", "ytm", "volume", "remaining_years", "stock_code", "stock_name", "concepts",
+        "conversion_price", "forced_call_days", "last_trade_date", "maturity_date", "redemption_price", "call_status", "is_called",
         "roe", "gpm", "cagr", "debt_ratio", "pe", "pb", "iv", "iv_source",
         "buyback_amount", "mgmt_buy_price", "industry", "rating",
         "turnover_rate", "current_ratio", "outstanding_scale",
@@ -772,12 +773,12 @@ class DataStorage:
         "ytm":               lambda q: _safe_double(q.ytm),
         "volume":            lambda q: _safe_double(q.volume),
         "remaining_years":   lambda q: _safe_double(q.remaining_years),
-        "forced_call_days":  lambda q: _safe_double(getattr(q, "forced_call_days", 0), 0),
+        "forced_call_days":  lambda q: _safe_double(getattr(q, "forced_call_days", None)),
         "is_called":         lambda q: bool(getattr(q, "is_called", False)),
         "call_status":       lambda q: str(getattr(q, "call_status", "") or ""),
         "last_trade_date":   lambda q: getattr(q, "last_trade_date", None),
         "maturity_date":     lambda q: getattr(q, "maturity_date", None),
-        "redemption_price":  lambda q: _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
+        "redemption_price":  lambda q: _safe_double(getattr(q, "redemption_price", None)),
         "timestamp":         lambda q: q.timestamp,
         "stock_code":        lambda q: getattr(q, "stock_code", None) or None,
         "stock_name":        lambda q: getattr(q, "stock_name", None) or None,
@@ -917,12 +918,12 @@ class DataStorage:
             "premium_ratio": _safe_double(q.premium_ratio), "dual_low": _safe_double(q.dual_low),
             "ytm": _safe_double(q.ytm), "volume": _safe_double(q.volume),
             "remaining_years": _safe_double(q.remaining_years),
-            "forced_call_days": _safe_double(getattr(q, "forced_call_days", 0), 0),
+            "forced_call_days": _safe_double(getattr(q, "forced_call_days", None)),
             "is_called": bool(getattr(q, "is_called", False)),
             "call_status": str(getattr(q, "call_status", "") or ""),
             "last_trade_date": getattr(q, "last_trade_date", None),
             "maturity_date": getattr(q, "maturity_date", None),
-            "redemption_price": _safe_double(getattr(q, "redemption_price", 0.0), 0.0),
+            "redemption_price": _safe_double(getattr(q, "redemption_price", None)),
             "timestamp": q.timestamp,
             "stock_code": getattr(q, "stock_code", None) or None,
             "stock_name": getattr(q, "stock_name", None) or None,
@@ -1010,13 +1011,13 @@ class DataStorage:
             "close_price":    lambda q: _safe_double(q.price),
             "volume":         lambda q: _safe_double(q.volume),
             "snapshot_date":  _snap,
-            "premium_ratio":  lambda q: _safe_double(getattr(q, "premium_ratio", 0), 0),
-            "change_pct":     lambda q: _safe_double(getattr(q, "change_pct", 0), 0),
-            "stock_price":    lambda q: _safe_double(getattr(q, "stock_price", 0), 0),
-            "conversion_value": lambda q: _safe_double(getattr(q, "conversion_value", 0), 0),
-            "dual_low":       lambda q: _safe_double(getattr(q, "dual_low", 0), 0),
-            "ytm":            lambda q: _safe_double(getattr(q, "ytm", 0), 0),
-            "remaining_years": lambda q: _safe_double(getattr(q, "remaining_years", 0), 0),
+            "premium_ratio":  lambda q: _safe_double(getattr(q, "premium_ratio", None)),
+            "change_pct":     lambda q: _safe_double(getattr(q, "change_pct", None)),
+            "stock_price":    lambda q: _safe_double(getattr(q, "stock_price", None)),
+            "conversion_value": lambda q: _safe_double(getattr(q, "conversion_value", None)),
+            "dual_low":       lambda q: _safe_double(getattr(q, "dual_low", None)),
+            "ytm":            lambda q: _safe_double(getattr(q, "ytm", None)),
+            "remaining_years": lambda q: _safe_double(getattr(q, "remaining_years", None)),
             "roe":            lambda q: _safe_double(getattr(q, "roe", None)),
             "gpm":            lambda q: _safe_double(getattr(q, "gpm", None), reject_neg1=True),
             "cagr":           lambda q: _safe_double(getattr(q, "cagr", None)),
@@ -1029,7 +1030,7 @@ class DataStorage:
             "mgmt_buy_price": lambda q: _safe_double(getattr(q, "mgmt_buy_price", None)),
             "industry":       lambda q: getattr(q, "industry", None),
             "rating":         lambda q: getattr(q, "rating", None),
-            "outstanding_scale": lambda q: _safe_double(getattr(q, "outstanding_scale", 0), 0),
+            "outstanding_scale": lambda q: _safe_double(getattr(q, "outstanding_scale", None)),
             "stock_code":     lambda q: getattr(q, "stock_code", "") or "",
             "turnover_rate":  lambda q: _safe_double(getattr(q, "turnover_rate", None)),
             "current_ratio":  lambda q: _safe_double(getattr(q, "current_ratio", None)),
@@ -1047,7 +1048,7 @@ class DataStorage:
             "bond_value":     lambda q: _safe_double(getattr(q, "bond_value", None)),
             "is_called":      lambda q: bool(getattr(q, "is_called", False)),
             "call_status":    lambda q: str(getattr(q, "call_status", "") or ""),
-            "forced_call_days": lambda q: _safe_double(getattr(q, "forced_call_days", 0), 0),
+            "forced_call_days": lambda q: _safe_double(getattr(q, "forced_call_days", None)),
             "hv":             lambda q: _safe_double(getattr(q, "hv", None)),
             "rating_score":   lambda q: _safe_double(getattr(q, "rating_score", None)),
             "pure_bond_premium_ratio": lambda q: _safe_double(getattr(q, "pure_bond_premium_ratio", None)),
@@ -1421,8 +1422,8 @@ class DataStorage:
                 ON CONFLICT DO NOTHING
             """, [
                 (s.get("id") or str(uuid.uuid4())[:8], s.get("strategy", ""), s.get("code", ""), s.get("name", ""),
-                 s.get("action", ""), s.get("price", 0.0), s.get("reason", ""),
-                 s.get("confidence", 0.0), s.get("executed", False), s.get("ts", datetime.now()))
+                 s.get("action", ""), s.get("price"), s.get("reason", ""),
+                 s.get("confidence"), s.get("executed", False), s.get("ts", datetime.now()))
                 for s in signals
             ])
         logger.debug(f"[Storage] Saved {len(signals)} signals")
@@ -1469,7 +1470,7 @@ class DataStorage:
                 INSERT INTO executed_positions (code, name, side, price, volume, ts)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (pos.get('code', ''), pos.get('name', ''), pos.get('side', ''),
-                  pos.get('price', 0.0), pos.get('volume', 0), pos.get('ts', datetime.now())))
+                  pos.get('price'), pos.get('volume', 0), pos.get('ts', datetime.now())))
 
     def save_executed_positions_batch(self, positions: list[dict]) -> None:
         if not positions:
@@ -1478,7 +1479,7 @@ class DataStorage:
             conn.executemany(
                 "INSERT INTO executed_positions (code, name, side, price, volume, ts) VALUES (?, ?, ?, ?, ?, ?)",
                 [(p.get('code', ''), p.get('name', ''), p.get('side', ''),
-                  p.get('price', 0.0), p.get('volume', 0), p.get('ts', datetime.now()))
+                  p.get('price'), p.get('volume', 0), p.get('ts', datetime.now()))
                  for p in positions]
             )
 

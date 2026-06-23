@@ -9,6 +9,7 @@ import numpy as np
 import time
 import hashlib
 import logging
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 router = APIRouter(prefix="/xuanji", tags=["璇玑十二因子"])
 logger = logging.getLogger(__name__)
@@ -951,13 +952,6 @@ def xuanji_health():
     return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "4.0"}
 
 
-def _safe_float(v, default=0.0):
-    try:
-        r = float(v)
-        return r if not (np.isnan(r) or np.isinf(r)) else default
-    except (TypeError, ValueError):
-        return default
-
 @router.get("/stress-test")
 async def stress_test(
     request: Request,
@@ -991,16 +985,16 @@ async def stress_test(
 
         # 场景1: 牛市(+15%) - 高分券反弹能力强，回撤小
         bull_top = df.nlargest(top_n, 'score').copy()
-        bull_mean_score = _safe_float(bull_top['score'].mean(), 0.5)
-        bull_mean_hv = _safe_float(bull_top['hv'].mean(), 20)
+        bull_mean_score = safe_float(bull_top['score'].mean(), default=0.5)
+        bull_mean_hv = safe_float(bull_top['hv'].mean(), default=20)
         # 牛市回撤 = HV * 0.5 但需要 score 修正 (高分=低回撤)
         bull_dd = -abs(bull_mean_hv / 100 * 0.5 * (1.5 - bull_mean_score))
         bull_win = int(min(85, max(40, bull_mean_score * 60 + 25)))
         bull_return = bull_mean_score * 15 - bull_mean_hv * 0.05
 
         bear_top = df.nsmallest(top_n // 2, 'score').copy()
-        bear_mean_score = _safe_float(bear_top['score'].mean(), 0.3)
-        bear_mean_hv = _safe_float(bear_top['hv'].mean(), 20)
+        bear_mean_score = safe_float(bear_top['score'].mean(), default=0.3)
+        bear_mean_hv = safe_float(bear_top['hv'].mean(), default=20)
         bear_dd = -abs((1 - bear_mean_score) * bear_mean_hv / 100)
         bear_win = int(min(60, max(20, bear_mean_score * 40 + 15)))
         bear_return = -(1 - bear_mean_score) * 12 - bear_mean_hv * 0.03
@@ -1008,8 +1002,8 @@ async def stress_test(
         # 场景3: 暴跌(-25%)
         crash_candidates = df[df['hv'] < df['hv'].quantile(0.3)] if len(df) > 0 else df
         crash_top = crash_candidates.nlargest(min(top_n // 2, len(crash_candidates)), 'score') if len(crash_candidates) > 0 else df
-        crash_mean_score = _safe_float(crash_top['score'].mean(), 0.2)
-        crash_mean_hv = _safe_float(crash_top['hv'].mean(), 20)
+        crash_mean_score = safe_float(crash_top['score'].mean(), default=0.2)
+        crash_mean_hv = safe_float(crash_top['hv'].mean(), default=20)
         crash_dd = -abs((1 - crash_mean_score) * crash_mean_hv / 100 * 1.2)
         crash_win = int(min(50, max(10, crash_mean_score * 30 + 10)))
         crash_return = -(1 - crash_mean_score) * 20 - crash_mean_hv * 0.05
@@ -1017,22 +1011,22 @@ async def stress_test(
         # 场景4: 震荡(±5%)
         neutral_candidates = df[(df['hv'] > 5) & (df['hv'] < 50)] if len(df) > 0 else df
         neutral_top = neutral_candidates.nlargest(top_n, 'score') if len(neutral_candidates) > 0 else df
-        neu_mean_score = _safe_float(neutral_top['score'].mean(), 0.4)
-        neu_mean_hv = _safe_float(neutral_top['hv'].mean(), 20)
+        neu_mean_score = safe_float(neutral_top['score'].mean(), default=0.4)
+        neu_mean_hv = safe_float(neutral_top['hv'].mean(), default=20)
         neu_dd = -abs((1 - neu_mean_score) * 3)
         neu_win = int(min(70, max(30, neu_mean_score * 45 + 25)))
         neu_return = neu_mean_score * 8 - neu_mean_hv * 0.02
 
         # 场景5: 利率上行(+50bp)
-        rate_mean_ytm = _safe_float(df['ytm'].mean(), 1.0)
-        rate_mean_hv = _safe_float(df['hv'].mean(), 20)
+        rate_mean_ytm = safe_float(df['ytm'].mean(), default=1.0)
+        rate_mean_hv = safe_float(df['hv'].mean(), default=20)
         rate_dd = -abs(rate_mean_ytm * 0.5 + 2)
         rate_win = 35
         rate_return = -rate_mean_ytm * 0.5 - rate_mean_hv * 0.01
 
         # 场景6: 信用风险爆发
-        credit_mean_premium = _safe_float(df['premium_ratio'].mean(), 30)
-        credit_mean_hv = _safe_float(df['hv'].mean(), 20)
+        credit_mean_premium = safe_float(df['premium_ratio'].mean(), default=30)
+        credit_mean_hv = safe_float(df['hv'].mean(), default=20)
         credit_dd = -18.0
         credit_win = 20
         credit_return = -credit_mean_premium * 0.15 - credit_mean_hv * 0.05

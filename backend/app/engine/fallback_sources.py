@@ -12,12 +12,15 @@
 import logging
 import asyncio
 import requests as _req
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
 _POOL = ThreadPoolExecutor(max_workers=5)
+atexit.register(_POOL.shutdown)
 
 _HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn/'}
 
@@ -28,15 +31,6 @@ async def _run_sync(fn, *args, **kwargs):
     """在线程池中运行同步函数"""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_POOL, lambda: fn(*args, **kwargs))
-
-
-def _to_float(v) -> Optional[float]:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return None
 
 
 def _pct_to_float(v) -> Optional[float]:
@@ -297,7 +291,7 @@ async def _fetch_pe_pb_from_ths(stock_codes: list[str], results: dict) -> None:
             col_map = {'最新价': 'price', '收盘': 'price', '代码': 'code'}
             for _, row in df_spot.iterrows():
                 code = str(row.get('代码', ''))
-                price = _to_float(row.get('最新价', row.get('收盘', 0)))
+                price = safe_float(row.get('最新价', row.get('收盘', 0)))
                 if code and price and price > 0:
                     prices[code] = price
     except Exception:
@@ -314,8 +308,8 @@ async def _fetch_pe_pb_from_ths(stock_codes: list[str], results: dict) -> None:
             if df is None or df.empty:
                 continue
             latest = df.iloc[-1]
-            eps = _to_float(latest.get('基本每股收益', latest.get('每股收益')))
-            bps = _to_float(latest.get('每股净资产'))
+            eps = safe_float(latest.get('基本每股收益', latest.get('每股收益')))
+            bps = safe_float(latest.get('每股净资产'))
             if code not in results:
                 results[code] = {}
             price = prices.get(code)
@@ -418,7 +412,7 @@ async def _fetch_ratios_from_yjbb(stock_codes: list[str], results: dict) -> None
     if old_df is not None and not old_df.empty:
         for _, r in old_df.iterrows():
             code = str(r.get(col_code, '')).strip()
-            rev = _to_float(r.get(col_revenue))
+            rev = safe_float(r.get(col_revenue))
             if code and rev and rev > 0:
                 old_rev[code] = rev
 
@@ -427,8 +421,8 @@ async def _fetch_ratios_from_yjbb(stock_codes: list[str], results: dict) -> None
         if not code:
             continue
         entry = results.get(code, {})
-        roe = _to_float(r.get(col_roe))
-        gpm = _to_float(r.get(col_gpm))
+        roe = safe_float(r.get(col_roe))
+        gpm = safe_float(r.get(col_gpm))
         if roe is not None:
             entry['roe'] = round(roe, 4)
         if gpm is not None:
@@ -440,7 +434,7 @@ async def _fetch_ratios_from_yjbb(stock_codes: list[str], results: dict) -> None
             _set_global_ind("_industry_map", {code: ind})
             entry['industry'] = ind
 
-        cur_rev = _to_float(r.get(col_revenue))
+        cur_rev = safe_float(r.get(col_revenue))
         if cur_rev and cur_rev > 0 and code in old_rev:
             try:
                 cagr = (math.pow(cur_rev / old_rev[code], 1.0 / 3.0) - 1) * 100
@@ -628,13 +622,13 @@ async def fetch_kline_from_tx(code: str, days: int = 365) -> list[dict]:
             return []
         records = []
         for _, row in df.iterrows():
-            close = _to_float(row.get('close'))
+            close = safe_float(row.get('close'))
             if close is None or close <= 0:
                 continue
             records.append({
                 'code': code,
                 'close_price': close,
-                'volume': _to_float(row.get('amount', 0)) or 0,
+                'volume': safe_float(row.get('amount')) if safe_float(row.get('amount')) is not None else 0,
                 'snapshot_date': str(row.get('date', ''))[:10],
             })
         return records
@@ -712,9 +706,9 @@ async def fetch_sina_spot_snapshot() -> dict[str, dict]:
                 continue
             s_code = raw_code[2:] if (raw_code.startswith('sz') or raw_code.startswith('sh')) else raw_code
             result[s_code] = {
-                'change_pct': _to_float(r.get('涨跌幅')),
-                'price': _to_float(r.get('最新价', r.get('收盘', 0))),
-                'volume': _to_float(r.get('成交额')),
+                'change_pct': safe_float(r.get('涨跌幅')),
+                'price': safe_float(r.get('最新价')),
+                'volume': safe_float(r.get('成交额')),
             }
         return result
     except Exception:

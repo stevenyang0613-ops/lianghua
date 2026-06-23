@@ -6,7 +6,6 @@ from typing import Optional, Callable, Awaitable
 
 import pandas as pd
 
-from app.adapters.akshare import AKShareAdapter
 from app.engine.storage import DataStorage
 from app.models.convertible import ConvertibleQuote
 
@@ -35,8 +34,11 @@ def _parse_iso_date(value) -> Optional[date]:
 class MarketEngine:
     """行情引擎 - 负责数据采集、缓存和定时刷新"""
 
-    def __init__(self, adapter: Optional[AKShareAdapter] = None, refresh_interval: int = 5, storage: Optional['DataStorage'] = None):
-        self.adapter = adapter or AKShareAdapter()
+    def __init__(self, adapter: Optional['AKShareAdapter'] = None, refresh_interval: int = 5, storage: Optional['DataStorage'] = None):
+        if adapter is None:
+            from app.adapters.akshare import AKShareAdapter
+            adapter = AKShareAdapter()
+        self.adapter = adapter
         self._quotes: dict[str, ConvertibleQuote] = {}
         self._last_update: Optional[datetime] = None
         self._running = False
@@ -86,6 +88,8 @@ class MarketEngine:
             await asyncio.sleep(interval)
             try:
                 await self.refresh()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[MarketEngine] Refresh error: {e}")
 
@@ -99,6 +103,8 @@ class MarketEngine:
             if not bonds:
                 try:
                     bonds = await self.adapter.fetch_all_quotes()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"[MarketEngine] fetch_all_quotes failed: {e}")
             if not bonds:
@@ -107,7 +113,10 @@ class MarketEngine:
             try:
                 from app.engine.data_enrich import set_bond_stock_codes
                 stock_codes = list({b.stock_code for b in bonds if getattr(b, 'stock_code', None)})
-                set_bond_stock_codes(stock_codes)
+                if stock_codes:
+                    set_bond_stock_codes(stock_codes)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
 
@@ -115,6 +124,8 @@ class MarketEngine:
             try:
                 from app.engine.data_enrich import enrich_quotes
                 bonds = await enrich_quotes(bonds)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[MarketEngine] enrich_quotes failed: {e}", exc_info=True)
 
@@ -178,6 +189,7 @@ class MarketEngine:
             rows = self._storage.get_latest_quotes()
             bonds = []
             skipped_zero_price = 0
+            skipped_missing_price = 0
             skipped_stopped = 0
             now = date.today()
             for r in rows:
@@ -186,7 +198,11 @@ class MarketEngine:
                     name = r.get("name", "")
                     if self._is_delisted_or_exchangeable(code, name):
                         continue
-                    price = float(r.get("price", 0))
+                    price_raw = r.get("price")
+                    if price_raw is None:
+                        skipped_missing_price += 1
+                        continue
+                    price = float(price_raw)
                     if price <= 0:
                         skipped_zero_price += 1
                         continue
@@ -215,22 +231,22 @@ class MarketEngine:
                         name=name,
                         stock_code=str(r.get("stock_code", "")),
                         price=price,
-                        change_pct=float(r.get("change_pct", 0)),
-                        stock_price=float(r.get("stock_price", 0)),
-                        stock_change_pct=float(r.get("stock_change_pct", 0)),
-                        conversion_price=float(r.get("conversion_price", 0)),
-                        conversion_value=float(r.get("conversion_value", 0)),
-                        premium_ratio=float(r.get("premium_ratio", 0)),
-                        dual_low=float(r.get("dual_low", 0)),
-                        ytm=float(r.get("ytm", 0)),
-                        volume=float(r.get("volume", 0)),
-                        remaining_years=float(r.get("remaining_years", 0)),
-                        forced_call_days=int(r.get("forced_call_days", 0)),
+                        change_pct=float(r.get("change_pct")) if r.get("change_pct") is not None else None,
+                        stock_price=float(r.get("stock_price")) if r.get("stock_price") is not None else None,
+                        stock_change_pct=float(r.get("stock_change_pct")) if r.get("stock_change_pct") is not None else None,
+                        conversion_price=float(r.get("conversion_price")) if r.get("conversion_price") is not None else None,
+                        conversion_value=float(r.get("conversion_value")) if r.get("conversion_value") is not None else None,
+                        premium_ratio=float(r.get("premium_ratio")) if r.get("premium_ratio") is not None else None,
+                        dual_low=float(r.get("dual_low")) if r.get("dual_low") is not None else None,
+                        ytm=float(r.get("ytm")) if r.get("ytm") is not None else None,
+                        volume=float(r.get("volume")) if r.get("volume") is not None else None,
+                        remaining_years=float(r.get("remaining_years")) if r.get("remaining_years") is not None else None,
+                        forced_call_days=int(r.get("forced_call_days")) if r.get("forced_call_days") is not None else 0,
                         is_called=bool(r.get("is_called") or False),
                         call_status=str(r.get("call_status", "") or ""),
                         last_trade_date=last_trade,
                         maturity_date=maturity,
-                        redemption_price=float(r.get("redemption_price", 0) or 0.0),
+                        redemption_price=float(r.get("redemption_price")) if r.get("redemption_price") is not None else None,
                         industry=r.get("industry"),
                         rating=r.get("rating"),
                         roe=r.get("roe"),
@@ -375,28 +391,45 @@ class MarketEngine:
                         from app.engine.filters import is_delisted_or_exchangeable
                         for r in rows:
                             try:
-                                price = float(r.get("price", 0) or 0)
+                                price_raw = r.get("price")
+                                if price_raw is None:
+                                    continue
+                                price = float(price_raw)
+                                if price <= 0:
+                                    continue
                                 code = str(r.get("code", ""))
                                 name = str(r.get("name", ""))
                                 if not code or not name:
                                     continue
                                 stock_code = str(r.get("stock_code", ""))
-                                change_pct = float(r.get("change_pct", 0) or 0)
-                                stock_price = float(r.get("stock_price", 0) or 0)
-                                stock_change_pct = float(r.get("stock_change_pct", 0) or 0)
-                                conversion_price = float(r.get("conversion_price", 0) or 0)
-                                conversion_value = float(r.get("conversion_value", 0) or 0)
-                                premium_ratio = float(r.get("premium_ratio", 0) or 0)
-                                dual_low = float(r.get("dual_low", 0) or 0)
-                                volume = float(r.get("volume", 0) or 0)
-                                ytm = float(r.get("ytm", 0) or 0)
-                                remaining_years = float(r.get("remaining_years", 0) or 0)
-                                forced_call_days = int(r.get("forced_call_days", 0) or 0)
+                                _v = r.get("change_pct")
+                                change_pct = float(_v) if _v is not None else None
+                                _v = r.get("stock_price")
+                                stock_price = float(_v) if _v is not None else None
+                                _v = r.get("stock_change_pct")
+                                stock_change_pct = float(_v) if _v is not None else None
+                                _v = r.get("conversion_price")
+                                conversion_price = float(_v) if _v is not None else None
+                                _v = r.get("conversion_value")
+                                conversion_value = float(_v) if _v is not None else None
+                                _v = r.get("premium_ratio")
+                                premium_ratio = float(_v) if _v is not None else None
+                                _v = r.get("dual_low")
+                                dual_low = float(_v) if _v is not None else None
+                                _v = r.get("volume")
+                                volume = float(_v) if _v is not None else None
+                                _v = r.get("ytm")
+                                ytm = float(_v) if _v is not None else None
+                                _v = r.get("remaining_years")
+                                remaining_years = float(_v) if _v is not None else None
+                                _v = r.get("forced_call_days")
+                                forced_call_days = int(_v) if _v is not None else None
                                 is_called = bool(r.get("is_called", False))
                                 call_status = str(r.get("call_status", ""))
                                 last_trade_date = r.get("last_trade_date")
                                 maturity_date = r.get("maturity_date")
-                                redemption_price = float(r.get("redemption_price", 0.0) or 0.0)
+                                _v = r.get("redemption_price")
+                                redemption_price = float(_v) if _v is not None else None
                                 rating = r.get("rating")
                                 if price <= 0:
                                     continue

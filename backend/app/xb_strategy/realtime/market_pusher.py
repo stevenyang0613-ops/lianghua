@@ -451,9 +451,13 @@ class WebSocketPusher:
             async for message in websocket:
                 try:
                     await self._handle_message(session, message)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"[WebSocketPusher] 消息处理失败: {e}")
                     self._stats["errors"] += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[WebSocketPusher] 连接异常: {e}")
         finally:
@@ -605,6 +609,8 @@ class WebSocketPusher:
                         session.bytes_sent += len(message)
                         self._stats["messages_sent"] += 1
                         self._stats["bytes_sent"] += len(message)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         logger.error(f"[WebSocketPusher] 发送失败: {e}")
                         session.is_active = False
@@ -625,6 +631,8 @@ class WebSocketPusher:
                 if session.is_active:
                     try:
                         await session.websocket.send(message)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         pass
 
@@ -658,6 +666,8 @@ class WebSocketPusher:
                 if session.is_active:
                     try:
                         await session.websocket.send(message)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         pass
 

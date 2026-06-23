@@ -61,7 +61,7 @@ class HistoricalDataLoader:
             try:
                 resp = await asyncio.wait_for(
                     asyncio.to_thread(requests.get, url, timeout=15),
-                    timeout=20,
+                    timeout=45,
                 )
                 data = resp.json()
                 klines = (data.get("data") or {}).get("klines") or []
@@ -95,6 +95,8 @@ class HistoricalDataLoader:
                         "snapshot_date": dt,
                     })
                 return records
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 last_err = e
                 if attempt < max_retries:
@@ -138,6 +140,8 @@ class HistoricalDataLoader:
                     data = resp.json()
                     if not data.get("data") or not data["data"].get("klines"):
                         failed += 1
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 failed += 1
         is_banned = failed >= 2
@@ -153,7 +157,7 @@ class HistoricalDataLoader:
             symbol = f"{prefix}{code}"
             df = await asyncio.wait_for(
                 asyncio.to_thread(ak.stock_zh_a_hist_tx, symbol=symbol, adjust="qfq"),
-                timeout=30,
+                timeout=60,
             )
             if df is None or df.empty:
                 return []
@@ -163,6 +167,8 @@ class HistoricalDataLoader:
             for _, row in df.iterrows():
                 try:
                     dt = row["date"] if isinstance(row["date"], date) else date.fromisoformat(str(row["date"])[:10])
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     continue
                 if dt < cutoff:
@@ -184,6 +190,8 @@ class HistoricalDataLoader:
             if records:
                 logger.info(f"[Historical] TX fallback loaded {len(records)} days for {code}")
             return records
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug(f"[Historical] TX fallback failed for {code}: {e}")
             return []
@@ -261,8 +269,9 @@ class HistoricalDataLoader:
         if codes:
             df = df[df["code"].isin(codes)]
         # Recalculate dual_low from price + premium_ratio (stored value may be stale)
+        # 缺失值保持 NaN，不填充为 0
         if "price" in df.columns and "premium_ratio" in df.columns:
-            df["dual_low"] = df["price"] + df["premium_ratio"].fillna(0)
+            df["dual_low"] = df["price"] + df["premium_ratio"]
         return df
 
     def get_available_dates(self) -> list[date]:
@@ -321,13 +330,13 @@ class HistoricalDataLoader:
                         rec["open_price"], rec["high_price"],
                         rec["low_price"], rec["close_price"],
                         rec["volume"], rec["snapshot_date"],
-                        factors.get("premium_ratio", 0),
-                        factors.get("change_pct", 0),
-                        factors.get("stock_price", 0),
-                        factors.get("conversion_value", 0),
-                        factors.get("dual_low", 0),
-                        factors.get("ytm", 0),
-                        factors.get("remaining_years", 0),
+                        factors.get("premium_ratio"),
+                        factors.get("change_pct"),
+                        factors.get("stock_price"),
+                        factors.get("conversion_value"),
+                        factors.get("dual_low"),
+                        factors.get("ytm"),
+                        factors.get("remaining_years"),
                         factors.get("roe"),
                         factors.get("gpm"),
                         factors.get("cagr"),
@@ -339,7 +348,7 @@ class HistoricalDataLoader:
                         factors.get("mgmt_buy_price"),
                         factors.get("industry"),
                         factors.get("rating"),
-                        factors.get("outstanding_scale", 0),
+                        factors.get("outstanding_scale"),
                         factors.get("stock_code", ""),
                     ))
                     saved += 1
@@ -408,6 +417,8 @@ class HistoricalDataLoader:
                         except (ValueError, TypeError):
                             pass
                 logger.info(f"[HistoricalFactors] Loaded financial data for quarter {q}: {len(df)} stocks")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[HistoricalFactors] Financial report for {q} failed: {e}")
 
@@ -441,6 +452,8 @@ class HistoricalDataLoader:
                         except (ValueError, TypeError):
                             pass
                 logger.info(f"[HistoricalFactors] Loaded balance sheet for quarter {q}")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[HistoricalFactors] Balance sheet for {q} failed: {e}")
 
@@ -477,6 +490,8 @@ class HistoricalDataLoader:
                                 except (ValueError, TypeError):
                                     pass
                     return code, result
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     if attempt < max_retries:
                         import time
@@ -588,6 +603,8 @@ class HistoricalDataLoader:
                                 snap_date, bond_code,
                             ))
                             updated += 1
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             errors += 1
 

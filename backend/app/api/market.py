@@ -15,6 +15,66 @@ router = APIRouter()
 #  Module-level helpers — shared by all aggregation endpoints
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _row_to_dict(r: dict) -> dict:
+    """将数据库行情行转换为前端行情字典"""
+    return {
+        "code": r.get("code", ""),
+        "name": r.get("name", ""),
+        "stock_code": r.get("stock_code", ""),
+        "stock_name": r.get("stock_name", ""),
+        "price": float(r.get("price")) if r.get("price") is not None else None,
+        "change": float(r.get("change")) if r.get("change") is not None else None,
+        "change_pct": float(r.get("change_pct")) if r.get("change_pct") is not None else None,
+        "volume": float(r.get("volume")) if r.get("volume") is not None else None,
+        "amount": float(r.get("amount")) if r.get("amount") is not None else None,
+        "ytm": float(r.get("ytm")) if r.get("ytm") is not None else None,
+        "premium": float(r.get("premium")) if r.get("premium") is not None else None,
+        "bond_value": float(r.get("bond_value")) if r.get("bond_value") is not None else None,
+        "option_value": float(r.get("option_value")) if r.get("option_value") is not None else None,
+        "total_value": float(r.get("total_value")) if r.get("total_value") is not None else None,
+        "implied_volatility": float(r.get("implied_volatility")) if r.get("implied_volatility") is not None else None,
+        "stock_price": float(r.get("stock_price")) if r.get("stock_price") is not None else None,
+        "stock_change_pct": float(r.get("stock_change_pct")) if r.get("stock_change_pct") is not None else None,
+        "pe": float(r.get("pe")) if r.get("pe") is not None else None,
+        "pb": float(r.get("pb")) if r.get("pb") is not None else None,
+        "debt_ratio": float(r.get("debt_ratio")) if r.get("debt_ratio") is not None else None,
+        "roe": float(r.get("roe")) if r.get("roe") is not None else None,
+        "revenue_growth": float(r.get("revenue_growth")) if r.get("revenue_growth") is not None else None,
+        "profit_growth": float(r.get("profit_growth")) if r.get("profit_growth") is not None else None,
+        "industry": r.get("industry", ""),
+        "market_cap": float(r.get("market_cap")) if r.get("market_cap") is not None else None,
+        "circulating_cap": float(r.get("circulating_cap")) if r.get("circulating_cap") is not None else None,
+        "turnover": float(r.get("turnover")) if r.get("turnover") is not None else None,
+        "momentum_20": float(r.get("momentum_20")) if r.get("momentum_20") is not None else None,
+        "momentum_60": float(r.get("momentum_60")) if r.get("momentum_60") is not None else None,
+        "rsi": float(r.get("rsi")) if r.get("rsi") is not None else None,
+        "forced_call_days": int(r.get("forced_call_days") or 0),
+        "is_called": bool(r.get("is_called") or False),
+        "call_status": str(r.get("call_status", "") or ""),
+        "redemption_trigger": bool(r.get("redemption_trigger") or False),
+        "has_major_sell": bool(r.get("has_major_sell") or False),
+        "unlock_date": str(r.get("unlock_date", "")) if r.get("unlock_date") else "",
+        "unlock_ratio": float(r.get("unlock_ratio")) if r.get("unlock_ratio") is not None else None,
+        "north_net": float(r.get("north_net")) if r.get("north_net") is not None else None,
+        "north_pct": float(r.get("north_pct")) if r.get("north_pct") is not None else None,
+        "block_trade_count": int(r.get("block_trade_count") or 0),
+        "block_trade_amount": float(r.get("block_trade_amount")) if r.get("block_trade_amount") is not None else None,
+        "block_buy_pct": float(r.get("block_buy_pct")) if r.get("block_buy_pct") is not None else None,
+        "concentration": float(r.get("concentration")) if r.get("concentration") is not None else None,
+        "holder_count": int(r.get("holder_count") or 0),
+        "holder_change_pct": float(r.get("holder_change_pct")) if r.get("holder_change_pct") is not None else None,
+        "momentum_score": float(r.get("momentum_score")) if r.get("momentum_score") is not None else None,
+        "valuation_score": float(r.get("valuation_score")) if r.get("valuation_score") is not None else None,
+        "quality_score": float(r.get("quality_score")) if r.get("quality_score") is not None else None,
+        "debt_score": float(r.get("debt_score")) if r.get("debt_score") is not None else None,
+        "liquidity_score": float(r.get("liquidity_score")) if r.get("liquidity_score") is not None else None,
+        "technical_score": float(r.get("technical_score")) if r.get("technical_score") is not None else None,
+        "sentiment_score": float(r.get("sentiment_score")) if r.get("sentiment_score") is not None else None,
+        "total_score": float(r.get("total_score")) if r.get("total_score") is not None else None,
+        "timestamp": str(r.get("timestamp", "")),
+    }
+
+
 def _val(obj, attr: str, default=0):
     """Unified attribute accessor for both Pydantic models and dicts.
     Returns default if attribute is None or missing."""
@@ -39,7 +99,8 @@ def _get_industry(q) -> str:
 def _safe_avg(items: list, attr: str, positive_only: bool = False, nonzero_only: bool = False) -> float:
     """Compute average of an attribute across items, skipping None values.
     If positive_only, also skip values <= 0 (for PE/PB where negative = N/A).
-    If nonzero_only, also skip values == 0 (for YTM where 0 = no data)."""
+    If nonzero_only, also skip values == 0 (for YTM where 0 = no data).
+    Returns NaN if all values are missing."""
     vals = []
     for q in items:
         v = _val(q, attr, None)
@@ -50,7 +111,7 @@ def _safe_avg(items: list, attr: str, positive_only: bool = False, nonzero_only:
         if nonzero_only and v == 0:
             continue
         vals.append(v)
-    return sum(vals) / max(len(vals), 1)
+    return sum(vals) / len(vals) if vals else float('nan')
 
 
 def _safe_sum(items: list, attr: str) -> float:
@@ -178,7 +239,7 @@ def _compute_horizon_score(ind: dict, horizon: str, custom_weights: dict | None 
     # 长趋势: 60日动量 (-15%~+15% -> 0~100)
     long_score = min(100.0, max(0.0, (_safe_num(ind.get("avg_momentum_60d")) + 15.0) * (100.0 / 30.0)))
     # 质地: ROE+毛利率 (0~25 -> 0~100)
-    quality_score = min(100.0, max(0.0, (_safe_num(ind.get("avg_roe")) + _safe_num(ind.get("avg_gpm")) / 5.0) * 4.0))
+    quality_score = min(100.0, max(0.0, ((_safe_num(ind.get("avg_roe")) + _safe_num(ind.get("avg_gpm"))) / 5.0) * 4.0))
     # 估值: 100 - PE (PE 0~100 -> 100~0)
     valuation_score = min(100.0, max(0.0, 100.0 - _safe_num(ind.get("avg_pe"), 50.0)))
     # 毛利率单独 (0~50% -> 0~100)
@@ -493,69 +554,14 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
             "profit_yoy": getattr(q, "profit_yoy", None),
             "revenue_yoy": getattr(q, "revenue_yoy", None),
             "restricted_release_amount": getattr(q, "restricted_release_amount", None),
+            "sentiment_score": getattr(q, "sentiment_score", None),
+            "rating_score": getattr(q, "rating_score", None),
+            "pure_bond_premium_ratio": getattr(q, "pure_bond_premium_ratio", None),
+            "eps": getattr(q, "eps", None),
+            "bps": getattr(q, "bps", None),
+            "hv": getattr(q, "hv", None),
         }
 
-    def row_to_dict(r: dict) -> dict:
-        return {
-            "code": r.get("code", ""),
-            "name": r.get("name", ""),
-            "stock_code": r.get("stock_code", ""),
-            "stock_name": r.get("stock_name", ""),
-            "price": float(r.get("price", 0)),
-            "change_pct": float(r.get("change_pct", 0)),
-            "stock_price": float(r.get("stock_price", 0)),
-            "stock_change_pct": float(r.get("stock_change_pct", 0)),
-            "conversion_price": float(r.get("conversion_price", 0)),
-            "conversion_value": float(r.get("conversion_value", 0)),
-            "premium_ratio": float(r.get("premium_ratio", 0)),
-            "dual_low": float(r.get("dual_low", 0)),
-            "ytm": float(r.get("ytm", 0)),
-            "volume": int(r.get("volume", 0)) if r.get("volume") is not None else 0,
-            "remaining_years": float(r.get("remaining_years", 0)),
-            "forced_call_days": int(r.get("forced_call_days", 0)),
-            "is_called": bool(r.get("is_called") or False),
-            "call_status": str(r.get("call_status", "") or ""),
-            "last_trade_date": _iso(r.get("last_trade_date")),
-            "maturity_date": _iso(r.get("maturity_date")),
-            "redemption_price": float(r.get("redemption_price", 0) or 0.0),
-            "rating": str(r.get("rating", "") or "") or None,
-            "industry": r.get("industry"),
-            "concepts": r.get("concepts") or [],
-            "roe": r.get("roe"),
-            "gpm": r.get("gpm"),
-            "cagr": r.get("cagr"),
-            "debt_ratio": r.get("debt_ratio"),
-            "current_ratio": r.get("current_ratio"),
-            "pe": r.get("pe"),
-            "pb": r.get("pb"),
-            "iv": r.get("iv"),
-            "turnover_rate": r.get("turnover_rate"),
-            "net_capital_flow": r.get("net_capital_flow"),
-            "net_capital_flow_pct": r.get("net_capital_flow_pct"),
-            "net_super_flow": r.get("net_super_flow"),
-            "net_big_flow": r.get("net_big_flow"),
-            "momentum_5d": r.get("momentum_5d"),
-            "momentum_10d": r.get("momentum_10d"),
-            "momentum_20d": r.get("momentum_20d"),
-            "momentum_60d": r.get("momentum_60d"),
-            "event_score": r.get("event_score"),
-            "event_detail": r.get("event_detail"),
-            "bond_value": r.get("bond_value"),
-            "iv_source": r.get("iv_source"),
-            "buyback_amount": r.get("buyback_amount"),
-            "mgmt_buy_price": r.get("mgmt_buy_price"),
-            "outstanding_scale": r.get("outstanding_scale"),
-            "pledge_ratio": r.get("pledge_ratio"),
-            "north_net": r.get("north_net"),
-            "margin_balance": r.get("margin_balance"),
-            "lhb_count": r.get("lhb_count"),
-            "block_trade_amount": r.get("block_trade_amount"),
-            "holder_num_change": r.get("holder_num_change"),
-            "eps_forecast": r.get("eps_forecast"),
-            "profit_yoy": r.get("profit_yoy"),
-            "revenue_yoy": r.get("revenue_yoy"),
-            "restricted_release_amount": r.get("restricted_release_amount"),
-        }
 
     if engine:
         quotes = await engine.get_all_quotes()
@@ -570,7 +576,7 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
 
     if storage:
         rows = storage.get_latest_quotes()
-        result = [row_to_dict(r) for r in rows if not symbol_list or r.get("code") in symbol_list]
+        result = [_row_to_dict(r) for r in rows if not symbol_list or r.get("code") in symbol_list]
         if not symbol_list:
             return {
                 "total": len(result),
@@ -650,71 +656,15 @@ async def get_quote_by_code(request: Request, code: str):
             "profit_yoy": getattr(q, "profit_yoy", None),
             "revenue_yoy": getattr(q, "revenue_yoy", None),
             "restricted_release_amount": getattr(q, "restricted_release_amount", None),
+            "sentiment_score": getattr(q, "sentiment_score", None),
+            "rating_score": getattr(q, "rating_score", None),
+            "pure_bond_premium_ratio": getattr(q, "pure_bond_premium_ratio", None),
+            "eps": getattr(q, "eps", None),
+            "bps": getattr(q, "bps", None),
+            "hv": getattr(q, "hv", None),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    def row_to_dict(r: dict) -> dict:
-        return {
-            "code": r.get("code", ""),
-            "name": r.get("name", ""),
-            "stock_code": r.get("stock_code", ""),
-            "stock_name": r.get("stock_name", ""),
-            "price": float(r.get("price", 0)),
-            "change_pct": float(r.get("change_pct", 0)),
-            "stock_price": float(r.get("stock_price", 0)),
-            "stock_change_pct": float(r.get("stock_change_pct", 0)),
-            "conversion_price": float(r.get("conversion_price", 0)),
-            "conversion_value": float(r.get("conversion_value", 0)),
-            "premium_ratio": float(r.get("premium_ratio", 0)),
-            "dual_low": float(r.get("dual_low", 0)),
-            "ytm": float(r.get("ytm", 0)),
-            "volume": int(r.get("volume", 0)) if r.get("volume") is not None else 0,
-            "remaining_years": float(r.get("remaining_years", 0)),
-            "forced_call_days": int(r.get("forced_call_days", 0)),
-            "is_called": bool(r.get("is_called") or False),
-            "call_status": str(r.get("call_status", "") or ""),
-            "last_trade_date": _iso(r.get("last_trade_date")),
-            "maturity_date": _iso(r.get("maturity_date")),
-            "redemption_price": float(r.get("redemption_price", 0) or 0.0),
-            "rating": str(r.get("rating", "") or "") or None,
-            "industry": r.get("industry"),
-            "concepts": r.get("concepts") or [],
-            "roe": r.get("roe"),
-            "gpm": r.get("gpm"),
-            "cagr": r.get("cagr"),
-            "debt_ratio": r.get("debt_ratio"),
-            "current_ratio": r.get("current_ratio"),
-            "pe": r.get("pe"),
-            "pb": r.get("pb"),
-            "iv": r.get("iv"),
-            "turnover_rate": r.get("turnover_rate"),
-            "net_capital_flow": r.get("net_capital_flow"),
-            "net_capital_flow_pct": r.get("net_capital_flow_pct"),
-            "net_super_flow": r.get("net_super_flow"),
-            "net_big_flow": r.get("net_big_flow"),
-            "momentum_5d": r.get("momentum_5d"),
-            "momentum_10d": r.get("momentum_10d"),
-            "momentum_20d": r.get("momentum_20d"),
-            "momentum_60d": r.get("momentum_60d"),
-            "event_score": r.get("event_score"),
-            "event_detail": r.get("event_detail"),
-            "bond_value": r.get("bond_value"),
-            "iv_source": r.get("iv_source"),
-            "buyback_amount": r.get("buyback_amount"),
-            "mgmt_buy_price": r.get("mgmt_buy_price"),
-            "outstanding_scale": r.get("outstanding_scale"),
-            "pledge_ratio": r.get("pledge_ratio"),
-            "north_net": r.get("north_net"),
-            "margin_balance": r.get("margin_balance"),
-            "lhb_count": r.get("lhb_count"),
-            "block_trade_amount": r.get("block_trade_amount"),
-            "holder_num_change": r.get("holder_num_change"),
-            "eps_forecast": r.get("eps_forecast"),
-            "profit_yoy": r.get("profit_yoy"),
-            "revenue_yoy": r.get("revenue_yoy"),
-            "restricted_release_amount": r.get("restricted_release_amount"),
-            "timestamp": str(r.get("timestamp", "")),
-        }
 
     if engine:
         quote = await engine.get_quote(code)
@@ -724,7 +674,7 @@ async def get_quote_by_code(request: Request, code: str):
     if storage:
         for row in storage.get_latest_quotes():
             if row.get("code") == code:
-                return row_to_dict(row)
+                return _row_to_dict(row)
 
     raise HTTPException(status_code=404, detail=f"Quote for {code} not found")
 

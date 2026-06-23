@@ -16,10 +16,11 @@ import traceback
 import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import akshare as ak
 import numpy as np
+import pandas as pd
 from app.adapters.tdx_adapter import get_tdx_adapter
 from app.models.convertible import RATING_SCORE_MAP, RATING_SCORE_DEFAULT
 from app.engine.data_enrich_utils import (
@@ -27,8 +28,12 @@ from app.engine.data_enrich_utils import (
     safe_float as _sf_impl, record_refresh_metric, load_refresh_metrics,
     _lock_file_path, _acquire_file_lock,
 )
+from app.strategies.event_data_source import EventDataSource, EventType
 
 logger = logging.getLogger(__name__)
+
+# TDX adapter availability flag (matches runner convention)
+_TRY_TDX_IMPORTED = True
 
 # 保护所有全局缓存映射的写入（多线程后台刷新 vs 异步 enrich_quotes 读）
 _cache_lock = threading.RLock()
@@ -127,6 +132,30 @@ _macro_m2_map: dict = {}
 _macro_m2_loaded = False
 _macro_lpr_map: dict = {}
 _macro_lpr_loaded = False
+
+# Lightweight event source integration (EventDataSource from event_data_source)
+_event_source_instance: Optional[EventDataSource] = None
+
+# Event score override mapping to align with strategy requirements
+# (+2 for downside proposal, -2 for redemption notice, -1 for put notice, etc.)
+_EVENT_SCORE_OVERRIDES = {
+    'downside_proposal': 2.0,
+    'downside_result': 3.0,
+    'redemption_notice': -2.0,
+    'redemption_cancel': 1.0,
+    'put_notice': -1.0,
+    'conversion_adjust': 1.5,
+}
+
+
+def set_event_source_instance(instance: Optional[EventDataSource]) -> None:
+    """Register the EventDataSource instance for lightweight event enrichment.
+    Called at startup (e.g., from main.py or Celery task init) to connect
+    the announcement-parsing event system into enrich_quotes.
+    """
+    global _event_source_instance
+    _event_source_instance = instance
+    logger.info(f"[DataEnrich] EventDataSource instance registered: {instance is not None}")
 
 
 # ── 共享工具函数（从 data_enrich_utils 导入，保持内部别名向后兼容）──
@@ -481,7 +510,8 @@ def _with_metrics(fn):
                     # AGENTS.md fix: bond-related maps use bond codes as keys, not stock codes
                     codes_to_check = _bond_codes if (map_name in _BOND_CODE_MAPS and _bond_codes) else _bond_codes_snapshot
                     if isinstance(m, dict):
-                        bond_count = sum(1 for c in codes_to_check if c in m and m.get(c) is not None)
+                        bond_count = sum(1 for c in codes_to_check if c in m and m.get(c) is not None
+                                                 and (not isinstance(m.get(c), dict) or m.get(c).get("_data_source") != "zero_fill"))
             status = "ok" if count and count > 0 else "empty"
             # 新增：completeness (bond_count / bond_total) 让前端知道数据完整度
             # 例如：north_cache 60s 内只完成 109/854，completeness=0.13
@@ -508,6 +538,11 @@ def _with_metrics(fn):
             # 添加 completeness_raw 给前端调试用（聚合数据源会出现 >1.0）
             if raw_completeness is not None and raw_completeness > 1.001:
                 extra["completeness_raw"] = round(raw_completeness, 3)
+                if raw_completeness > 1.1:
+                    logger.warning(
+                        f"[SelfCheck] {_name} raw_completeness={raw_completeness:.3f} "
+                        f"exceeds 110% — possible duplicate counting or data source overlap"
+                    )
             # 新增：zero_fill 标识，让前端知道"没数据 vs 有数据但为 0"
             if map_name:
                 with _cache_lock:
@@ -773,32 +808,37 @@ def _load_mgmt_cache():
 def _build_industry_cache():
     try:
         logger.info("[DataEnrich] Building industry cache (may take minutes)...")
-        df = ak.stock_board_industry_name_em()
-        if df is None or len(df) == 0:
-            logger.warning("[DataEnrich] Industry: stock_board_industry_name_em returned empty")
-            return 0
+        df = _run_with_timeout(ak.stock_board_industry_name_em, timeout=60, default=None, op_name="stock_board_industry_name_em")
         result = {}
-        count = 0
-        total = len(df)
-        for _, board in df.iterrows():
-            bcode = str(board.get("板块代码", "")).strip()
-            bname = str(board.get("板块名称", "")).strip()
-            if not bcode or not bname:
-                continue
-            try:
-                cons = ak.stock_board_industry_cons_em(symbol=bcode)
-                for _, c in cons.iterrows():
-                    scode = str(c.get("代码", "")).strip()
-                    if scode:
-                        result[scode] = bname
-                count += 1
-                if count % 100 == 0:
-                    logger.info(f"[DataEnrich] Industry: {count}/{total} boards")
-            except Exception:
-                continue
-        _set_global_map("_industry_map", result, replace=True)
-        _save_cache(_INDUSTRY_CACHE, result)
-        logger.info(f"[DataEnrich] Industry built: {len(result)} stocks")
+        if df is not None and len(df) > 0:
+            count = 0
+            total = len(df)
+            for _, board in df.iterrows():
+                bcode = str(board.get("板块代码", "")).strip()
+                bname = str(board.get("板块名称", "")).strip()
+                if not bcode or not bname:
+                    continue
+                try:
+                    cons = _run_with_timeout(
+                        lambda: ak.stock_board_industry_cons_em(symbol=bcode),
+                        timeout=30, default=None, op_name=f"industry_cons_{bcode}",
+                    )
+                    if cons is None:
+                        continue
+                    for _, c in cons.iterrows():
+                        scode = str(c.get("代码", "")).strip()
+                        if scode:
+                            result[scode] = bname
+                    count += 1
+                    if count % 100 == 0:
+                        logger.info(f"[DataEnrich] Industry: {count}/{total} boards")
+                except Exception:
+                    continue
+            _set_global_map("_industry_map", result, replace=True)
+            _save_cache(_INDUSTRY_CACHE, result)
+            logger.info(f"[DataEnrich] Industry built: {len(result)} stocks")
+        else:
+            logger.warning("[DataEnrich] Industry: stock_board_industry_name_em returned empty, will try TDX fallback")
 
         # [TDX] fallback: 用 TDX 证券列表补充分类
         if len(result) < 500:
@@ -1095,11 +1135,148 @@ def _ensure_bond_stock_codes():
                 _bond_stock_codes = stock_codes
                 _bond_codes = bond_codes
             logger.info(f"[DataEnrich] Auto-loaded {len(stock_codes)} bond stock codes and {len(bond_codes)} bond codes from THS")
+            return
     except Exception as e:
-        logger.debug(f"[DataEnrich] Auto-load bond stock codes failed: {e}")
+        logger.debug(f"[DataEnrich] Auto-load bond stock codes from THS failed: {e}")
+
+    # Fallback: 使用 bond_zh_cov（不需要 py_mini_racer，macOS 安全）
+    try:
+        df = _run_with_timeout(ak.bond_zh_cov, timeout=15.0,
+                               default=None, op_name="bond_zh_cov")
+        if df is not None and len(df) > 0:
+            stock_codes = set()
+            bond_codes = set()
+            for _, r in df.iterrows():
+                sc = str(r.get("正股代码", "")).strip()
+                bc = str(r.get("债券代码", "")).strip()
+                if sc and sc.isdigit() and len(sc) == 6 and not sc.startswith(("8", "9")):
+                    stock_codes.add(sc)
+                if bc and bc.isdigit() and len(bc) == 6 and bc.startswith(("11", "12", "13")):
+                    bond_codes.add(bc)
+            with _cache_lock:
+                _bond_stock_codes = stock_codes
+                _bond_codes = bond_codes
+            logger.info(f"[DataEnrich] Auto-loaded {len(stock_codes)} bond stock codes and {len(bond_codes)} bond codes from bond_zh_cov")
+    except Exception as e2:
+        logger.debug(f"[DataEnrich] Auto-load bond stock codes from bond_zh_cov failed: {e2}")
 
 
 _bond_codes: set[str] = set()  # 债券代码集合（用于 bond_count 统计）
+
+
+def _try_tdx_spot_fallback(codes: list[str], pe_map: dict, pb_map: dict, price_map: dict):
+    """从 TDX 补充缺失的行情/PE/PB 数据（最后一道防线）"""
+    if not codes or not _TRY_TDX_IMPORTED:
+        return
+    try:
+        adapter = get_tdx_adapter()
+    except Exception:
+        return
+    missing_pe = [c for c in codes if c not in pe_map or pe_map.get(c) is None]
+    missing_pb = [c for c in codes if c not in pb_map or pb_map.get(c) is None]
+    missing = list(set(missing_pe + missing_pb))
+    if missing:
+        logger.info(f"[TDX] Spot: fetching PE/PB for {len(missing)} stocks")
+        fin_data = adapter.fetch_finance_batch(missing)
+        filled_pe = filled_pb = 0
+        for code, info in fin_data.items():
+            pe = info.get("pe")
+            pb = info.get("pb")
+            if pe is not None and code not in pe_map:
+                pe_map[code] = pe
+                filled_pe += 1
+            if pb is not None and code not in pb_map:
+                pb_map[code] = pb
+                filled_pb += 1
+        if filled_pe or filled_pb:
+            logger.info(f"[TDX] Spot: filled PE={filled_pe}, PB={filled_pb}")
+    # Also try to fill price for bond stock codes
+    if price_map and codes:
+        missing_price = [c for c in codes if c not in price_map or price_map.get(c, {}).get("price") is None]
+        if missing_price:
+            tdx_q = adapter.fetch_quotes(missing_price)
+            for code, q in tdx_q.items():
+                if code not in price_map:
+                    price_map[code] = {}
+                if price_map[code].get("price") is None:
+                    price_map[code]["price"] = q.get("price")
+                    price_map[code]["change_pct"] = q.get("change_pct")
+
+
+def _fetch_spot_batch(batch: list[str], _req, _run_with_timeout) -> dict[str, dict]:
+    """Fetch PE/PB/turnover for a batch of stock codes from East Money ulist API."""
+    secids = ','.join(
+        f"{'1' if c.startswith('6') else '0'}.{c}" for c in batch
+    )
+    _headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/'}
+    try:
+        r = _run_with_timeout(
+            lambda: _req.get(
+                'https://push2.eastmoney.com/api/qt/ulist.np/get',
+                params={'fields': 'f12,f9,f23,f8,f20,f21',
+                        'secids': secids, 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
+                headers=_headers, timeout=15,
+            ),
+            timeout=30, default=None, op_name="spot_batch",
+            quiet_errors=True,
+        )
+        if r is None:
+            return {}
+        data = r.json()
+        result = {}
+        if not isinstance(data, dict):
+            return result
+        if data.get('data') and data['data'].get('diff'):
+            for item in data['data']['diff']:
+                code = item.get('f12', '')
+                if not code:
+                    continue
+                result[code] = {
+                    'pe': round(item.get('f9') / 100, 2) if item.get('f9') is not None else None,
+                    'pb': round(item.get('f23') / 100, 2) if item.get('f23') is not None else None,
+                    'tr': round(item.get('f8') / 100, 2) if item.get('f8') is not None else None,
+                    'total_mv': round(item.get('f20') / 10000, 2) if item.get('f20') is not None else None,
+                    'circ_mv': round(item.get('f21') / 10000, 2) if item.get('f21') is not None else None,
+                }
+        return result
+    except Exception:
+        return {}
+
+
+def _fetch_spot_single(code: str, _req, _run_with_timeout) -> dict:
+    """Fetch PE/PB/turnover for a single stock code from East Money stock/get API."""
+    secid = f"{'1' if code.startswith('6') else '0'}.{code}"
+    _headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/'}
+    try:
+        r = _run_with_timeout(
+            lambda: _req.get(
+                'https://push2.eastmoney.com/api/qt/stock/get',
+                params={'fields': 'f57,f162,f167,f168,f20,f21', 'secid': secid},
+                headers=_headers, timeout=8,
+            ),
+            timeout=25, default=None, op_name="spot_single",
+            quiet_errors=True,
+        )
+        if r is None:
+            return {}
+        try:
+            json_data = r.json()
+            if not isinstance(json_data, dict):
+                return {}
+            d = json_data.get('data') or {}
+        except Exception:
+            return {}
+        if d:
+            return {code: {
+                'pe': round(d.get('f162') / 100, 2) if d.get('f162') is not None else None,
+                'pb': round(d.get('f167') / 100, 2) if d.get('f167') is not None else None,
+                'tr': round(d.get('f168') / 100, 2) if d.get('f168') is not None else None,
+                'total_mv': round(d.get('f20') / 10000, 2) if d.get('f20') is not None else None,
+                'circ_mv': round(d.get('f21') / 10000, 2) if d.get('f21') is not None else None,
+            }}
+    except Exception:
+        pass
+    return {}
 
 
 @_with_metrics
@@ -1111,10 +1288,11 @@ def _refresh_spot_cache():
         from concurrent.futures import ThreadPoolExecutor
         _headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/'}
 
-        df = ak.stock_zh_a_spot()
+        df = _run_with_timeout(ak.stock_zh_a_spot, timeout=60, default=pd.DataFrame(), op_name="stock_zh_a_spot")
         if df is None or df.empty:
-            logger.warning("[DataEnrich] stock_zh_a_spot returned empty, skipping spot refresh")
-            return 0
+            logger.warning("[DataEnrich] stock_zh_a_spot returned empty, loading existing cache")
+            _load_spot_cache()
+            return len(_spot_map) if _spot_map else 0
         all_codes = set()
         sina_map = {}
         for _, r in df.iterrows():
@@ -1137,47 +1315,10 @@ def _refresh_spot_cache():
         pb_map: dict[str, float] = {}
         tr_map: dict[str, float] = {}
 
-        def _fetch_batch(batch: list[str]) -> dict[str, dict]:
-            secids = ','.join(
-                f"{'1' if c.startswith('6') else '0'}.{c}" for c in batch
-            )
-            try:
-                r = _run_with_timeout(
-                    lambda: _req.get(
-                        'https://push2.eastmoney.com/api/qt/ulist.np/get',
-                        params={'fields': 'f12,f9,f23,f8,f20,f21',
-                                'secids': secids, 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
-                        headers=_headers, timeout=15,
-                    ),
-                    timeout=30, default=None, op_name="spot_batch",
-                    quiet_errors=True,
-                )
-                if r is None:
-                    return {}
-                data = r.json()
-                result = {}
-                if not isinstance(data, dict):
-                    return result
-                if data.get('data') and data['data'].get('diff'):
-                    for item in data['data']['diff']:
-                        code = item.get('f12', '')
-                        if not code:
-                            continue
-                        result[code] = {
-                            'pe': item.get('f9', 0),
-                            'pb': item.get('f23', 0),
-                            'tr': item.get('f8', 0),
-                            'total_mv': item.get('f20', 0),
-                            'circ_mv': item.get('f21', 0),
-                        }
-                return result
-            except Exception:
-                return {}
-
         batch_size = 50
         batches = [all_codes[i:i + batch_size] for i in range(0, len(all_codes), batch_size)]
         with ThreadPoolExecutor(max_workers=4) as ex:
-            futures = [ex.submit(_fetch_batch, b) for b in batches]
+            futures = [ex.submit(_fetch_spot_batch, b, _req, _run_with_timeout) for b in batches]
             done, pending = concurrent.futures.wait(
                 futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
             )
@@ -1188,54 +1329,21 @@ def _refresh_spot_cache():
             for i, future in enumerate(done):
                 batch_result = future.result()
                 for code, vals in batch_result.items():
-                    if vals.get('pe') and vals['pe'] > 0:
+                    if vals.get('pe') is not None and vals['pe'] >= 0:
                         pe_map[code] = round(vals['pe'], 2)
-                    if vals.get('pb') and vals['pb'] > 0:
+                    if vals.get('pb') is not None and vals['pb'] >= 0:
                         pb_map[code] = round(vals['pb'], 2)
                     if vals.get('tr') is not None and vals['tr'] >= 0:
                         tr_map[code] = round(vals['tr'], 2)
-                    if vals.get('total_mv') and vals['total_mv'] > 0:
+                    if vals.get('total_mv') is not None and vals['total_mv'] >= 0:
                         sina_map.setdefault(code, {})['total_mv'] = round(vals['total_mv'], 2)
-                    if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                    if vals.get('circ_mv') is not None and vals['circ_mv'] >= 0:
                         sina_map.setdefault(code, {})['circ_mv'] = round(vals['circ_mv'], 2)
                 if (i + 1) % 5 == 0:
                     _time.sleep(0.3)
 
         if len(pe_map) < len(all_codes) * 0.3:
             logger.info(f"[DataEnrich] ulist only got {len(pe_map)}/{len(all_codes)}, trying stock/get fallback")
-            def _fetch_single(code: str) -> dict:
-                secid = f"{'1' if code.startswith('6') else '0'}.{code}"
-                try:
-                    r = _run_with_timeout(
-                        lambda: _req.get(
-                            'https://push2.eastmoney.com/api/qt/stock/get',
-                            params={'fields': 'f57,f162,f167,f168,f20,f21', 'secid': secid},
-                            headers=_headers, timeout=8,
-                        ),
-                        timeout=25, default=None, op_name="spot_single",
-                        quiet_errors=True,
-                    )
-                    if r is None:
-                        return {}
-                    # 防御性：r.json() 可能返回 None 或抛出 JSONDecodeError
-                    try:
-                        json_data = r.json()
-                        if not isinstance(json_data, dict):
-                            return {}
-                        d = json_data.get('data') or {}
-                    except Exception:
-                        return {}
-                    if d:
-                        return {code: {
-                            'pe': d.get('f162', 0),
-                            'pb': d.get('f167', 0),
-                            'tr': d.get('f168', 0),
-                            'total_mv': d.get('f20', 0),
-                            'circ_mv': d.get('f21', 0),
-                        }}
-                except Exception:
-                    pass
-                return {}
 
             missing = [c for c in all_codes if c not in pe_map or c not in pb_map]
             if not missing:
@@ -1245,19 +1353,19 @@ def _refresh_spot_cache():
                 sample = missing[:5]
                 sample_ok = 0
                 for code in sample:
-                    res = _fetch_single(code)
+                    res = _fetch_spot_single(code, _req, _run_with_timeout)
                     if res:
                         sample_ok += 1
                         for c, vals in res.items():
-                            if vals.get('pe') and vals['pe'] > 0:
+                            if vals.get('pe') is not None and vals['pe'] >= 0:
                                 pe_map[c] = round(vals['pe'], 2)
-                            if vals.get('pb') and vals['pb'] > 0:
+                            if vals.get('pb') is not None and vals['pb'] >= 0:
                                 pb_map[c] = round(vals['pb'], 2)
                             if vals.get('tr') is not None and vals['tr'] >= 0:
                                 tr_map[c] = round(vals['tr'], 2)
-                            if vals.get('total_mv') and vals['total_mv'] > 0:
+                            if vals.get('total_mv') is not None and vals['total_mv'] >= 0:
                                 sina_map.setdefault(c, {})['total_mv'] = round(vals['total_mv'], 2)
-                            if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                            if vals.get('circ_mv') is not None and vals['circ_mv'] >= 0:
                                 sina_map.setdefault(c, {})['circ_mv'] = round(vals['circ_mv'], 2)
                 # If sample fails completely, skip individual fallback to avoid wasting 20+ min
                 if sample_ok == 0:
@@ -1269,7 +1377,7 @@ def _refresh_spot_cache():
                         with ThreadPoolExecutor(max_workers=6) as ex:
                             futures = []
                             for i, code in enumerate(remaining):
-                                futures.append(ex.submit(_fetch_single, code))
+                                futures.append(ex.submit(_fetch_spot_single, code, _req, _run_with_timeout))
                                 if (i + 1) % 30 == 0:
                                     _time.sleep(0.5)
                             done, pending = concurrent.futures.wait(
@@ -1288,9 +1396,9 @@ def _refresh_spot_cache():
                                         pb_map[code] = round(vals['pb'], 2)
                                     if vals.get('tr') is not None and vals['tr'] >= 0 and code not in tr_map:
                                         tr_map[code] = round(vals['tr'], 2)
-                                    if vals.get('total_mv') and vals['total_mv'] > 0:
+                                    if vals.get('total_mv') is not None and vals['total_mv'] >= 0:
                                         sina_map.setdefault(code, {})['total_mv'] = round(vals['total_mv'], 2)
-                                    if vals.get('circ_mv') and vals['circ_mv'] > 0:
+                                    if vals.get('circ_mv') is not None and vals['circ_mv'] >= 0:
                                         sina_map.setdefault(code, {})['circ_mv'] = round(vals['circ_mv'], 2)
 
         if _bond_stock_codes:
@@ -1330,9 +1438,19 @@ def _refresh_spot_cache():
             all_missing_pe = []
             all_missing_pb = []
         all_missing = list(set(all_missing_pe + all_missing_pb))
-        if all_missing and len(all_missing) > len(bond_missing2 or []):
+        if all_missing:
             logger.info(f"[DataEnrich] {len(all_missing)} bond stocks still missing PE/PB, trying yfinance fallback")
             _fill_pe_pb_from_yfinance(all_missing[:300], pe_map, pb_map)
+
+        # [TDX] Tier 5: 最后一道防线
+        if _bond_stock_codes:
+            tdx_missing = [c for c in _bond_stock_codes if c not in pe_map or c not in pb_map]
+        else:
+            _ensure_bond_stock_codes()
+            tdx_missing = [c for c in _bond_stock_codes if c not in pe_map or c not in pb_map] if _bond_stock_codes else []
+        if tdx_missing:
+            logger.info(f"[DataEnrich] {len(tdx_missing)} bond stocks still missing PE/PB, trying TDX fallback")
+            _try_tdx_spot_fallback(tdx_missing, pe_map, pb_map, sina_map)
 
         result = {}
         for code in all_codes:
@@ -1462,7 +1580,7 @@ def _refresh_fund_flow_from_spot_em():
     """填充资金流向数据 — 返回 dict，不直接修改全局 map，由父级决定如何合并"""
     try:
         try:
-            df = ak.stock_zh_a_spot_em()
+            df = _run_with_timeout(ak.stock_zh_a_spot_em, timeout=60, default=None, op_name="stock_zh_a_spot_em")
             if df is None or len(df) == 0:
                 raise ValueError("stock_zh_a_spot_em returned empty")
             flow_cols = [c for c in df.columns if '主力' in str(c)]
@@ -1526,6 +1644,23 @@ def _refresh_fund_flow_individual(codes: list[str]) -> dict:
                     return code, entry
             except Exception:
                 pass
+            # Source 2 fallback: stock_fund_flow_individual
+            try:
+                df = ak.stock_fund_flow_individual(symbol=code)
+                if df is not None and len(df) > 0:
+                    latest = df.iloc[0]
+                    entry = {
+                        "net_main": _sf(latest.get("主力净流入-净额")),
+                        "net_main_pct": _sf(latest.get("主力净流入-净占比")),
+                    }
+                    if "超大单净流入-净额" in df.columns:
+                        entry["net_super"] = _sf(latest.get("超大单净流入-净额"))
+                    if "大单净流入-净额" in df.columns:
+                        entry["net_big"] = _sf(latest.get("大单净流入-净额"))
+                    if entry["net_main"] is not None:
+                        return code, entry
+            except Exception:
+                pass
             return code, None
 
         result = {}
@@ -1561,13 +1696,19 @@ def _refresh_fin_cache():
         month = now.tm_mon
         fin_date = f"{year-1}1231" if month >= 10 else f"{year-2}1231"
         logger.info(f"[DataEnrich] Using financial date: {fin_date}")
-        df = ak.stock_yjbb_em(date=fin_date)
+        df = _run_with_timeout(
+            lambda: ak.stock_yjbb_em(date=fin_date),
+            timeout=60, default=None, op_name=f"stock_yjbb_em_{fin_date}",
+        )
 
         cagr_date = f"{int(fin_date[:4])-3}{fin_date[4:]}"
         logger.info(f"[DataEnrich] CAGR base date: {cagr_date}")
         df_old = None
         try:
-            df_old = ak.stock_yjbb_em(date=cagr_date)
+            df_old = _run_with_timeout(
+                lambda: ak.stock_yjbb_em(date=cagr_date),
+                timeout=60, default=None, op_name=f"stock_yjbb_em_{cagr_date}",
+            )
         except Exception as e:
             logger.warning(f"[DataEnrich] CAGR base data fetch failed: {e}")
 
@@ -1713,8 +1854,14 @@ def _refresh_volatility_cache():
         logger.info("[DataEnrich] Refreshing stock volatility...")
         source = _spot_map if _spot_map else {}
         if not source:
-            logger.warning("[DataEnrich] No spot data for volatility calc, skipping")
-            return 0
+            logger.warning("[DataEnrich] _spot_map empty, trying to load from cache for volatility")
+            cached_spot = _load_cache(_SPOT_CACHE)
+            if isinstance(cached_spot, dict) and cached_spot:
+                source = cached_spot
+                logger.info(f"[DataEnrich] Loaded {len(source)} stocks from spot cache for volatility")
+            else:
+                logger.warning("[DataEnrich] No spot data for volatility calc, skipping")
+                return 0
         # _spot_map entries are {pe, pb, change_pct, price, volume, turnover_rate, total_mv, circ_mv}
         # circ_mv is now fetched from EM ulist.np/get (f21) for precise liquidity ranking.
         def _liquidity_proxy(item):
@@ -1776,12 +1923,14 @@ def _refresh_volatility_cache():
                     )
                     if len(df) >= 20:
                         closes = df["收盘"].astype(float).values
-                        returns = np.diff(closes) / closes[:-1]
-                        v = float(np.std(returns) * np.sqrt(252) * 100)
-                        if 0 < v < 300:
-                            vol = v
-                    else:
-                        em_failed = True
+                        closes = closes[closes > 0]
+                        if len(closes) >= 20:
+                            returns = np.diff(closes) / closes[:-1]
+                            v = float(np.std(returns) * np.sqrt(252) * 100)
+                            if 0 < v < 300:
+                                vol = v
+                        else:
+                            em_failed = True
                 except Exception:
                     em_failed = True
 
@@ -1834,20 +1983,41 @@ def _refresh_volatility_cache():
 def _refresh_buyback_cache():
     try:
         logger.info("[DataEnrich] Refreshing buyback data...")
-        df = ak.stock_repurchase_em()
-        if df is None or len(df) == 0:
-            logger.warning("[DataEnrich] Buyback: stock_repurchase_em returned empty")
-            return 0
         result = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
-            if not code:
-                continue
-            done = _sf(r.get("已回购金额"))
-            plan = _sf(r.get("计划回购金额区间-上限"))
-            amount = done if done and done > 0 else plan
-            if amount and amount > 0:
-                result[code] = round(amount / 1e8, 2)
+
+        # Source 1: EM stock_repurchase_em
+        try:
+            df = ak.stock_repurchase_em()
+            if df is not None and len(df) > 0:
+                for _, r in df.iterrows():
+                    code = str(r.get("股票代码", "")).strip()
+                    if not code:
+                        continue
+                    done = _sf(r.get("已回购金额"))
+                    plan = _sf(r.get("计划回购金额区间-上限"))
+                    amount = done if done and done > 0 else plan
+                    if amount and amount > 0:
+                        result[code] = round(amount / 1e8, 2)
+        except Exception as e:
+            logger.warning(f"[DataEnrich] Buyback EM failed: {e}")
+
+        # Source 2: THS fallback
+        if len(result) < 100:
+            try:
+                df_ths = ak.stock_repurchase_ths()
+                if df_ths is not None and len(df_ths) > 0:
+                    for _, r in df_ths.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        if not code:
+                            continue
+                        done = _sf(r.get("已回购金额")) or _sf(r.get("回购金额"))
+                        plan = _sf(r.get("计划回购金额区间-上限")) or _sf(r.get("计划回购金额"))
+                        amount = done if done and done > 0 else plan
+                        if amount and amount > 0 and code not in result:
+                            result[code] = round(amount / 1e8, 2)
+                    logger.info(f"[DataEnrich] Buyback THS: {len(result)} stocks total")
+            except Exception as e:
+                logger.warning(f"[DataEnrich] Buyback THS fallback failed: {e}")
 
         # [TDX] fallback: TDX 不直接提供回购数据，标记无回购的股票为 0
         # 注意：TDX 补充必须在 _set_global_map 之前，否则 TDX 填充的数据不会持久化
@@ -1868,10 +2038,15 @@ def _refresh_buyback_cache():
                     if code not in result and q.get('price', 0) > 0:
                         pass  # 正股存在但无回购数据，不写入 0
 
-        _set_global_map("_buyback_map", result, replace=True)
-        _save_cache(_BUYBACK_CACHE, result)
-        logger.info(f"[DataEnrich] Buyback: {len(result)} stocks")
-        return len(result)
+        if result:
+            _set_global_map("_buyback_map", result, replace=True)
+            _save_cache(_BUYBACK_CACHE, result)
+            logger.info(f"[DataEnrich] Buyback: {len(result)} stocks")
+            return len(result)
+        logger.warning("[DataEnrich] Buyback: all sources empty, keeping existing cache")
+        if not _buyback_map:
+            _load_buyback_cache()
+        return len(_buyback_map) if _buyback_map else 0
     except Exception as e:
         logger.warning(f"[DataEnrich] Buyback refresh failed: {e}")
         if not _buyback_map:
@@ -2193,7 +2368,18 @@ def _load_call_status_cache():
     global _call_status_map, _call_status_loaded
     cached = _load_cache(_CALL_STATUS_CACHE)
     if cached:
-        _set_global_map("_call_status_map", {k: v for k, v in cached.items() if k != "_ts"})
+        # 兼容旧格式（字符串）和新格式（字典）
+        _compat = {}
+        for k, v in cached.items():
+            if k == "_ts":
+                continue
+            if isinstance(v, str):
+                _compat[k] = {"status": v}
+            elif isinstance(v, dict):
+                _compat[k] = v
+            else:
+                _compat[k] = {"status": str(v)}
+        _set_global_map("_call_status_map", _compat)
     _call_status_loaded = True
 
 
@@ -2251,6 +2437,60 @@ def _load_macro_lpr_cache():
     if cached:
         _set_global_map("_macro_lpr_map", {k: v for k, v in cached.items() if k != "_ts"})
     _macro_lpr_loaded = True
+
+
+def _calc_macro_policy_event_scores(
+    cpi: Optional[float] = None,
+    ppi: Optional[float] = None,
+    m2: Optional[float] = None,
+    lpr: Optional[float] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """根据宏观指标计算全局政策信号分(0-100)和事件冲击分(0-100)。
+    
+    逻辑基于 macro_data._calc_policy_event_scores 的简化版本，
+    使用 enrich_quotes 中已有的 CPI/PPI/M2/LPR 快照。
+    返回 (policy_score, event_score)；若宏观数据全部缺失则返回 (None, None)。
+    
+    NOTE: 当前阈值（CPI>3/<0, PPI>5/<-2, M2>12/<8, LPR<3.5/>4.5）为经验值，
+    尚未经过历史数据回测校准。建议后续接入过去5-10年宏观数据与沪深300
+    月度涨跌幅进行阈值敏感性分析，找到与权益资产表现相关性最高的阈值区间。
+    """
+    has_any = any(v is not None for v in (cpi, ppi, m2, lpr))
+    if not has_any:
+        return None, None
+
+    policy = 50.0
+    event = 50.0
+
+    # CPI: 通胀/通缩信号（阈值基于中国近10年经验：CPI常态<3%，通缩<0%）
+    if cpi is not None:
+        if cpi > 3:
+            policy -= 10  # 高通胀，政策收紧
+        elif cpi < 0:
+            policy += 10  # 通缩，政策宽松
+
+    # PPI: 上游价格压力（PPI>5% 工业上游过热，<-2% 工业通缩）
+    if ppi is not None:
+        if ppi > 5:
+            policy -= 5
+        elif ppi < -2:
+            policy += 5
+
+    # M2: 流动性松紧（M2>12% 显著宽松，<8% 流动性偏紧）
+    if m2 is not None:
+        if m2 > 12:
+            policy += 5  # 流动性宽松
+        elif m2 < 8:
+            policy -= 5  # 流动性收紧
+
+    # LPR: 利率方向（1年期LPR基准约3.1%，<3.5%视为低利率环境）
+    if lpr is not None:
+        if lpr < 3.5:
+            event += 5  # 低利率，宽松信号
+        elif lpr > 4.5:
+            event -= 5  # 高利率，收紧信号
+
+    return round(max(0, min(100, policy)), 1), round(max(0, min(100, event)), 1)
 
 
 @_with_metrics
@@ -2869,6 +3109,8 @@ def _build_concept_cache():
             return len(result)
     except Exception as e:
         logger.warning(f'[DataEnrich] Concept build failed: {e}')
+        if not _concept_map:
+            _load_concept_cache()
     return len(_concept_map) if _concept_map else 0
 
 
@@ -3126,6 +3368,26 @@ def _refresh_pledge_cache():
     else:
         logger.debug("[DataEnrich] Pledge CNINFO skipped (macOS sandbox + no LH_PLEDGE_TRY_CNINFO)")
 
+    # Source 3: THS fallback
+    try:
+        df_ths = ak.stock_pledge_info_ths()
+        result_ths = {}
+        if df_ths is not None and len(df_ths) > 0:
+            for _, r in df_ths.iterrows():
+                code = str(r.get('股票代码', '')).strip()
+                ratio = _sf(r.get('质押比例'))
+                if code and ratio is not None:
+                    if code not in result_ths or ratio > result_ths.get(code, 0):
+                        result_ths[code] = ratio
+        merged = {**result, **result_ths}
+        if len(merged) > 0:
+            _set_global_map('_pledge_map', merged)
+            _save_cache(_PLEDGE_CACHE, merged)
+            logger.info(f'[DataEnrich] Pledge: {len(merged)} stocks (EM={len(result)}, THS={len(result_ths)})')
+            return len(merged)
+    except Exception as e_ths:
+        logger.warning(f'[DataEnrich] Pledge THS failed: {e_ths}')
+
     # [TDX] fallback: TDX 无法提供质押比例数据，仅做日志记录
     _ensure_bond_stock_codes()
     if _bond_stock_codes:
@@ -3211,7 +3473,7 @@ def _refresh_bond_outstanding_cache():
 
 @_with_metrics
 def _refresh_call_status_cache():
-    """刷新强赎状态 — bond_zh_cov(全量默认"未触发") + JSL(覆盖实际状态)"""
+    """刷新强赎状态 — bond_zh_cov(全量默认"未触发") + JSL(覆盖实际状态+到期日/最后交易日/强赎价)"""
     try:
         result = {}
 
@@ -3226,7 +3488,7 @@ def _refresh_call_status_cache():
                 for _, r in df_all.iterrows():
                     code = str(r.get("债券代码", "")).strip()
                     if code and len(code) == 6 and code.isdigit():
-                        result[code] = "未触发"
+                        result[code] = {"status": "未触发"}
                 logger.info(f'[DataEnrich] Call status bond_zh_cov: {len(result)} total bonds')
                 break
             except Exception as e_all:
@@ -3236,7 +3498,7 @@ def _refresh_call_status_cache():
                 else:
                     logger.warning(f'[DataEnrich] Call status bond_zh_cov attempt 2 failed: {e_all}')
 
-        # Step 2: Overlay JSL redemption status (覆盖实际强赎状态)
+        # Step 2: Overlay JSL redemption status (覆盖实际强赎状态 + 到期日/最后交易日/强赎价)
         logger.info('[DataEnrich] Refreshing call status from JSL...')
         df = ak.bond_cb_redeem_jsl()
         jsl_count = 0
@@ -3247,7 +3509,23 @@ def _refresh_call_status_cache():
                 code = str(r.get('代码', '')).strip()
                 status = str(r.get('强赎状态', '')).strip()
                 if code and status and status != '':
-                    result[code] = status
+                    entry = {"status": status}
+                    # 补充到期日、最后交易日、强赎价
+                    _ltd = r.get('最后交易日')
+                    if _ltd and str(_ltd).strip():
+                        entry["last_trade_date"] = str(_ltd).strip()
+                    _mat = r.get('到期日')
+                    if _mat and str(_mat).strip():
+                        entry["maturity_date"] = str(_mat).strip()
+                    _rp = r.get('强赎价')
+                    if _rp is not None:
+                        try:
+                            _rp_val = float(_rp)
+                            if _rp_val > 0:
+                                entry["redemption_price"] = _rp_val
+                        except (ValueError, TypeError):
+                            pass
+                    result[code] = entry
                     jsl_count += 1
         logger.info(f'[DataEnrich] Call status JSL overlay: {jsl_count} bonds with active status')
 
@@ -3260,7 +3538,7 @@ def _refresh_call_status_cache():
                 for b in tdx_bonds:
                     bc = b.get('code', '')
                     if bc and len(bc) == 6 and bc not in result:
-                        result[bc] = '未公告'
+                        result[bc] = {'status': '未公告'}
                 if len(result) > 0:
                     logger.info(f'[DataEnrich][TDX] Call status: {len(result)} bonds (incl. TDX fills)')
             except Exception as tdx_e:
@@ -3626,6 +3904,15 @@ def _populate_field_loader_map():
         "cagr": _load_fin_cache,
         "eps": _load_fin_cache,
         "bps": _load_fin_cache,
+        "rating": _load_bond_price_cache,
+        "coupon_rate": _load_coupon_rate_cache,
+        "sentiment_score": _load_news_sentiment_cache,
+        # 计算字段（非外部数据源，但自检需要覆盖）
+        "hv": _load_vol_cache,  # hv 在 enrich_quotes 中从 iv 派生，但自检需要映射
+        "rating_score": _load_bond_price_cache,  # 从 rating 计算，依赖 bond_price
+        "pure_bond_premium_ratio": _load_bond_price_cache,  # 从 price+bond_value 计算
+        "forced_call_days": _load_call_status_cache,  # 从 call_status 解析
+        "is_called": _load_call_status_cache,  # 从 call_status 解析
     })
 
 
@@ -3671,7 +3958,10 @@ def _compute_field_coverage() -> dict[str, float]:
         "net_capital_flow", "net_capital_flow_pct", "net_super_flow", "net_big_flow",
         "momentum_5d", "momentum_10d", "momentum_20d",
         "momentum_60d", "event_score", "event_detail", "debt_ratio", "current_ratio",
-        "stock_name", "cagr", "eps", "bps",
+        "stock_name", "cagr", "eps", "bps", "rating", "sentiment_score",
+        # 计算字段覆盖率
+        "hv", "rating_score", "pure_bond_premium_ratio",
+        "forced_call_days", "is_called",
     ]
 
     # 预提取每个 bond 的字段值（避免内层循环中反复 getattr）
@@ -3727,10 +4017,16 @@ async def enrich_quotes(bonds: list) -> list:
         ("_load_pledge_cache", "_pledge_loaded"),
         ("_load_fund_flow_cache", "_fund_flow_loaded"),
         ("_load_main_biz_cache", "_main_biz_loaded"),
+        ("_load_macro_cpi_cache", "_macro_cpi_loaded"),
+        ("_load_macro_ppi_cache", "_macro_ppi_loaded"),
+        ("_load_macro_m2_cache", "_macro_m2_loaded"),
+        ("_load_macro_lpr_cache", "_macro_lpr_loaded"),
     ):
         if not globals().get(_loaded_flag):
             try:
                 globals()[_loader_name]()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[DataEnrich] enrich_quotes lazy-load {_loader_name} failed: {e}")
     # 扩展缓存（无 _loaded 标志，用 map 为空/过小判断）
@@ -3759,6 +4055,18 @@ async def enrich_quotes(bonds: list) -> list:
     # Values: 300 (5 min) for high-frequency, 3600 (1h) for mid, 86400 (24h+) for stable.
     loop = asyncio.get_event_loop()
     for _ext_name, _ext_loader, _ext_ttl, _ext_min in (
+        ("spot", _load_spot_cache, 300, 1000),
+        ("industry", _load_industry_cache, 3600, 100),
+        ("fin", _load_fin_cache, 3600, 100),
+        ("fund_flow", _load_fund_flow_cache, 300, 100),
+        ("concept", _load_concept_cache, 86400, 100),
+        ("bond_outstanding", _load_bond_outstanding_cache, 3600, 100),
+        ("call_status", _load_call_status_cache, 3600, 100),
+        ("pledge", _load_pledge_cache, 3600, 100),
+        ("name", _load_stock_name_cache, 3600, 100),
+        ("bond_price", _load_bond_price_cache, 300, 100),
+        ("main_biz", _load_main_biz_cache, 3600, 100),
+        ("coupon_rate", _load_coupon_rate_cache, 3600, 100),
         ("north", _load_north_cache, 300, 500),
         ("margin", _load_margin_cache, 300, 500),
         ("lhb", _load_lhb_cache, 600, 10),
@@ -3773,6 +4081,7 @@ async def enrich_quotes(bonds: list) -> list:
         ("event", _load_event_cache, 3600, 10),
         ("vol", _load_vol_cache, 3600, 100),
         ("debt", _load_debt_cache, 3600, 100),
+        ("news_sentiment", _load_news_sentiment_cache, 1800, 50),
     ):
         if _needs_reload(_ext_name, _ext_ttl, min_size=_ext_min):
             try:
@@ -3813,6 +4122,7 @@ async def enrich_quotes(bonds: list) -> list:
     earnings_express_ref = _earnings_express_map.copy() if _earnings_express_map else {}
     restricted_release_ref = _restricted_release_map.copy() if _restricted_release_map else {}
     main_biz_ref = _main_biz_map.copy() if _main_biz_map else {}
+    news_sentiment_ref = _news_sentiment_map.copy() if _news_sentiment_map else {}
 
     for b in bonds:
         stock_code = getattr(b, "stock_code", "") or ""
@@ -3941,15 +4251,73 @@ async def enrich_quotes(bonds: list) -> list:
             if evt.get("title"):
                 b.event_detail = evt["title"]
 
+        # EventDataSource enrichment (announcement parsing: downside, redemption, put, etc.)
+        if _event_source_instance is not None:
+            try:
+                source_events = _event_source_instance.get_events_by_code(b.code, days=30)
+                if source_events:
+                    composite_score = 0.0
+                    detail_parts = []
+                    for event in source_events:
+                        score = _EVENT_SCORE_OVERRIDES.get(
+                            event.event_type.value, event.impact_score
+                        )
+                        composite_score += score
+                        if event.title:
+                            detail_parts.append(event.title)
+
+                    # Merge with existing THS event data
+                    existing_score = getattr(b, 'event_score', None)
+                    existing_detail = getattr(b, 'event_detail', None) or ""
+
+                    if composite_score != 0:
+                        if existing_score is not None and existing_score != 0:
+                            # Take the score with max absolute value
+                            if abs(composite_score) > abs(existing_score):
+                                b.event_score = round(composite_score, 1)
+                            # else: keep existing_score
+                        else:
+                            b.event_score = round(composite_score, 1)
+
+                    if detail_parts:
+                        new_detail = ", ".join(detail_parts)
+                        if existing_detail:
+                            b.event_detail = f"{existing_detail}, {new_detail}"
+                        else:
+                            b.event_detail = new_detail
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug(f"[DataEnrich] EventDataSource enrichment failed for {b.code}: {e}")
+
         # Outstanding scale from bond_outstanding map
         bond_outstanding = bond_outstanding_ref.get(b.code)
         if bond_outstanding is not None:
             b.outstanding_scale = bond_outstanding
 
         # Call status — default to "未触发" if not in cache
+        # 兼容旧格式（字符串）和新格式（字典）
         call_status_val = call_status_ref.get(b.code)
         if call_status_val:
-            b.call_status = call_status_val
+            if isinstance(call_status_val, dict):
+                b.call_status = call_status_val.get("status", "")
+                _ltd = call_status_val.get("last_trade_date")
+                if _ltd:
+                    try:
+                        b.last_trade_date = datetime.strptime(str(_ltd), "%Y-%m-%d").date()
+                    except ValueError:
+                        pass
+                _mat = call_status_val.get("maturity_date")
+                if _mat:
+                    try:
+                        b.maturity_date = datetime.strptime(str(_mat), "%Y-%m-%d").date()
+                    except ValueError:
+                        pass
+                _rp = call_status_val.get("redemption_price")
+                if _rp is not None:
+                    b.redemption_price = float(_rp)
+            else:
+                b.call_status = str(call_status_val)
         else:
             b.call_status = "未触发"
 
@@ -4033,14 +4401,14 @@ async def enrich_quotes(bonds: list) -> list:
                         b.north_net = round(_hold_shares * b.stock_price / 1e8, 4)
                     elif "add_capital" in north and north["add_capital"] is not None:
                         # 仅作 fallback（变动资金本身无法精确转换为市值）
-                        b.north_net = 0
+                        b.north_net = None
                 elif isinstance(north, (int, float)) and north > 0:
                     # Legacy bare numeric — assume already in 亿元
                     b.north_net = float(north)
                 else:
-                    b.north_net = 0
+                    b.north_net = None
             else:
-                b.north_net = 0
+                b.north_net = None
 
         # Margin trading enrichment
         # 非融资融券标的 stock 不在 margin cache 中，margin_balance = 0
@@ -4123,11 +4491,11 @@ async def enrich_quotes(bonds: list) -> list:
         if earnings_forecast_ref:
             ef = earnings_forecast_ref.get(stock_code)
             if isinstance(ef, dict):
-                b.eps_forecast = ef.get("yoy_change_pct", 0)
+                b.eps_forecast = ef.get("yoy_change_pct")
             elif ef is not None:
                 b.eps_forecast = ef
             else:
-                b.eps_forecast = 0  # 缓存已加载但股票不在其中 = 无预测
+                b.eps_forecast = None  # 缓存已加载但股票不在其中 = 无预测
 
         # Earnings express enrichment (业绩快报: 实际报告数据,补全 eps/bps/roe/revenue_yoy)
         # AGENTS.md 要求所有 loaded cache 必须在 enrich_quotes 中消费
@@ -4135,24 +4503,39 @@ async def enrich_quotes(bonds: list) -> list:
         if earnings_express_ref is not None:
             _ee = earnings_express_ref.get(stock_code)
             if isinstance(_ee, dict):
-                # eps: 优先快报数据，已有值不覆盖
-                if _ee.get("eps") is not None and b.eps is None:
+                # eps: 快报数据比年度报表更及时，允许覆盖
+                if _ee.get("eps") is not None:
                     b.eps = _ee["eps"]
                 # bps: 每股净资产（兼容 net_assets 字段名）
-                if _ee.get("bps") is not None and b.bps is None:
+                if _ee.get("bps") is not None:
                     b.bps = _ee["bps"]
-                elif _ee.get("net_assets") is not None and b.bps is None:
+                elif _ee.get("net_assets") is not None:
                     b.bps = _ee["net_assets"]
-                # roe: 净资产收益率（快报数据比 enrich cache 更及时）
+                # roe: 净资产收益率（快报数据比 enrich cache 更及时，允许覆盖）
                 if _ee.get("roe") is not None:
                     b.roe = _ee["roe"]
-                # revenue_yoy: 营收同比增长
-                # 使用 is not None 判断，区分"0%增长"和"缺失"
-                if _ee.get("revenue_yoy") is not None and b.revenue_yoy is None:
+                # revenue_yoy: 营收同比增长（快报覆盖年度）
+                if _ee.get("revenue_yoy") is not None:
                     b.revenue_yoy = _ee["revenue_yoy"]
-                # profit_yoy: 净利润同比增长（同上）
-                if _ee.get("net_profit_yoy") is not None and b.profit_yoy is None:
+                # profit_yoy: 净利润同比增长（快报覆盖年度）
+                if _ee.get("net_profit_yoy") is not None:
                     b.profit_yoy = _ee["net_profit_yoy"]
+
+                # 快报覆盖 eps/bps 后，触发 PE/PB 重新计算
+                # （spot 可能未提供 pe/pb，或旧年度 EPS 已变化）
+                if b.stock_price is not None and b.stock_price > 0:
+                    if _ee.get("eps") is not None and _ee["eps"] > 0:
+                        _pe = round(b.stock_price / _ee["eps"], 2)
+                        if 0 < _pe <= 10000:
+                            b.pe = _pe
+                    if _ee.get("bps") is not None and _ee["bps"] > 0:
+                        _pb = round(b.stock_price / _ee["bps"], 2)
+                        if 0 < _pb <= 10000:
+                            b.pb = _pb
+                    elif _ee.get("net_assets") is not None and _ee["net_assets"] > 0:
+                        _pb = round(b.stock_price / _ee["net_assets"], 2)
+                        if 0 < _pb <= 10000:
+                            b.pb = _pb
 
         # Restricted release enrichment
         # 无限售解禁的股票不在 cache 中，restricted_release_amount = 0
@@ -4168,6 +4551,49 @@ async def enrich_quotes(bonds: list) -> list:
             else:
                 b.restricted_release_amount = 0
 
+        # News sentiment enrichment
+        # 只在缓存有实际股票数据时处理；若缓存为空（API 全部失败），保持 None
+        if news_sentiment_ref and any(not k.startswith('_') for k in news_sentiment_ref):
+            ns = news_sentiment_ref.get(stock_code)
+            if ns is not None:
+                if isinstance(ns, dict):
+                    b.sentiment_score = ns.get("sentiment_score")
+                else:
+                    b.sentiment_score = float(ns) if isinstance(ns, (int, float)) else None
+            else:
+                b.sentiment_score = 0.0  # 缓存已加载但股票不在其中 = 中性
+
+        # Macro data enrichment — attach latest macro snapshot to each bond
+        # (macro data is global, not per-stock; all bonds get the same snapshot)
+        if _macro_cpi_map:
+            _v = _macro_cpi_map.get("latest")
+            if isinstance(_v, (int, float)):
+                b.macro_cpi = _v
+        if _macro_ppi_map:
+            _v = _macro_ppi_map.get("latest")
+            if isinstance(_v, (int, float)):
+                b.macro_ppi = _v
+        if _macro_m2_map:
+            _v = _macro_m2_map.get("latest")
+            if isinstance(_v, (int, float)):
+                b.macro_m2 = _v
+        if _macro_lpr_map:
+            _v = _macro_lpr_map.get("latest")
+            if isinstance(_v, (int, float)):
+                b.macro_lpr = _v
+
+        # Macro policy & event scores derived from global macro snapshot
+        _mps, _mes = _calc_macro_policy_event_scores(
+            cpi=b.macro_cpi,
+            ppi=b.macro_ppi,
+            m2=b.macro_m2,
+            lpr=b.macro_lpr,
+        )
+        if _mps is not None:
+            b.macro_policy_score = _mps
+        if _mes is not None:
+            b.macro_event_score = _mes
+
         # Bond value (纯债价值) computation
         # 使用 PV(未来现金流) 方法：纯债价值 = Σ(票息/(1+ytm)^t) + 面值/(1+ytm)^T
         # ytm 可以为负（此时纯债价值 > 面值，说明持有到期比存银行更差，但纯债价值仍可计算）
@@ -4176,7 +4602,7 @@ async def enrich_quotes(bonds: list) -> list:
         bp_bv = bond_price_ref.get(b.code, {})
         # 当有实际 coupon_rate 时总是重新计算（覆盖 0.5% 默认值的结果）
         has_real_coupon = _real_cr is not None and _real_cr > 0
-        if not b.bond_value or has_real_coupon:
+        if not getattr(b, 'bond_value', None) or has_real_coupon:
             # 优先使用 bond 对象上已有的 ytm/remaining_years（覆盖率 100%）
             ytm = b.ytm if b.ytm is not None else None
             remaining_years = b.remaining_years if b.remaining_years and b.remaining_years > 0 else None
@@ -4211,7 +4637,7 @@ async def enrich_quotes(bonds: list) -> list:
 
         # ── 策略依赖字段补充（合并入主循环，避免二次遍历）──
         # 1. hv: 仅当 iv_source=="hv_proxy" 时 iv 即为 hv
-        if b.iv is not None and getattr(b, "iv_source", "") == "hv_proxy":
+        if getattr(b, 'iv', None) is not None and getattr(b, "iv_source", "") == "hv_proxy":
             b.hv = b.iv
 
         # 2. rating_score: 评级字符串 → 0-100 数值（使用 convertible.RATING_SCORE_MAP）
@@ -4301,10 +4727,12 @@ async def start_background_refresh():
             "_load_restricted_release_cache", "_load_main_biz_cache",
             "_load_analyst_rank_cache", "_load_macro_cpi_cache",
             "_load_macro_ppi_cache", "_load_macro_m2_cache",
-            "_load_macro_lpr_cache",
+            "_load_macro_lpr_cache", "_load_news_sentiment_cache",
         ):
             try:
                 globals()[_loader_name]()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[DataEnrich] {_loader_name} failed: {e}")
 
@@ -4322,10 +4750,17 @@ async def start_background_refresh():
                _refresh_pledge_cache, _refresh_momentum_cache, _refresh_event_cache,
                _refresh_bond_outstanding_cache, _refresh_call_status_cache, _refresh_stock_name_cache,
                _refresh_coupon_rate_cache, _refresh_earnings_express_cache,
-               _refresh_main_biz_cache, _refresh_analyst_rank_cache):
+               _refresh_main_biz_cache, _refresh_analyst_rank_cache, _refresh_news_sentiment_cache):
         _core_futures.append(loop.run_in_executor(None, fn))
     # 并行等待所有核心缓存刷新，捕获异常避免一个失败影响整体启动
-    _core_results = await asyncio.gather(*_core_futures, return_exceptions=True)
+    try:
+        _core_results = await asyncio.wait_for(
+            asyncio.gather(*_core_futures, return_exceptions=True),
+            timeout=300,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[DataEnrich] Core cache refresh timed out after 300s, some caches may be incomplete")
+        _core_results = []
     for _idx, _res in enumerate(_core_results):
         if isinstance(_res, Exception):
             logger.warning(f"[DataEnrich] Core cache refresh #{_idx} failed: {_res}")
@@ -4346,9 +4781,11 @@ async def start_background_refresh():
             _t.sleep(_delay)
             try:
                 _fn()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[DataEnrich] Macro refresh {_fn.__name__} failed: {e}")
-    loop.run_in_executor(None, _refresh_macro_staggered)
+    await loop.run_in_executor(None, _refresh_macro_staggered)
 
     # 第二批：扩展缓存刷新（7 个，原 data_enrich_runner 子进程，现已移入主进程）
     # 延迟 5 秒执行，避开第一批的 semaphore 拥堵
@@ -4366,6 +4803,8 @@ async def start_background_refresh():
         def _do_shutdown():
             try:
                 _extended_executor.shutdown(wait=True)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.debug(f"[LHBE_SHUTDOWN] _extended_executor shutdown error: {e}")
         t = threading.Thread(target=_do_shutdown, daemon=True)
@@ -4392,6 +4831,7 @@ async def start_background_refresh():
 
     def _refresh_extended_batch():
         import time as _t
+        logger.info(f"[ExtBatch] _refresh_extended_batch STARTED at t={_t.time():.0f}")
         # 不再 sleep 5s，让扩展执行器立即启动，避免延迟 5s+
         # sync batch 已经异步 dispatch，主进程不会被阻塞
         futures = [
@@ -4399,6 +4839,7 @@ async def start_background_refresh():
             for fn in (_refresh_north_cache, _refresh_margin_cache, _refresh_lhb_cache,
                        _refresh_block_trade_cache, _refresh_holder_num_cache,
                        _refresh_earnings_forecast_cache, _refresh_restricted_release_cache,
+                       _refresh_news_sentiment_cache,
                        # bond_price 在 runner 子进程里是最后一步（要等 spot→vol→fund_flow
                        # 全部完成），单独加到扩展执行器里并行执行，可让 bond_price 提前 ~5 分钟可用
                        _refresh_bond_price_cache)
@@ -4417,6 +4858,8 @@ async def start_background_refresh():
             for f in done:
                 try:
                     f.result()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.debug(f"[DataEnrich] Extended refresh future failed: {e}")
                 all_done.extend(done)
@@ -4432,6 +4875,7 @@ async def start_background_refresh():
                 fut.cancel()
 
     loop.run_in_executor(None, _refresh_extended_batch)
+    logger.info(f"[ExtBatch] _refresh_extended_batch SUBMITTED to loop")
 
     # 后台加载 runner 子进程负责的缓存；若缓存缺失或过期，则主进程 fallback 刷新。
     # spot / vol / fund_flow / bond_price 使用 AKShare C 扩展，segfault 风险高，
@@ -4442,6 +4886,8 @@ async def start_background_refresh():
                         _load_bond_price_cache, _load_coupon_rate_cache):
             try:
                 _loader()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[DataEnrich] {_loader.__name__} failed: {e}")
 
@@ -4459,18 +4905,24 @@ async def start_background_refresh():
             logger.warning("[DataEnrich] Runner spot/vol cache missing/stale, falling back to _spot_then_vol")
             try:
                 _spot_then_vol()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[DataEnrich] _spot_then_vol fallback failed: {e}")
         if not _ff_ok():
             logger.warning("[DataEnrich] Runner fund_flow cache missing/stale, falling back to in-process refresh")
             try:
                 _refresh_fund_flow_cache()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[DataEnrich] In-process fund_flow refresh fallback failed: {e}")
         if not _bp_ok():
             logger.warning("[DataEnrich] Runner bond_price cache missing/stale, falling back to in-process refresh")
             try:
                 _refresh_bond_price_cache()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[DataEnrich] In-process bond_price refresh fallback failed: {e}")
         # 所有 runner 相关缓存处理完成后强制 flush metrics，确保前端监控页立即可用
@@ -4492,17 +4944,19 @@ async def start_background_refresh():
     # 实际已完成的指标覆盖成 pending。
     _load_metrics_from_file()
     _startup_ts_iso = "1970-01-01T00:00:00"
-    with _cache_lock:
-        for name in _PRE_REGISTERED_METRICS:
-            if name not in _refresh_metrics:
-                _refresh_metrics[name] = {
-                    "name": name,
-                    "elapsed_s": 0.0,
-                    "count": 0,
-                    "status": "pending",  # 标记为等待首次执行
-                    "ts": _startup_ts_iso,
-                    "_data_source": "init",
-                }
+    def _register_pending_metrics():
+        with _cache_lock:
+            for name in _PRE_REGISTERED_METRICS:
+                if name not in _refresh_metrics:
+                    _refresh_metrics[name] = {
+                        "name": name,
+                        "elapsed_s": 0.0,
+                        "count": 0,
+                        "status": "pending",  # 标记为等待首次执行
+                        "ts": _startup_ts_iso,
+                        "_data_source": "init",
+                    }
+    await loop.run_in_executor(None, _register_pending_metrics)
 
     # 启动心跳：所有 executor 任务已 dispatch，函数返回（不阻塞）。
     # 注意：实际缓存加载在后台线程进行，此处仅记录 dispatch 完成时间。
@@ -4535,6 +4989,8 @@ async def start_background_refresh():
                             try:
                                 _loader()
                                 logger.info("[SelfCheck] Reloaded cache for field '%s'", f)
+                            except asyncio.CancelledError:
+                                raise
                             except Exception as e:
                                 logger.error("[SelfCheck] Failed to reload cache for '%s': %s", f, e)
                     # 重刷后再次检查覆盖率，确认是否仍然低
@@ -4637,6 +5093,8 @@ async def start_background_refresh():
                     _sp.run(['pkill', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=5)
                     # 短暂延迟，确保旧进程完全终止后再启动新进程
                     await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     pass
                 # 只刷新容易变 stale 的扩展缓存（spot/vol/fund_flow/bond_price 由 runner 子进程负责）
@@ -4665,6 +5123,8 @@ async def start_background_refresh():
                             timeout=600,
                         )
                         logger.info("[PeriodicRunner] Runner subprocess completed (rc=%d)", proc.returncode)
+                    except asyncio.CancelledError:
+                        raise
                     except asyncio.TimeoutError:
                         proc.kill()
                         logger.warning("[PeriodicRunner] Runner subprocess timed out, killed")
@@ -4686,6 +5146,16 @@ async def start_background_refresh():
     return _self_check_task, _periodic_runner_task
 
 
+def destroy():
+    """取消后台任务，防止应用重启时 task 泄漏。"""
+    global _self_check_task, _periodic_runner_task
+    for task in (_self_check_task, _periodic_runner_task):
+        if task is not None and not task.done():
+            task.cancel()
+    _self_check_task = None
+    _periodic_runner_task = None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  扩展数据源代理 — 桥接到 data_enrich_runner 的缓存
 #  这些函数由 market.py 中的 API endpoints 调用。
@@ -4701,6 +5171,7 @@ _HOLDER_NUM_CACHE = _CACHE_DIR / "stock_holder_num.json"
 _EARNINGS_FORECAST_CACHE = _CACHE_DIR / "stock_earnings_forecast.json"
 _EARNINGS_EXPRESS_CACHE = _CACHE_DIR / "stock_earnings_express.json"
 _RESTRICTED_RELEASE_CACHE = _CACHE_DIR / "stock_restricted_release.json"
+_NEWS_SENTIMENT_CACHE = _CACHE_DIR / "stock_news_sentiment.json"
 
 
 # 内存缓存
@@ -4712,6 +5183,7 @@ _holder_num_map: dict = {}
 _earnings_forecast_map: dict = {}
 _earnings_express_map: dict = {}
 _restricted_release_map: dict = {}
+_news_sentiment_map: dict = {}
 
 _north_loaded = False
 _margin_loaded = False
@@ -4721,8 +5193,19 @@ _holder_num_loaded = False
 _earnings_forecast_loaded = False
 _earnings_express_loaded = False
 _restricted_release_loaded = False
-_industry_score_map: dict = {}
-_industry_score_loaded = False
+_news_sentiment_loaded = False
+
+
+def _load_ext_cache(path: Path, ttl: int = 0) -> dict:
+    """Backward-compatible wrapper: returns only the data dict.
+
+    When TTL expired, returns empty dict (old behavior preserved for tests).
+    Use _load_ext_cache_with_status directly if you need stale data.
+    """
+    status, data = _load_ext_cache_with_status(path, ttl)
+    if status in ("stale", "missing", "corrupted"):
+        return {}
+    return data
 
 
 def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
@@ -4759,16 +5242,6 @@ def _load_ext_cache_with_status(path: Path, ttl: int = 0) -> tuple[str, dict]:
     except Exception as e:
         logger.warning(f"[DataEnrich] Failed to load cache {path}: {e}")
         return "corrupted", {}
-
-
-def _load_ext_cache(path: Path, ttl: int = 0) -> dict:
-    """从 JSON 缓存文件加载，失败或过期返回空 dict。
-
-    内部委托给 _load_ext_cache_with_status，避免重复打开文件。
-    需要 status 时直接调用 _load_ext_cache_with_status 一次完成。
-    """
-    status, data = _load_ext_cache_with_status(path, ttl)
-    return data if status == "fresh" else {}
 
 
 
@@ -4964,7 +5437,7 @@ def _refresh_earnings_express_cache():
         # 获取最近3个年度（从旧到新，确保最新年度最后覆盖）
         for year in (current_year - 2, current_year - 1, current_year):
             try:
-                df = ak.stock_yjkb_em(date=f"{year}1231")
+                df = _run_with_timeout(lambda: ak.stock_yjkb_em(date=f"{year}1231"), timeout=60, default=pd.DataFrame(), op_name=f"stock_yjkb_em_{year}")
                 if df is None or df.empty:
                     continue
                 for _, r in df.iterrows():
@@ -5015,11 +5488,15 @@ def _refresh_earnings_express_cache():
             logger.info(f"[DataEnrich] EarningsExpress: {len(result)} stocks refreshed")
             return len(result)
         else:
-            logger.warning("[DataEnrich] EarningsExpress: no data fetched")
-            return 0
+            logger.warning("[DataEnrich] EarningsExpress: no data fetched, keeping existing cache")
+            if not _earnings_express_map:
+                _load_earnings_express_cache()
+            return len(_earnings_express_map) if _earnings_express_map else 0
     except Exception as e:
         logger.warning(f"[DataEnrich] EarningsExpress refresh failed: {e}")
-        return 0
+        if not _earnings_express_map:
+            _load_earnings_express_cache()
+        return len(_earnings_express_map) if _earnings_express_map else 0
 
 def _load_restricted_release_cache():
     global _restricted_release_map, _restricted_release_loaded
@@ -5053,6 +5530,40 @@ def _load_restricted_release_cache():
 
 def get_restricted_release_map() -> dict:
     return _restricted_release_map
+
+
+def _load_news_sentiment_cache():
+    global _news_sentiment_map, _news_sentiment_loaded
+    if _news_sentiment_loaded:
+        return
+    _news_sentiment_loaded = True
+    status, new_map = _load_ext_cache_with_status(_NEWS_SENTIMENT_CACHE, ttl=3600)
+    if status == "fresh":
+        file_ts = new_map.get("_ts", 0)
+        with _cache_lock:
+            mem_ts = _news_sentiment_map.get("_ts", 0) if isinstance(_news_sentiment_map, dict) else 0
+            if file_ts <= mem_ts:
+                return
+            _news_sentiment_map = new_map
+        logger.info(f"[DataEnrich] NewsSentiment: loaded {len([k for k in _news_sentiment_map if not k.startswith('_')])} stocks")
+    elif status == "stale":
+        with _cache_lock:
+            _news_sentiment_map = new_map
+        logger.warning(f"[DataEnrich] NewsSentiment: loaded stale cache")
+    elif status == "missing":
+        with _cache_lock:
+            _news_sentiment_map = {}
+        logger.info("[DataEnrich] NewsSentiment: cache missing, init empty")
+    elif _is_loadable(status):
+        with _cache_lock:
+            _news_sentiment_map = {}
+    else:
+        logger.debug(f"[DataEnrich] NewsSentiment: {status}, keeping in-memory")
+    _news_sentiment_loaded = True
+
+
+def get_news_sentiment_map() -> dict:
+    return _news_sentiment_map
 
 
 # ============================================================================
@@ -5162,6 +5673,41 @@ def _refresh_north_cache():
         # Skip zero_fill to avoid polluting coverage stats
         # Missing codes will be handled as "no data" in enrich_quotes
 
+        # Source 2 fallback: stock_hsgt_stock_statistics_em
+        if len([k for k in result if not k.startswith("_")]) < 200:
+            try:
+                df_stats = _run_with_timeout(
+                    lambda: ak.stock_hsgt_stock_statistics_em(symbol="北向持股", start_date="", end_date=""),
+                    timeout=60, default=None, op_name="hsgt_stock_statistics_em",
+                )
+                if df_stats is not None and len(df_stats) > 0:
+                    count_stats = 0
+                    for _, r in df_stats.iterrows():
+                        code = str(r.get("代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result and not result[code].get("_summary"):
+                            continue
+                        entry = {"code": code, "name": str(r.get("名称", "")).strip(), "type": "北向"}
+                        hold_shares = _sf(r.get("持股数量")) or _sf(r.get("当日持股数量"))
+                        if hold_shares is not None:
+                            entry["hold_shares"] = hold_shares
+                        hold_market_cap = _sf(r.get("持股市值")) or _sf(r.get("当日持股市值"))
+                        if hold_market_cap is not None:
+                            entry["hold_market_cap"] = hold_market_cap
+                        hold_ratio = _sf(r.get("持股占流通股比例")) or _sf(r.get("持股比例"))
+                        if hold_ratio is not None:
+                            entry["hold_ratio"] = hold_ratio
+                        add_shares = _sf(r.get("增持数量")) or _sf(r.get("增减持股数量"))
+                        if add_shares is not None:
+                            entry["add_shares"] = add_shares
+                        if len(entry) > 3:
+                            result[code] = entry
+                            count_stats += 1
+                    logger.info(f"[DataEnrich] North: stock_hsgt_stock_statistics_em added {count_stats} stocks")
+            except Exception as e_stats:
+                logger.warning(f"[DataEnrich] North stock_hsgt_stock_statistics_em fallback failed: {e_stats}")
+
         if result:
             _set_global_map("_north_map", result, replace=True)
             _save_cache(_NORTH_CACHE, result)
@@ -5247,9 +5793,36 @@ def _refresh_margin_cache():
                     "_data_source": "zero_fill",
                 }
 
+        # Source 2 fallback: stock_margin_underlying_em
+        real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_"))]
+        if len(real_entries) < 500:
+            try:
+                df_underlying = _run_with_timeout(
+                    ak.stock_margin_underlying_em,
+                    timeout=60, default=None, op_name="margin_underlying_em",
+                )
+                if df_underlying is not None and len(df_underlying) > 0:
+                    count_underlying = 0
+                    for _, r in df_underlying.iterrows():
+                        code = str(r.get("证券代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result and not result[code].get("_summary") and result[code].get("margin_balance") is not None:
+                            continue
+                        balance = _sf(r.get("融资余额")) or _sf(r.get("融资融券余额"))
+                        if balance is not None:
+                            result[code] = {
+                                "margin_balance": balance,
+                                "_data_source": "underlying_em",
+                            }
+                            count_underlying += 1
+                    logger.info(f"[DataEnrich] Margin: stock_margin_underlying_em added {count_underlying} stocks")
+            except Exception as e_underlying:
+                logger.warning(f"[DataEnrich] Margin stock_margin_underlying_em fallback failed: {e_underlying}")
+
         if result:
             # Add summary with total margin balance stats
-            real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_"))]
+            real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_", "underlying_"))]
             total_balance = sum(v.get("margin_balance", 0) or 0 for v in real_entries)
             result["_summary"] = {
                 "total_balance": round(total_balance, 2),
@@ -5279,6 +5852,10 @@ def _refresh_lhb_cache():
     增量更新：保留上一次的 lhb_count 作为 _prev_count，新值作为 lhb_count。
     增量 _delta = lhb_count - _prev_count 表示本次刷新新增的上榜次数。
     """
+    import traceback as _tb
+    _stack = _tb.extract_stack()[-3:-1]  # 跳过当前帧和装饰器
+    _caller = f"{_stack[0].filename.split('/')[-1]}:{_stack[0].lineno} {_stack[0].name}"
+    logger.info(f"[LHB_DEBUG] _refresh_lhb_cache called by {_caller}")
     try:
         # ak.stock_lhb_stock_statistic_em: 龙虎榜个股统计（近一月）
         df = _run_with_timeout(
@@ -5306,10 +5883,36 @@ def _refresh_lhb_cache():
                     "_delta": new_count - old_count,
                     "_data_source": "lhb_stock_statistic_em",
                 }
+        # Source 2 fallback: stock_lhb_stock_detail_em
+        if len(result) < 100:
+            try:
+                df_detail = _run_with_timeout(
+                    ak.stock_lhb_stock_detail_em,
+                    timeout=60, default=None, op_name="lhb_stock_detail_em",
+                )
+                if df_detail is not None and len(df_detail) > 0:
+                    count_detail = 0
+                    for _, r in df_detail.iterrows():
+                        code = str(r.get("代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result:
+                            continue
+                        cnt = _sf(r.get("上榜次数"))
+                        new_count = int(cnt) if cnt else 0
+                        result[code] = {
+                            "lhb_count": new_count,
+                            "_prev_count": 0,
+                            "_delta": new_count,
+                            "_data_source": "lhb_stock_detail_em",
+                        }
+                        count_detail += 1
+                    logger.info(f"[DataEnrich] LHB: stock_lhb_stock_detail_em added {count_detail} stocks")
+            except Exception as e_detail:
+                logger.warning(f"[DataEnrich] LHB stock_lhb_stock_detail_em fallback failed: {e_detail}")
+
         # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
-        # 放在 if result 外部，确保即使 API 失败也有基础数据
-        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
-        # 避免启动阶段 AKShare 信号量争用导致超时
+        # 放在 fallback 之后，确保 fallback 有机会填充真实数据
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
@@ -5318,6 +5921,7 @@ def _refresh_lhb_cache():
                     "_delta": 0,
                     "_data_source": "zero_fill",
                 }
+
         if result:
             _set_global_map("_lhb_map", result, replace=True)
             _save_cache(_LHB_CACHE, result)
@@ -5365,6 +5969,33 @@ def _refresh_block_trade_cache():
                 amount = _sf(r.get("成交额"))
                 if amount and amount > 0:
                     result[code] = {"block_trade_amount": amount}
+
+        # Source 2 fallback: stock_dzjy_mrtj
+        if len([k for k in result if not k.startswith("_")]) < 100:
+            try:
+                end_d = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+                start_d = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
+                df_mrtj = _run_with_timeout(
+                    lambda: ak.stock_dzjy_mrtj(start_date=start_d, end_date=end_d),
+                    timeout=60, default=None, op_name=f"dzjy_mrtj_{end_d}",
+                )
+                if df_mrtj is not None and len(df_mrtj) > 0:
+                    count_mrtj = 0
+                    for _, r in df_mrtj.iterrows():
+                        code = str(r.get("证券代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code[0] not in '036':
+                            continue
+                        if code in result:
+                            continue
+                        amt = _sf(r.get("成交总额"))
+                        if amt and amt > 0:
+                            result[code] = {"block_trade_amount": amt}
+                            count_mrtj += 1
+                    logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
+            except Exception as e_mrtj:
+                logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
         # Zero-fill: 无大宗交易的股票显式写入 0，区分"无交易"与"数据缺失"
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
         # 避免启动阶段 AKShare 信号量争用导致超时
@@ -5516,6 +6147,72 @@ def _refresh_holder_num_cache():
                     f"({len(_holder_num_map)} stocks)"
                 )
                 return len(_holder_num_map)
+        # Source 2 fallback: stock_hold_num_em (batch API)
+        if len(result) < 100:
+            try:
+                df_hn = _run_with_timeout(
+                    ak.stock_hold_num_em,
+                    timeout=60, default=None, op_name="stock_hold_num_em",
+                )
+                if df_hn is not None and len(df_hn) > 0:
+                    count_hn = 0
+                    for _, r in df_hn.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result:
+                            continue
+                        holders = _sf(r.get("股东户数")) or _sf(r.get("股东人数")) or _sf(r.get("股东总数"))
+                        if holders and holders > 0:
+                            prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
+                            prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
+                            if isinstance(prev_count, (int, float)) and prev_count > 0:
+                                holder_num_change = holders - prev_count
+                            else:
+                                holder_num_change = None
+                            result[code] = {
+                                "holder_num": holders,
+                                "holder_num_change": holder_num_change,
+                                "_data_source": "stock_hold_num_em",
+                            }
+                            count_hn += 1
+                    logger.info(f"[DataEnrich] HolderNum: stock_hold_num_em added {count_hn} stocks")
+            except Exception as e_hn:
+                logger.warning(f"[DataEnrich] HolderNum stock_hold_num_em fallback failed: {e_hn}")
+
+        # Source 3 fallback: stock_zh_a_gdhs (individual API)
+        if len(result) < 100:
+            try:
+                missing = [c for c in all_codes if c not in result][:100]
+                count_gdhs = 0
+                for code in missing:
+                    try:
+                        df_gdhs = _run_with_timeout(
+                            lambda: ak.stock_zh_a_gdhs(stock=code),
+                            timeout=30, default=None, op_name=f"stock_zh_a_gdhs_{code}",
+                        )
+                        if df_gdhs is not None and len(df_gdhs) > 0:
+                            last = df_gdhs.iloc[-1]
+                            hn = _sf(last.get("股东人数")) or _sf(last.get("股东户数")) or _sf(last.get("股东总数"))
+                            if hn and hn > 0:
+                                prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
+                                prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
+                                if isinstance(prev_count, (int, float)) and prev_count > 0:
+                                    holder_num_change = hn - prev_count
+                                else:
+                                    holder_num_change = None
+                                result[code] = {
+                                    "holder_num": hn,
+                                    "holder_num_change": holder_num_change,
+                                    "_data_source": "stock_zh_a_gdhs",
+                                }
+                                count_gdhs += 1
+                    except Exception:
+                        pass
+                logger.info(f"[DataEnrich] HolderNum: stock_zh_a_gdhs added {count_gdhs} stocks")
+            except Exception as e_gdhs:
+                logger.warning(f"[DataEnrich] HolderNum stock_zh_a_gdhs fallback failed: {e_gdhs}")
+
         if result:
             _set_global_map("_holder_num_map", result, replace=True)
             _save_cache(_HOLDER_NUM_CACHE, result)
@@ -5596,13 +6293,69 @@ def _refresh_earnings_forecast_cache():
                 logger.debug(f"[DataEnrich] EarningsForecast: {date_str} failed: {e}")
                 continue
 
+        # Source 2: THS fallback (before zero-fill, so fallback can actually run)
+        real_count = len([k for k, v in result.items() if isinstance(v, dict) and v.get("_data_source") != "zero_fill"])
+        if real_count < 500:
+            try:
+                from datetime import datetime as _dt
+                _now = _dt.now()
+                _year = _now.year
+                _month = _now.month
+                ths_periods = []
+                for y in range(_year, _year - 2, -1):
+                    for q_end in ["1231", "0930", "0630", "0331"]:
+                        p = f"{y}{q_end}"
+                        q_month = int(q_end[:2])
+                        if y < _year or (y == _year and q_month < _month):
+                            ths_periods.append(p)
+                for period in ths_periods:
+                    try:
+                        df_ths = _run_with_timeout(
+                            lambda: ak.stock_yjyg_ths(date=period),
+                            timeout=60, default=None, op_name=f"yjyg_ths_{period}",
+                        )
+                        if df_ths is not None and len(df_ths) > 0:
+                            count = 0
+                            for _, r in df_ths.iterrows():
+                                code = str(r.get("股票代码", "")).strip()
+                                if not code or len(code) != 6:
+                                    continue
+                                if code in result:
+                                    continue
+                                change_pct = _sf(r.get("业绩变动幅度"))
+                                if change_pct is not None:
+                                    entry = {
+                                        "yoy_change_pct": change_pct,
+                                        "_date": period,
+                                    }
+                                    for col_name in ["业绩预告摘要", "业绩变动原因", "变动原因", "业绩预告内容", "摘要"]:
+                                        val = r.get(col_name)
+                                        if val is not None and str(val).strip():
+                                            entry["change_desc"] = str(val).strip()
+                                            break
+                                    for col_name in ["业绩变动原因", "变动原因", "原因"]:
+                                        val = r.get(col_name)
+                                        if val is not None and str(val).strip():
+                                            if "change_desc" not in entry or str(val).strip() != entry["change_desc"]:
+                                                entry["reason"] = str(val).strip()
+                                                break
+                                    result[code] = entry
+                                    count += 1
+                            logger.info(f"[DataEnrich] EarningsForecast THS: {period}={count} entries, total={len(result)}")
+                            if len(result) >= 1000:
+                                break
+                    except Exception as e:
+                        logger.debug(f"[DataEnrich] EarningsForecast THS {period} failed: {e}")
+                        continue
+            except Exception as e_ths:
+                logger.warning(f"[DataEnrich] EarningsForecast THS fallback failed: {e_ths}")
+
         # Zero-fill: 对所有已知股票代码中无数据的股票填充 None
-        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
-        # 避免启动阶段 AKShare 信号量争用导致超时
+        # 放在 fallback 之后，确保 fallback 有机会填充真实数据
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "yoy_change_pct": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
+                    "yoy_change_pct": None,  # 使用 None 区分"无预测"与"0%增长"
                     "_date": "",
                     "_data_source": "zero_fill",
                 }
@@ -5669,6 +6422,156 @@ def _refresh_restricted_release_cache():
         logger.warning(f"[DataEnrich] RestrictedRelease in-proc refresh failed: {e}")
         return 0
 
+
+@_with_metrics
+def _refresh_news_sentiment_cache():
+    """主进程内刷新新闻情绪数据（增量模式）。
+
+    使用 ak.stock_news_em(symbol) 获取最近新闻，通过关键词规则计算情绪得分。
+    增量模式：保留已有缓存数据，只抓取新增/需要更新的股票。
+    """
+    try:
+        _POSITIVE_WORDS = {
+            "利好", "上涨", "突破", "增持", "回购", "盈利", "增长", "超预期",
+            "景气", "复苏", "扩张", "订单", "中标", "合作协议", "净利润增长",
+            "营收增长", "业绩预增", "涨停", "历史新高", "产能释放", "新产品",
+            "市场份额提升", "毛利率提升", "现金流改善", "降本增效", "战略合作",
+        }
+        _NEGATIVE_WORDS = {
+            "利空", "下跌", "暴跌", "减持", "亏损", "下滑", "不及预期",
+            "衰退", "裁员", "诉讼", "监管", "处罚", "违约", "净利润下降",
+            "营收下降", "业绩预亏", "跌停", "历史新低", "产能过剩", "产品召回",
+            "市场份额下降", "毛利率下降", "现金流恶化", "成本上升", "竞争加剧",
+            "召回", "停产", "整顿", "调查", "违规", "关联交易", "质押",
+        }
+
+        if not callable(getattr(ak, "stock_news_em", None)):
+            logger.warning("[DataEnrich] NewsSentiment: ak.stock_news_em unavailable")
+            return 0
+
+        all_codes = list(_get_bond_or_fallback_codes())
+        MAX_NEWS_CODES = 200
+        if len(all_codes) > MAX_NEWS_CODES:
+            all_codes = all_codes[:MAX_NEWS_CODES]
+
+        if not all_codes:
+            logger.debug("[DataEnrich] NewsSentiment: no codes available")
+            return 0
+
+        # 增量模式：以现有缓存为基础，只抓取新增/更新的股票
+        # 优先抓取缓存中不存在的股票；已有缓存的股票每3轮刷新一次
+        result = _news_sentiment_map.copy() if _news_sentiment_map else {}
+        
+        # 决定哪些股票需要重新抓取
+        # 策略：新股票 + 缓存数据过期的股票（3轮刷新周期 ≈ 90分钟）
+        codes_to_fetch = []
+        for code in all_codes:
+            if code not in result:
+                codes_to_fetch.append(code)
+        
+        # 如果新股票少，也随机刷新一部分已有缓存（防止数据陈旧）
+        existing_codes = [c for c in all_codes if c in result]
+        REFRESH_PCT = 0.3  # 每轮刷新30%已有缓存
+        import random
+        refresh_count = max(int(len(existing_codes) * REFRESH_PCT), 5)  # 至少刷新5只
+        codes_to_fetch.extend(random.sample(existing_codes, min(refresh_count, len(existing_codes))))
+        
+        if not codes_to_fetch:
+            logger.info(f"[DataEnrich] NewsSentiment: incremental skip, all {len(all_codes)} stocks cached")
+            return len(result)
+
+        logger.info(f"[DataEnrich] NewsSentiment: incremental fetch {len(codes_to_fetch)} of {len(all_codes)} stocks")
+
+        def _fetch_one(code: str):
+            try:
+                symbol = f"{code}"
+                df = _run_with_timeout(
+                    ak.stock_news_em, symbol,
+                    timeout=_TIMEOUT_FAST, default=None,
+                    op_name=f"news_{code}",
+                    quiet_errors=True,
+                )
+                if df is None or len(df) == 0:
+                    return None
+                _title_cols = ["新闻标题", "title", "新闻标题"]
+                _content_cols = ["新闻内容", "content", "新闻内容", "摘要"]
+                _title_col = next((c for c in _title_cols if c in df.columns), df.columns[0] if len(df.columns) > 0 else None)
+                _content_col = next((c for c in _content_cols if c in df.columns), None)
+                recent = df.head(5)
+                pos_count = 0
+                neg_count = 0
+                for _, r in recent.iterrows():
+                    title = str(r.get(_title_col, "")) if _title_col else ""
+                    content = str(r.get(_content_col, "")) if _content_col else ""
+                    text = title + " " + content
+                    for w in _POSITIVE_WORDS:
+                        if w in text:
+                            pos_count += 1
+                    for w in _NEGATIVE_WORDS:
+                        if w in text:
+                            neg_count += 1
+                if pos_count + neg_count == 0:
+                    score = 0.0
+                else:
+                    score = (pos_count - neg_count) / (pos_count + neg_count)
+                    score = max(-1.0, min(1.0, score))
+                return code, {
+                    "sentiment_score": round(score, 3),
+                    "pos_count": pos_count,
+                    "neg_count": neg_count,
+                    "news_count": len(recent),
+                    "_data_source": "news_em",
+                }
+            except Exception:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_one, c): c for c in codes_to_fetch}
+            deadline = time.time() + 60
+            while futures and time.time() < deadline:
+                done, futures = concurrent.futures.wait(
+                    futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for fut in done:
+                    try:
+                        r = fut.result()
+                        if r:
+                            result[r[0]] = r[1]
+                    except Exception:
+                        pass
+                if len([k for k in result if not k.startswith("_")]) % 50 == 0:
+                    _save_cache(_NEWS_SENTIMENT_CACHE, result)
+            if futures:
+                logger.warning(
+                    f"[DataEnrich] NewsSentiment: {len(futures)} (of {len(codes_to_fetch)}) "
+                    f"futures unfinished after 60s, keeping {len(result)} completed"
+                )
+                for fut in futures:
+                    fut.cancel()
+
+        # Zero-fill: 本次需要但未被抓取的股票（通常因为超时）
+        for code in codes_to_fetch:
+            if code not in result:
+                result[code] = {
+                    "sentiment_score": 0.0,
+                    "pos_count": 0,
+                    "neg_count": 0,
+                    "news_count": 0,
+                    "_data_source": "zero_fill",
+                }
+
+        if result:
+            _set_global_map("_news_sentiment_map", result, replace=True)
+            _save_cache(_NEWS_SENTIMENT_CACHE, result)
+            count = len([k for k in result if not k.startswith("_")])
+            logger.info(f"[DataEnrich] NewsSentiment: {count} stocks (incremental: {len(codes_to_fetch)} fetched)")
+            return count
+        return 0
+    except Exception as e:
+        logger.warning(f"[DataEnrich] NewsSentiment in-proc refresh failed: {e}")
+        return 0
+
+
 # by the runner subprocess, not refreshed from main process.
 def get_concept_sources() -> dict[str, dict[str, bool]]:
     """概念数据源归属：concept_name -> {"em": bool, "ths": bool}"""
@@ -5707,7 +6610,6 @@ def reset_module_state_for_testing() -> None:
     global _name_map, _name_loaded
     global _concept_map, _concept_loaded
     global _concept_source_map
-    global _industry_score_map, _industry_score_loaded
     global _holder_num_map, _holder_num_loaded
     global _analyst_rank_map, _analyst_rank_loaded
     global _main_biz_map, _main_biz_loaded
@@ -5722,6 +6624,7 @@ def reset_module_state_for_testing() -> None:
     global _earnings_forecast_map, _earnings_forecast_loaded
     global _earnings_express_map, _earnings_express_loaded
     global _restricted_release_map, _restricted_release_loaded
+    global _news_sentiment_map, _news_sentiment_loaded
     global _bond_stock_codes, _bond_codes
     global _name_map, _name_loaded
 

@@ -15,6 +15,8 @@ router = APIRouter()
 active_market_connections = 0
 active_signal_connections = 0
 
+_ws_conn_lock = asyncio.Lock()
+
 # 消息统计
 _STATS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "ws_stats.json")
 
@@ -49,6 +51,8 @@ def _load_stats():
                 if "disconnect_reasons" in saved:
                     _ws_stats["disconnect_reasons"].update(saved.pop("disconnect_reasons"))
                 _ws_stats.update(saved)
+                # 当前会话重置 auth_failed，避免历史错误干扰调试
+                _ws_stats["disconnect_reasons"]["auth_failed"] = 0
                 logger.info(f"[WS] Restored stats from {_STATS_FILE}")
     except Exception as e:
         logger.warning(f"[WS] Failed to load stats: {e}")
@@ -109,11 +113,27 @@ def broadcast_revision(record: dict):
 
 
 async def _stats_persistence_loop():
-    """每60秒保存一次统计到文件"""
+    """每60秒保存一次统计到文件，并定期重置高频计数器防止无限累积。"""
+    _save_counter = 0
     while True:
         await asyncio.sleep(60)
         try:
             _save_stats()
+            _save_counter += 1
+            # 每10分钟（10次保存）重置所有高频计数器，防止内存中计数无限累积
+            if _save_counter % 10 == 0:
+                for key in _ws_stats["disconnect_reasons"]:
+                    _ws_stats["disconnect_reasons"][key] = 0
+                # 重置消息总量计数器（保留已持久化的累计值在文件中）
+                _ws_stats["market_messages_sent"] = 0
+                _ws_stats["market_bytes_sent"] = 0
+                _ws_stats["signal_messages_sent"] = 0
+                _ws_stats["signal_bytes_sent"] = 0
+                _ws_stats["market_delta_messages"] = 0
+                _ws_stats["market_full_messages"] = 0
+                logger.info("[WS] Reset all message counters after persistence")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[WS] Stats persistence failed: {e}")
 
@@ -143,13 +163,20 @@ async def get_ws_stats(request: Request):
 
 async def verify_ws_auth(websocket: WebSocket) -> bool:
     """Verify WebSocket authentication token and connection limits."""
-    token = websocket.query_params.get("token", "")
+    raw_token = websocket.query_params.get("token", "")
+    token = raw_token.strip() if isinstance(raw_token, str) else ""
     if not token:
         logger.warning("[WS] Auth rejected: empty token from %s", websocket.client.host if websocket.client else "unknown")
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
         await websocket.close(code=4001, reason="Unauthorized: empty token")
         return False
-    if not hmac.compare_digest(token, settings.ws_auth_token):
+    expected = settings.ws_auth_token
+    if not isinstance(expected, str) or not expected:
+        logger.warning("[WS] Auth rejected: server token not configured")
+        _ws_stats["disconnect_reasons"]["auth_failed"] += 1
+        await websocket.close(code=4001, reason="Unauthorized: server token not configured")
+        return False
+    if not hmac.compare_digest(token, expected):
         logger.warning("[WS] Auth rejected: token mismatch from %s (got %s...)", websocket.client.host if websocket.client else "unknown", token[:8])
         _ws_stats["disconnect_reasons"]["auth_failed"] += 1
         await websocket.close(code=4001, reason="Unauthorized: invalid token")
@@ -171,7 +198,7 @@ def _build_tick_delta(bonds, last_snapshot: dict[str, dict]) -> tuple[list[dict]
     new_snapshot = {}
 
     for b in bonds:
-        current = b.model_dump(mode="json")
+        current = b.model_dump(mode="json", exclude_none=True)
         code = current["code"]
         new_snapshot[code] = current
 
@@ -181,12 +208,13 @@ def _build_tick_delta(bonds, last_snapshot: dict[str, dict]) -> tuple[list[dict]
             delta_list.append(current)
             continue
 
-        # 计算变化字段
+        # 计算变化字段（包括从有值变为 None 的字段删除；timestamp 每次重建对象都会变化，不参与比较）
         changed = {"code": code}
         has_change = False
-        for key, val in current.items():
-            if key == "code":
+        for key in set(current.keys()) | set(prev.keys()):
+            if key == "code" or key == "timestamp":
                 continue
+            val = current.get(key)
             if prev.get(key) != val:
                 changed[key] = val
                 has_change = True
@@ -227,7 +255,8 @@ async def market_websocket(websocket: WebSocket):
         return
 
     await websocket.accept()
-    active_market_connections += 1
+    async with _ws_conn_lock:
+        active_market_connections += 1
     if active_market_connections > 10:
         logger.warning(f"Market WebSocket connections exceed 10: {active_market_connections}")
 
@@ -241,7 +270,7 @@ async def market_websocket(websocket: WebSocket):
         try:
             if is_first_push:
                 # 首次推送全量数据
-                data = [b.model_dump(mode="json") for b in bonds]
+                data = [b.model_dump(mode="json", exclude_none=True) for b in bonds]
                 msg = {
                     "type": "tick",
                     "data": data,
@@ -252,7 +281,7 @@ async def market_websocket(websocket: WebSocket):
                 _ws_stats["market_bytes_sent"] += sent_bytes
                 _ws_stats["market_full_messages"] += 1
                 # Store full snapshot for future delta computation
-                conn_snapshot = {b.code: b.model_dump(mode="json") for b in bonds}
+                conn_snapshot = {b.code: b.model_dump(mode="json", exclude_none=True) for b in bonds}
                 is_first_push = False
                 return
 
@@ -267,7 +296,9 @@ async def market_websocket(websocket: WebSocket):
                 _ws_stats["market_messages_sent"] += 1
                 _ws_stats["market_bytes_sent"] += sent_bytes
                 # 判断是否为增量消息
-                if any(len(d) < len(bonds[0].model_dump(mode="json")) for d in delta if isinstance(d, dict)):
+                if not bonds:
+                    _ws_stats["market_full_messages"] += 1
+                elif any(len(d) < len(bonds[0].model_dump(mode="json", exclude_none=True)) for d in delta if isinstance(d, dict)):
                     _ws_stats["market_delta_messages"] += 1
                 else:
                     _ws_stats["market_full_messages"] += 1
@@ -280,7 +311,7 @@ async def market_websocket(websocket: WebSocket):
     try:
         current_bonds = list(engine._quotes.values()) if engine._quotes else []
         if current_bonds:
-            data = [b.model_dump(mode="json") for b in current_bonds]
+            data = [b.model_dump(mode="json", exclude_none=True) for b in current_bonds]
             msg = {"type": "tick", "data": data, "ts": engine.last_update.isoformat() if engine.last_update else None}
             sent_bytes = await _send_compressed(websocket, msg, "market")
             _ws_stats["market_messages_sent"] += 1
@@ -323,7 +354,8 @@ async def market_websocket(websocket: WebSocket):
             heartbeat_task.cancel()
         engine.unsubscribe(on_market_update)
         try:
-            active_market_connections -= 1
+            async with _ws_conn_lock:
+                active_market_connections -= 1
         except Exception:
             pass
 
@@ -342,7 +374,8 @@ async def signals_websocket(websocket: WebSocket):
         return
 
     await websocket.accept()
-    active_signal_connections += 1
+    async with _ws_conn_lock:
+        active_signal_connections += 1
     if active_signal_connections > 10:
         logger.warning(f"Signal WebSocket connections exceed 10: {active_signal_connections}")
 
@@ -394,6 +427,7 @@ async def signals_websocket(websocket: WebSocket):
             heartbeat_task.cancel()
         signal_engine.unsubscribe(on_signal_update)
         try:
-            active_signal_connections -= 1
+            async with _ws_conn_lock:
+                active_signal_connections -= 1
         except Exception:
             pass

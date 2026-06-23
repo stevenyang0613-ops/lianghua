@@ -130,6 +130,8 @@ class HealthChecker:
                 "details": {"type": "memory"},
             }
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return {
                 "status": HealthStatus.UNHEALTHY,
@@ -161,6 +163,8 @@ class HealthChecker:
                     "latency_ms": 0,
                 }
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return {
                 "status": HealthStatus.DEGRADED,
@@ -184,6 +188,8 @@ class HealthChecker:
                 "details": {"provider": "akshare"},
             }
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return {
                 "status": HealthStatus.DEGRADED,
@@ -214,6 +220,8 @@ class HealthChecker:
                     "latency_ms": 0,
                 }
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return {
                 "status": HealthStatus.DEGRADED,
@@ -249,6 +257,8 @@ class HealthChecker:
                 last_check=datetime.now(),
             )
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             health = ComponentHealth(
                 name=name,

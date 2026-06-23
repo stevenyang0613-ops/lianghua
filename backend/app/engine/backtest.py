@@ -759,7 +759,7 @@ def _run_pareto_combo(args_tuple):
             min_commission, risk_free_rate, initial_cash, None,
         )
         item = OptimizationResultItem(**result)
-        metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
+        metrics_dict = {m: getattr(item, m, float('-inf')) for m in pareto_metrics}
         return result, metrics_dict
     except Exception as e:
         logger.warning(f"[_run_pareto_combo] 组合评估失败: {e}")
@@ -781,7 +781,7 @@ def _run_pareto_combo_file(args_tuple):
             min_commission, risk_free_rate, initial_cash, None,
         )
         item = OptimizationResultItem(**result)
-        metrics_dict = {m: getattr(item, m, 0.0) for m in pareto_metrics}
+        metrics_dict = {m: getattr(item, m, float('-inf')) for m in pareto_metrics}
         return result, metrics_dict
     except Exception as e:
         logger.warning(f"[_run_pareto_combo_file] 组合评估失败: {e}")
@@ -841,7 +841,7 @@ def _crowding_distance(front_metrics: list[dict], pareto_metrics: list[str]) -> 
     # 改进 (2025-06-15aj): 单指标时 crowding distance 退化为简单排序，直接返回均匀分布的距离
     if len(pareto_metrics) == 1:
         m = pareto_metrics[0]
-        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, 0.0))
+        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, float('-inf')))
         distances = [0.0] * n
         distances[sorted_indices[0]] = float('inf')
         distances[sorted_indices[-1]] = float('inf')
@@ -854,12 +854,12 @@ def _crowding_distance(front_metrics: list[dict], pareto_metrics: list[str]) -> 
     distances = [0.0] * n
     for m in pareto_metrics:
         # 改进 (2025-06-15ag): KeyError 防御——缺失指标时回退到 0.0
-        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, 0.0))
+        sorted_indices = sorted(range(n), key=lambda i: front_metrics[i].get(m, float('-inf')))
         # 边界点（最优和最差）给予无穷大距离，确保保留极端解
         distances[sorted_indices[0]] = float('inf')
         distances[sorted_indices[-1]] = float('inf')
-        m_min = front_metrics[sorted_indices[0]].get(m, 0.0)
-        m_max = front_metrics[sorted_indices[-1]].get(m, 0.0)
+        m_min = front_metrics[sorted_indices[0]].get(m, float('-inf'))
+        m_max = front_metrics[sorted_indices[-1]].get(m, float('-inf'))
         if m_max == m_min:
             continue
         # 中间点的拥挤距离：相邻点在归一化后的差值
@@ -1213,7 +1213,7 @@ class _BoundedResultBuffer:
         self._counter = itertools.count()  # 单调递增 tiebreaker，避免回绕问题
 
     def add(self, item: OptimizationResultItem) -> None:
-        val = getattr(item, self.metric_key, 0.0)
+        val = getattr(item, self.metric_key, float('-inf'))
         entry = (val, next(self._counter), item)
         if len(self._heap) < self.max_size:
             heapq.heappush(self._heap, entry)
@@ -1441,7 +1441,9 @@ def compare_optimization_runs(strategy_name: str, metric: str = 'sharpe_ratio', 
         values = []
         for h in history:
             bm = h.get('best_metrics', {})
-            values.append(bm.get(metric, 0.0))
+            values.append(bm.get(metric))
+
+        values = [v for v in values if v is not None]
 
         return {
             'strategy_name': strategy_name,
@@ -2621,7 +2623,7 @@ class BacktestEngine:
                                         _buffer.add(item)
                                         # 改进 (2025-06-15i): 早停检测
                                         if _early_stop_patience > 0:
-                                            val = getattr(item, metric_key, 0.0)
+                                            val = getattr(item, metric_key, float('-inf'))
                                             if val > _best_so_far:
                                                 _best_so_far = val
                                                 _no_improve_count = 0
@@ -2712,10 +2714,11 @@ class BacktestEngine:
                     strategy = strategy_cls(**params)
                     result = self.run(strategy, data)
                     # 改进 (2025-06-15h): 串行阶段也使用 BoundedResultBuffer
-                    _buffer.add(_build_result_item(params, result.metrics))
+                    item = _build_result_item(params, result.metrics)
+                    _buffer.add(item)
                     # 改进 (2025-06-15i): 串行阶段早停检测
                     if _early_stop_patience > 0:
-                        val = getattr(_build_result_item(params, result.metrics), metric_key, 0.0)
+                        val = getattr(item, metric_key, float('-inf'))
                         if val > _best_so_far:
                             _best_so_far = val
                             _no_improve_count = 0
@@ -2791,13 +2794,14 @@ class BacktestEngine:
                 # 运行回测
                 result = self.run(strategy, data)
                 metrics = result.metrics
+                item = _build_result_item(params, metrics)
 
-                _buffer.add(_build_result_item(params, metrics))
+                _buffer.add(item)
 
                 # 改进 (2025-06-15i): 顺序模式早停检测
                 _es_patience = getattr(optimization_config, 'early_stop_patience', 0)
                 if _es_patience > 0:
-                    _es_val = getattr(_build_result_item(params, metrics), metric_key, 0.0)
+                    _es_val = getattr(item, metric_key, float('-inf'))
                     if _es_val > _best_so_far:
                         _best_so_far = _es_val
                         _no_improve_count = 0
@@ -3109,7 +3113,7 @@ class BacktestEngine:
         _reverse_sort = _sort_metric != 'max_drawdown_pct'
         _sorted_front = sorted(
             pareto_front,
-            key=lambda x: x[1].get(_sort_metric, 0.0),
+            key=lambda x: x[1].get(_sort_metric, float('-inf')),
             reverse=_reverse_sort,
         )
         _min_top_n = len(pareto_metrics) * 3
@@ -3207,7 +3211,7 @@ class BacktestEngine:
                 except Exception:
                     pass
 
-            return getattr(item, metric_key, 0.0)
+            return getattr(item, metric_key, float('-inf'))
 
         # 禁用 optuna 的日志输出
         optuna.logging.set_verbosity(optuna.logging.WARNING)

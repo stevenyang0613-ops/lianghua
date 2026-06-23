@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"
+    MINIMAX_API_KEY: str = ""
+    MINIMAX_API_BASE: str = "https://api.minimaxi.chat/v1"
+    MINIMAX_MODEL: str = "minimax-m3"
     TAVILY_API_KEY: str = ""
     GITHUB_TOKEN: str = ""
 
@@ -60,10 +63,15 @@ class Settings(BaseSettings):
     TUSHARE_TOKEN: str = ""
 
     # AKShare 代理配置
+    # 注意：当代理 token 失效时，禁用代理让 AKShare 直连（macOS EM 接口可能间歇性被封，
+    # 但 THS/Sina/Baidu 等多数接口可正常工作）。若需要 EM 接口稳定，请更新 token。
     AKSHARE_PROXY_GATEWAY: str = "101.201.173.125"
-    AKSHARE_PROXY_TOKEN: str = "20260614AE9RZAEJ"
-    AKSHARE_PROXY_ENABLED: bool = True
-    AKSHARE_PROXY_RETRY: int = 15
+    AKSHARE_PROXY_TOKEN: str = ""
+    AKSHARE_PROXY_ENABLED: bool = False
+    AKSHARE_PROXY_RETRY: int = 5
+
+    # 妙想 MX 金融数据
+    MX_APIKEY: str = ""
 
     # 日志
     LOG_DIR: str = str(Path.home() / "Library" / "Logs" / "LiangHua")

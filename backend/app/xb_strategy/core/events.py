@@ -326,6 +326,8 @@ class DiscountArbitrageStrategy:
         cb_cost = cb.close * 1.0002  # 含佣金
 
         # 转股获得股数
+        if cb.conversion_price <= 0:
+            return {"cb_cost": 0.0, "shares_per_bond": 0.0, "conversion_value": 0.0, "sell_revenue": 0.0, "profit": 0.0, "profit_pct": 0.0}
         shares_per_bond = 100 / cb.conversion_price  # 每张转债可转股数
 
         # 转股价值
@@ -336,7 +338,7 @@ class DiscountArbitrageStrategy:
 
         # 净收益
         profit = sell_revenue - cb_cost
-        profit_pct = profit / cb_cost * 100
+        profit_pct = profit / cb_cost * 100 if cb_cost > 0 else 0
 
         return {
             "cb_cost": round(cb_cost, 2),
@@ -384,7 +386,7 @@ class PutArbitrageStrategy:
             return None
 
         # 预期收益 = 回售价 - 买入价
-        expected_return = (cb.put_price - cb.close) / cb.close * 100
+        expected_return = (cb.put_price - cb.close) / cb.close * 100 if cb.close > 0 else 0
 
         return EventOpportunity(
             cb_code=cb.code,

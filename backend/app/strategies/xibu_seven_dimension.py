@@ -285,7 +285,7 @@ class XibuSevenDimensionStrategy(Strategy):
             reasons.append(f"信用评分{credit_score:.1f}<{self.get_param('min_credit_score')}")
 
         # 2. 转股溢价率检查
-        if row.get('premium_ratio', 0) > self.get_param('max_premium'):
+        if (row.get('premium_ratio') or 0) > self.get_param('max_premium'):
             passed = False
             reasons.append(f"溢价率{row['premium_ratio']:.1f}%>{self.get_param('max_premium')}%")
 

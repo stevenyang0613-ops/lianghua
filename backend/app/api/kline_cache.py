@@ -73,9 +73,19 @@ def cache_kline_data_bulk(stock_code: str, df: pd.DataFrame):
         d = pd.to_datetime(r["date"]).strftime("%Y-%m-%d")
         rows.append((
             stock_code, d,
-            float(r.get("open", 0) or 0), float(r.get("close", 0) or 0),
-            float(r.get("high", 0) or 0), float(r.get("low", 0) or 0),
-            float(r.get("amount", 0) or 0),
+            _o = r.get("open")
+            _c = r.get("close")
+            _h = r.get("high")
+            _l = r.get("low")
+            _a = r.get("amount")
+            rows.append((
+                stock_code, d,
+                float(_o) if _o is not None else None,
+                float(_c) if _c is not None else None,
+                float(_h) if _h is not None else None,
+                float(_l) if _l is not None else None,
+                float(_a) if _a is not None else None,
+            ))
         ))
     conn.executemany(
         "INSERT OR REPLACE INTO kline_cache VALUES (?,?,?,?,?,?,?)", rows

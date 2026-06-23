@@ -116,6 +116,8 @@ class TimingSignalBroadcaster:
         for callback in list(self._subscribers):
             try:
                 tasks.append(callback(signal))
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[TimingWS] Broadcast error: {e}")
 

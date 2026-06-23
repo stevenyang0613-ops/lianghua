@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 router = APIRouter(prefix="/fund_flow", tags=["fund_flow"])
 logger = logging.getLogger(__name__)
@@ -82,7 +83,12 @@ async def _get_individual_df():
     # 发起请求
     async def _fetch():
         import akshare as ak
-        df = await asyncio.to_thread(ak.stock_fund_flow_individual)
+        import pandas as pd
+        from app.engine.data_enrich import _run_with_timeout
+        df = await asyncio.to_thread(
+            _run_with_timeout, ak.stock_fund_flow_individual,
+            timeout=30.0, default=pd.DataFrame(), op_name="stock_fund_flow_individual"
+        )
         _set_cached("individual_df", df)
         return df
 
@@ -103,56 +109,77 @@ class IndividualFundFlow(BaseModel):
     """个股资金流向"""
     code: str
     name: str
-    price: float
-    change_pct: float
-    turnover_rate: float
-    inflow: float
-    outflow: float
-    net_inflow: float
-    amount: float
+    price: Optional[float] = None
+    change_pct: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    inflow: Optional[float] = None
+    outflow: Optional[float] = None
+    net_inflow: Optional[float] = None
+    amount: Optional[float] = None
 
 
 class IndustryFundFlow(BaseModel):
     """行业资金流向"""
     rank: int
     industry: str
-    industry_index: float
-    change_pct: float
-    inflow: float
-    outflow: float
-    net_inflow: float
+    industry_index: Optional[float] = None
+    change_pct: Optional[float] = None
+    inflow: Optional[float] = None
+    outflow: Optional[float] = None
+    net_inflow: Optional[float] = None
     company_count: int
     leading_stock: str
-    leading_change: float
-    current_price: float
+    leading_change: Optional[float] = None
+    current_price: Optional[float] = None
 
 
 class MainFundFlow(BaseModel):
     """主力资金流向"""
     code: str
     name: str
-    price: float
-    change_pct: float
-    turnover_rate: float
-    main_net_inflow: float
-    super_large_net: float
-    large_net: float
-    medium_net: float
-    small_net: float
-    inflow: float
-    outflow: float
-    amount: float
+    price: Optional[float] = None
+    change_pct: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    main_net_inflow: Optional[float] = None
+    super_large_net: Optional[float] = None
+    large_net: Optional[float] = None
+    medium_net: Optional[float] = None
+    small_net: Optional[float] = None
+    inflow: Optional[float] = None
+    outflow: Optional[float] = None
+    amount: Optional[float] = None
     is_estimated: bool = True  # True=按比例估算, False=真实数据
+
+
+class IndividualFundFlowResponse(BaseModel):
+    """个股资金流向列表响应"""
+    stocks: List[IndividualFundFlow]
+    total: int
+
+
+class MainFundFlowResponse(BaseModel):
+    """主力资金流向列表响应"""
+    stocks: List[MainFundFlow]
+    total: int
 
 
 class TurnoverRank(BaseModel):
     """换手率排名"""
     code: str
     name: str
-    price: float
-    change_pct: float
+    price: Optional[float] = None
+    change_pct: Optional[float] = None
     turnover_rate: float
     amount: float
+
+
+class TurnoverRankResponse(BaseModel):
+    """换手率排名列表响应"""
+    stocks: List[TurnoverRank]
+    total: int
+
+    net_inflow: Optional[float] = None
+    industry: Optional[str] = None
 
 
 class HsgtFundFlow(BaseModel):
@@ -177,7 +204,7 @@ class HsgtFundFlow(BaseModel):
 #  API Endpoints
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/individual", response_model=List[IndividualFundFlow])
+@router.get("/individual", response_model=IndividualFundFlowResponse)
 async def get_individual_fund_flow(
     limit: int = Query(100, ge=1, le=500, description="返回条数限制"),
 ):
@@ -190,20 +217,22 @@ async def get_individual_fund_flow(
     """
     cached = _get_cached("individual")
     if cached:
-        return cached[:limit]
+        return {"stocks": cached[:limit], "total": len(cached[:limit])}
 
     try:
         df = await _get_individual_df()
         if df.empty:
-            return []
+            return {"stocks": [], "total": 0}
 
         df = _normalize_individual_df(df)
         df = df.sort_values("net_inflow", ascending=False)
 
         result = [IndividualFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("individual", result)
-        return result[:limit]
+        return {"stocks": result[:limit], "total": len(result[:limit])}
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get individual fund flow via AKShare: {e}")
         # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
@@ -216,14 +245,14 @@ async def get_individual_fund_flow(
                 name = _de._name_map.get(code, "")
                 if not name:
                     continue
-                price = spot.get("price", 0) or 0
-                change_pct = spot.get("change_pct", 0) or 0
-                turnover_rate = spot.get("turnover_rate", 0) or 0
-                amount = spot.get("amount", 0) or 0
+                price = spot.get("price") if spot.get("price") is not None else None
+                change_pct = spot.get("change_pct") if spot.get("change_pct") is not None else None
+                turnover_rate = spot.get("turnover_rate") if spot.get("turnover_rate") is not None else None
+                amount = spot.get("amount") if spot.get("amount") is not None else None
                 ff = _de._fund_flow_map.get(code, {})
-                net_main = ff.get("net_main", 0) or 0
-                inflow = (amount + net_main) / 2
-                outflow = (amount - net_main) / 2
+                net_main = ff.get("net_main") if ff.get("net_main") is not None else None
+                inflow = (amount + net_main) / 2 if amount is not None and net_main is not None else None
+                outflow = (amount - net_main) / 2 if amount is not None and net_main is not None else None
                 result.append(IndividualFundFlow(
                     code=code,
                     name=name,
@@ -235,12 +264,12 @@ async def get_individual_fund_flow(
                     net_inflow=net_main,
                     amount=amount,
                 ))
-            result.sort(key=lambda x: x.net_inflow, reverse=True)
+            result.sort(key=lambda x: x.net_inflow or 0, reverse=True)
             _set_cached("individual", result)
-            return result[:limit]
+            return {"stocks": result[:limit], "total": len(result[:limit])}
         except Exception as e2:
             logger.error(f"Failed to get individual fund flow from cache: {e2}")
-            return []
+            return {"stocks": [], "total": 0}
 
 
 @router.get("/industry", response_model=List[IndustryFundFlow])
@@ -278,18 +307,20 @@ async def get_industry_fund_flow(
                 df[col] = df[col].apply(_parse_amount)
         for col in ["change_pct", "leading_change", "current_price", "industry_index"]:
             if col in df.columns:
-                df[col] = df[col].fillna(0)
+                df[col] = df[col].apply(lambda x: x if pd.notna(x) else None)
 
         result = [IndustryFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached(f"industry_{indicator}", result)
         return result
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get industry fund flow: {e}")
         return []
 
 
-@router.get("/main", response_model=List[MainFundFlow])
+@router.get("/main", response_model=MainFundFlowResponse)
 async def get_main_fund_flow(
     limit: int = Query(100, ge=1, le=500, description="返回条数限制"),
 ):
@@ -301,19 +332,19 @@ async def get_main_fund_flow(
     """
     cached = _get_cached("main")
     if cached:
-        return cached[:limit]
+        return {"stocks": cached[:limit], "total": len(cached[:limit])}
 
     # 1) 尝试真实拆分数据
     real_data = await _try_real_fund_flow_rank(limit)
     if real_data is not None:
         _set_cached("main", real_data)
-        return real_data[:limit]
+        return {"stocks": real_data[:limit], "total": len(real_data[:limit])}
 
     # 2) 降级：共享个股数据 + 估算
     try:
         df = await _get_individual_df()
         if df.empty:
-            return []
+            return {"stocks": [], "total": 0}
 
         df = _normalize_individual_df(df)
 
@@ -332,8 +363,10 @@ async def get_main_fund_flow(
 
         result = [MainFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("main", result)
-        return result[:limit]
+        return {"stocks": result[:limit], "total": len(result[:limit])}
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get main fund flow via AKShare: {e}")
         # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
@@ -347,13 +380,13 @@ async def get_main_fund_flow(
                 name = _de._name_map.get(code, "")
                 if not name:
                     continue
-                price = spot.get("price", 0) or 0
-                change_pct = spot.get("change_pct", 0) or 0
-                turnover_rate = spot.get("turnover_rate", 0) or 0
-                amount = spot.get("amount", 0) or 0
-                net_main = ff.get("net_main", 0) or 0
-                inflow = (amount + net_main) / 2
-                outflow = (amount - net_main) / 2
+                price = spot.get("price") if spot.get("price") is not None else None
+                change_pct = spot.get("change_pct") if spot.get("change_pct") is not None else None
+                turnover_rate = spot.get("turnover_rate") if spot.get("turnover_rate") is not None else None
+                amount = spot.get("amount") if spot.get("amount") is not None else None
+                net_main = ff.get("net_main") if ff.get("net_main") is not None else None
+                inflow = (amount + net_main) / 2 if amount is not None and net_main is not None else None
+                outflow = (amount - net_main) / 2 if amount is not None and net_main is not None else None
                 result.append(MainFundFlow(
                     code=code,
                     name=name,
@@ -361,24 +394,24 @@ async def get_main_fund_flow(
                     change_pct=change_pct,
                     turnover_rate=turnover_rate,
                     main_net_inflow=net_main,
-                    super_large_net=ff.get("net_super", 0) or 0,
-                    large_net=ff.get("net_big", 0) or 0,
-                    medium_net=net_main * 0.3,
-                    small_net=net_main * 0.15,
+                    super_large_net=ff.get("net_super") if ff.get("net_super") is not None else None,
+                    large_net=ff.get("net_big") if ff.get("net_big") is not None else None,
+                    medium_net=net_main * 0.3 if net_main is not None else None,
+                    small_net=net_main * 0.15 if net_main is not None else None,
                     inflow=inflow,
                     outflow=outflow,
                     amount=amount,
                     is_estimated=True,
                 ))
-            result.sort(key=lambda x: abs(x.main_net_inflow), reverse=True)
+            result.sort(key=lambda x: abs(x.main_net_inflow or 0), reverse=True)
             _set_cached("main", result)
-            return result[:limit]
+            return {"stocks": result[:limit], "total": len(result[:limit])}
         except Exception as e2:
             logger.error(f"Failed to get main fund flow from cache: {e2}")
-            return []
+            return {"stocks": [], "total": 0}
 
 
-@router.get("/turnover_rank", response_model=List[TurnoverRank])
+@router.get("/turnover_rank", response_model=TurnoverRankResponse)
 async def get_turnover_rank(
     limit: int = Query(100, ge=1, le=500, description="返回条数限制"),
 ):
@@ -389,20 +422,22 @@ async def get_turnover_rank(
     """
     cached = _get_cached("turnover")
     if cached:
-        return cached[:limit]
+        return {"stocks": cached[:limit], "total": len(cached[:limit])}
 
     try:
         df = await _get_individual_df()
         if df.empty:
-            return []
+            return {"stocks": [], "total": 0}
 
         df = _normalize_individual_df(df)
         df = df.sort_values("turnover_rate", ascending=False)
 
         result = [TurnoverRank(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("turnover", result)
-        return result[:limit]
+        return {"stocks": result[:limit], "total": len(result[:limit])}
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get turnover rank via AKShare: {e}")
         # Fallback: 使用 data_enrich 缓存（macOS Electron 中 PyMiniRacer 会导致 AKShare 失败）
@@ -418,17 +453,17 @@ async def get_turnover_rank(
                 result.append(TurnoverRank(
                     code=code,
                     name=name,
-                    price=spot.get("price", 0) or 0,
-                    change_pct=spot.get("change_pct", 0) or 0,
-                    turnover_rate=spot.get("turnover_rate", 0) or 0,
-                    amount=spot.get("amount", 0) or 0,
+                    price=spot.get("price") if spot.get("price") is not None else None,
+                    change_pct=spot.get("change_pct") if spot.get("change_pct") is not None else None,
+                    turnover_rate=spot.get("turnover_rate") if spot.get("turnover_rate") is not None else None,
+                    amount=spot.get("amount") if spot.get("amount") is not None else None,
                 ))
             result.sort(key=lambda x: x.turnover_rate, reverse=True)
             _set_cached("turnover", result)
-            return result[:limit]
+            return {"stocks": result[:limit], "total": len(result[:limit])}
         except Exception as e2:
             logger.error(f"Failed to get turnover rank from cache: {e2}")
-            return []
+            return {"stocks": [], "total": 0}
 
 
 @router.get("/hsgt", response_model=List[HsgtFundFlow])
@@ -489,6 +524,8 @@ async def get_hsgt_fund_flow():
         _set_cached("hsgt", result)
         return result
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get HSGT fund flow: {e}")
         return []
@@ -512,17 +549,17 @@ def _normalize_individual_df(df):
     for col in ["change_pct", "turnover_rate"]:
         if col in df.columns and df[col].dtype == object:
             df[col] = df[col].astype(str).str.replace("%", "", regex=False)
-            df[col] = df[col].apply(_safe_float)
+            df[col] = df[col].apply(safe_float)
 
     # 解析金额
     for col in ["inflow", "outflow", "net_inflow", "amount"]:
         if col in df.columns:
             df[col] = df[col].apply(_parse_amount)
 
-    # 填充缺失值
+    # 缺失值保持为 None（NaN 语义化），不强制填充为 0
     for col in ["price", "change_pct", "turnover_rate", "inflow", "outflow", "net_inflow", "amount"]:
         if col in df.columns:
-            df[col] = df[col].fillna(0)
+            df[col] = df[col].apply(lambda x: x if pd.notna(x) else None)
 
     return df
 
@@ -570,10 +607,10 @@ async def _try_real_fund_flow_rank(limit: int):
         }]
         df = df.drop(columns=drop_cols, errors="ignore")
 
-        # 补充缺失字段
+        # 补充缺失字段（保持 None 语义，不强制填充为 0）
         for col in ["inflow", "outflow", "amount", "price", "change_pct", "turnover_rate"]:
             if col not in df.columns:
-                df[col] = 0.0
+                df[col] = None
 
         df["is_estimated"] = False
 
@@ -581,39 +618,41 @@ async def _try_real_fund_flow_rank(limit: int):
         for col in ["change_pct", "turnover_rate"]:
             if col in df.columns and df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace("%", "", regex=False)
-                df[col] = df[col].apply(_safe_float)
+                df[col] = df[col].apply(safe_float)
 
-        # 按主力净流入排序
-        df = df.sort_values("main_net_inflow", ascending=False)
+        # 缺失值保持为 None
+        for col in ["price", "change_pct", "turnover_rate", "main_net_inflow", "super_large_net", "large_net", "medium_net", "small_net", "inflow", "outflow", "amount"]:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: x if pd.notna(x) else None)
+
+        # 按主力净流入排序（None 值放最后）
+        df["_sort_key"] = df["main_net_inflow"].apply(lambda x: x if x is not None else float('-inf'))
+        df = df.sort_values("_sort_key", ascending=False).drop(columns=["_sort_key"])
 
         result = [MainFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         logger.info(f"Got real fund flow rank: {len(result)} stocks")
         return result[:limit]
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.warning(f"stock_individual_fund_flow_rank unavailable (falling back to estimation): {e}")
         return None
 
 
-def _parse_amount(value) -> float:
-    """解析金额字符串（如 '5.24亿' -> 5.24, '5676.70万' -> 0.567670）"""
+def _parse_amount(value) -> Optional[float]:
+    """解析金额字符串（如 '5.24亿' -> 5.24, '5676.70万' -> 0.567670），缺失返回 None"""
+    if value is None or value == "" or value == "-":
+        return None
     if isinstance(value, (int, float)):
-        return float(value)
+        v = float(value)
+        return v if v == v else None  # NaN check
     if not isinstance(value, str):
-        return 0.0
+        return None
     value = value.strip()
     if value.endswith("亿"):
-        return _safe_float(value[:-1])
+        return safe_float(value[:-1])
     elif value.endswith("万"):
-        return _safe_float(value[:-1]) / 10000
-    return _safe_float(value)
-
-
-def _safe_float(value) -> float:
-    """安全转换为 float"""
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value).replace(",", "").strip())
-    except (ValueError, TypeError):
-        return 0.0
+        v = safe_float(value[:-1])
+        return v / 10000 if v is not None else None
+    return safe_float(value)

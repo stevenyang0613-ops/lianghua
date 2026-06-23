@@ -401,7 +401,7 @@ class BacktestEngine:
         values["return"] = values["value"].pct_change()
 
         # 总收益
-        total_return = (values["value"].iloc[-1] / values["value"].iloc[0]) - 1
+        total_return = (values["value"].iloc[-1] / values["value"].iloc[0]) - 1 if values["value"].iloc[0] != 0 else 0
 
         # 最大回撤
         cummax = values["value"].cummax()
@@ -902,7 +902,7 @@ class MemoryOptimizedBacktest:
                         else:
                             pos = portfolio.positions[signal.cb_code]
                             total_qty = pos.quantity + signal.quantity
-                            pos.avg_cost = (pos.cost_basis + signal.price * signal.quantity) / total_qty
+                            pos.avg_cost = (pos.cost_basis + signal.price * signal.quantity) / total_qty if total_qty > 0 else 0
                             pos.quantity = total_qty
                             pos.cost_basis = pos.avg_cost * total_qty
                         trade_count += 1

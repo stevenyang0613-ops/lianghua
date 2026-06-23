@@ -22,6 +22,7 @@ Cache TTL override (hours):
 """
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import os
@@ -120,11 +121,7 @@ _METRICS_NAME_MAP = {
     "_refresh_earnings_express_cache": "_refresh_earnings_express_cache",
     "_refresh_restricted_release_cache": "_refresh_restricted_release_cache",
     "_refresh_main_biz_cache": "_refresh_main_biz_cache",
-    "_refresh_analyst_rank_cache": "_refresh_analyst_rank_cache",
-    "_refresh_macro_cpi_cache": "_refresh_macro_cpi_cache",
-    "_refresh_macro_ppi_cache": "_refresh_macro_ppi_cache",
-    "_refresh_macro_m2_cache": "_refresh_macro_m2_cache",
-    "_refresh_macro_lpr_cache": "_refresh_macro_lpr_cache",
+    "_refresh_stock_name_cache": "_refresh_stock_name_cache",
 }
 
 
@@ -159,6 +156,7 @@ _CACHE_FILES = {
     "earnings_express": _CACHE_DIR / "stock_earnings_express.json",
     "restricted_release": _CACHE_DIR / "stock_restricted_release.json",
     "bond_price": _CACHE_DIR / "bond_price.json",
+    "main_biz": _CACHE_DIR / "stock_main_biz.json",
 }
 
 # Default TTLs in seconds
@@ -188,11 +186,6 @@ _TTL = {
     "restricted_release": 86400 * 3,
     "bond_price": 300,
     "main_biz": 86400 * 7,
-    "analyst_rank": 86400 * 7,
-    "macro_cpi": 86400 * 7,
-    "macro_ppi": 86400 * 7,
-    "macro_m2": 86400 * 7,
-    "macro_lpr": 86400 * 7,
 }
 
 
@@ -245,13 +238,13 @@ def _try_tdx_spot_fallback(codes: list[str], pe_map: dict, pb_map: dict, price_m
             logger.info(f"[TDX] Spot: filled PE={filled_pe}, PB={filled_pb}")
     # Also try to fill price for bond stock codes
     if price_map and codes:
-        missing_price = [c for c in codes if c not in price_map or not price_map.get(c)]
+        missing_price = [c for c in codes if c not in price_map or price_map.get(c, {}).get("price") is None]
         if missing_price:
             tdx_q = adapter.fetch_quotes(missing_price)
             for code, q in tdx_q.items():
                 if code not in price_map:
                     price_map[code] = {}
-                if not price_map[code].get("price"):
+                if price_map[code].get("price") is None:
                     price_map[code]["price"] = q.get("price")
                     price_map[code]["change_pct"] = q.get("change_pct")
 
@@ -260,7 +253,7 @@ def _try_tdx_fin_fallback(codes: list[str], fin_map: dict):
     """从 TDX 补充缺失的财务数据"""
     if not codes or not _TRY_TDX_IMPORTED:
         return
-    missing = [c for c in codes if c not in fin_map or not fin_map.get(c, {}).get("roe")]
+    missing = [c for c in codes if c not in fin_map or fin_map.get(c, {}).get("roe") is None]
     if not missing:
         return
     from app.adapters.tdx_adapter import get_tdx_adapter
@@ -272,7 +265,7 @@ def _try_tdx_fin_fallback(codes: list[str], fin_map: dict):
         if code not in fin_map:
             fin_map[code] = {}
         for key in ("pe", "pb", "roe", "eps", "bps"):
-            if info.get(key) is not None and not fin_map[code].get(key):
+            if info.get(key) is not None and fin_map[code].get(key) is None:
                 fin_map[code][key] = info[key]
                 if key == "roe":
                     filled += 1
@@ -491,8 +484,8 @@ def _refresh_spot_cache():
                         "volume": tencent_amount if tencent_amount is not None else tencent_volume,
                         "amount": tencent_amount if tencent_amount is not None else tencent_volume,
                         "pe": pe if pe and 0 < pe < 1000 else None,
-                        "pb": _safe_float(fields[46]) if len(fields) > 46 and 0 < _safe_float(fields[46]) < 100 else None,
-                        "turnover_rate": _safe_float(fields[38]) if len(fields) > 38 else None,
+                        "pb": None,  # Tencent API does not provide PB; will be filled by EM ulist
+                        "turnover_rate": None,  # Tencent API does not provide turnover_rate
                     }
                 return out
             except Exception:
@@ -535,7 +528,7 @@ def _refresh_spot_cache():
                 try:
                     r = requests.get(
                         'https://push2.eastmoney.com/api/qt/ulist.np/get',
-                        params={'fields': 'f12,f9,f23,f8', 'secids': secids,
+                        params={'fields': 'f12,f9,f23,f8,f20,f21', 'secids': secids,
                                 'ut': 'bd1d9ddb04089700cf9c27f6f7426281'},
                         headers=_headers_em, timeout=15,
                     )
@@ -551,6 +544,8 @@ def _refresh_spot_cache():
                                     'pe': _safe_float(item.get('f9')),
                                     'pb': _safe_float(item.get('f23')),
                                     'turnover_rate': _safe_float(item.get('f8')),
+                                    'total_mv': _safe_float(item.get('f20')),
+                                    'circ_mv': _safe_float(item.get('f21')),
                                 }
                     return out
                 except Exception:
@@ -584,6 +579,14 @@ def _refresh_spot_cache():
                                 if tr_v and 0 < tr_v < 10000:
                                     if result[code].get('turnover_rate') is None:
                                         result[code]['turnover_rate'] = round(tr_v / 100, 2)
+                                total_mv_v = vals.get('total_mv')
+                                if total_mv_v and total_mv_v > 0:
+                                    if result[code].get('total_mv') is None:
+                                        result[code]['total_mv'] = round(total_mv_v / 10000, 2)
+                                circ_mv_v = vals.get('circ_mv')
+                                if circ_mv_v and circ_mv_v > 0:
+                                    if result[code].get('circ_mv') is None:
+                                        result[code]['circ_mv'] = round(circ_mv_v / 10000, 2)
                     except Exception:
                         pass
                     em_done += 1
@@ -619,6 +622,9 @@ def _refresh_spot_cache():
         return len(result)
     except Exception as e:
         logger.warning(f"[Spot] Fetch failed: {e}")
+        if cached:
+            logger.info(f"[Spot] Loading existing cache ({len(cached)} stocks)")
+            return len(cached)
         return 0
 
 
@@ -735,19 +741,26 @@ def _refresh_debt_cache():
                     continue
                 # Use default=None so "is not None" check is meaningful
                 debt_ratio = _safe_float(r.get("资产负债率", None), default=None)
-                cash = _safe_float(r.get("资产-货币资金", None)) or 0
-                receivables = _safe_float(r.get("资产-应收账款", None)) or 0
-                inventory = _safe_float(r.get("资产-存货", None)) or 0
-                total_debt = _safe_float(r.get("负债-总负债", None)) or 0
+                cash = _safe_float(r.get("资产-货币资金", None))
+                receivables = _safe_float(r.get("资产-应收账款", None))
+                inventory = _safe_float(r.get("资产-存货", None))
+                total_debt = _safe_float(r.get("负债-总负债", None))
 
                 entry = {}
                 if debt_ratio is not None:
                     entry["debt_ratio"] = debt_ratio
-                if total_debt > 0 and (cash + receivables + inventory) > 0:
-                    approx_ca = cash + receivables + inventory
-                    cr = approx_ca / (total_debt * 0.65)
-                    if 0 < cr < 50:
-                        entry["current_ratio"] = round(cr, 2)
+                if total_debt is not None and total_debt > 0:
+                    approx_ca = 0
+                    if cash is not None:
+                        approx_ca += cash
+                    if receivables is not None:
+                        approx_ca += receivables
+                    if inventory is not None:
+                        approx_ca += inventory
+                    if approx_ca > 0:
+                        cr = approx_ca / (total_debt * 0.65)
+                        if 0 < cr < 50:
+                            entry["current_ratio"] = round(cr, 2)
                 if entry:
                     result[code] = entry
             except Exception as row_err:
@@ -822,6 +835,44 @@ def _refresh_fund_flow_cache():
                 f"{len(real)} stocks (cache age: {_time.time() - cached.get('_ts', 0):.0f}s)"
             )
             return len(real)
+    # Source 2 fallback: stock_fund_flow_individual per bond stocks
+    try:
+        import akshare as ak
+        ff_codes = list(cached.keys()) if cached else []
+        if not ff_codes:
+            try:
+                df_bond = ak.bond_zh_cov()
+                ff_codes = [str(r.get("正股代码", "")).strip() for _, r in df_bond.iterrows() if str(r.get("正股代码", "")).strip().isdigit() and len(str(r.get("正股代码", "")).strip()) == 6]
+            except Exception:
+                pass
+        if ff_codes:
+            logger.info(f"[FundFlow] Trying stock_fund_flow_individual fallback for {len(ff_codes)} stocks...")
+            result2 = {}
+            for code in ff_codes[:500]:
+                try:
+                    df = ak.stock_fund_flow_individual(symbol=code)
+                    if df is not None and len(df) > 0:
+                        latest = df.iloc[0]
+                        entry = {
+                            "net_main": _safe_float(latest.get("主力净流入-净额")),
+                            "net_main_pct": _safe_float(latest.get("主力净流入-净占比")),
+                        }
+                        if "超大单净流入-净额" in df.columns:
+                            entry["net_super"] = _safe_float(latest.get("超大单净流入-净额"))
+                        if "大单净流入-净额" in df.columns:
+                            entry["net_big"] = _safe_float(latest.get("大单净流入-净额"))
+                        if entry.get("net_main") is not None:
+                            result2[code] = entry
+                except Exception:
+                    pass
+            if result2:
+                merged = {**cached, **result2}
+                _save_cache(cache_path, merged)
+                logger.info(f"[FundFlow] stock_fund_flow_individual fallback: {len(result2)} stocks merged → {len(merged)} total")
+                return len(merged)
+    except Exception as e2:
+        logger.warning(f"[FundFlow] stock_fund_flow_individual fallback failed: {e2}")
+
     logger.warning("[FundFlow] All attempts failed and no cache available, fund flow data will be empty")
     return 0
 
@@ -944,20 +995,47 @@ def _refresh_buyback_cache():
 
     try:
         import akshare as ak
-        df = ak.stock_repurchase_em()
         result = {}
-        for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
-            amount = _safe_float(r.get("已回购金额", None))
-            if code and amount and amount > 0:
-                # deduplicate: keep the largest amount if multiple rows
-                if code in result:
-                    result[code] = max(result[code], amount)
-                else:
-                    result[code] = amount
-        _save_cache(cache_path, result)
-        logger.info(f"[Buyback] Updated: {len(result)} stocks")
-        return len(result)
+
+        # Source 1: EM
+        try:
+            df = ak.stock_repurchase_em()
+            if df is not None and len(df) > 0:
+                for _, r in df.iterrows():
+                    code = str(r.get("股票代码", "")).strip()
+                    amount = _safe_float(r.get("已回购金额", None))
+                    if code and amount and amount > 0:
+                        if code in result:
+                            result[code] = max(result[code], amount)
+                        else:
+                            result[code] = amount
+        except Exception as e:
+            logger.warning(f"[Buyback] EM failed: {e}")
+
+        # Source 2: THS fallback
+        if len(result) < 100:
+            try:
+                df_ths = ak.stock_repurchase_ths()
+                if df_ths is not None and len(df_ths) > 0:
+                    for _, r in df_ths.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        if not code:
+                            continue
+                        done = _safe_float(r.get("已回购金额")) or _safe_float(r.get("回购金额"))
+                        plan = _safe_float(r.get("计划回购金额区间-上限")) or _safe_float(r.get("计划回购金额"))
+                        amount = done if done and done > 0 else plan
+                        if amount and amount > 0 and code not in result:
+                            result[code] = amount
+                    logger.info(f"[Buyback] THS: {len(result)} stocks total")
+            except Exception as e_ths:
+                logger.warning(f"[Buyback] THS fallback failed: {e_ths}")
+
+        if result:
+            _save_cache(cache_path, result)
+            logger.info(f"[Buyback] Updated: {len(result)} stocks")
+            return len(result)
+        logger.warning("[Buyback] All sources empty, keeping existing")
+        return len(cached) if cached else 0
     except Exception as e:
         logger.warning(f"[Buyback] Fetch failed: {e}")
         return 0
@@ -1106,8 +1184,8 @@ def _refresh_bond_outstanding_cache():
         result = {}
         for _, r in df.iterrows():
             code = str(r.get("代码", "")).strip()
-            remaining = _safe_float(r.get("剩余规模", 0))
-            if code and remaining and remaining > 0:
+            remaining = _safe_float(r.get("剩余规模"))
+            if code and remaining is not None and remaining > 0:
                 result[code] = remaining
         if result:
             logger.info(f"[Outstanding] JSL: {len(result)} bonds")
@@ -1124,8 +1202,8 @@ def _refresh_bond_outstanding_cache():
                     if not code:
                         continue
                     if code not in result:
-                        issue_scale = _safe_float(r.get("发行规模", 0))
-                        if issue_scale > 0:
+                        issue_scale = _safe_float(r.get("发行规模"))
+                        if issue_scale is not None and issue_scale > 0:
                             result[code] = round(issue_scale, 2)
                             count_added += 1
                 logger.info(f"[Outstanding] Added {count_added} bonds from bond_zh_cov fallback")
@@ -1234,14 +1312,14 @@ def _refresh_bond_price_cache():
                     if not code or not code.isdigit() or len(code) != 6:
                         continue
                     entry = {}
-                    price = _safe_float(r.get("trade", 0))
-                    if price and price > 0 and abs(price - 100.0) > 0.01:
+                    price = _safe_float(r.get("trade"))
+                    if price is not None and price > 0 and abs(price - 100.0) > 0.01:
                         entry["price"] = price
-                    change_pct = _safe_float(r.get("changepercent", 0))
+                    change_pct = _safe_float(r.get("changepercent"))
                     if change_pct is not None:
                         entry["change_pct"] = change_pct
-                    volume = _safe_float(r.get("amount", 0))
-                    if volume and volume > 0:
+                    volume = _safe_float(r.get("amount"))
+                    if volume is not None and volume > 0:
                         entry["volume"] = volume
                     if entry:
                         result[code] = entry
@@ -1266,59 +1344,59 @@ def _refresh_bond_price_cache():
 
                     # Price: only override if not already set by EM
                     if "price" not in entry:
-                        price = _safe_float(r.get("现价", 0))
-                        if price and price > 0 and abs(price - 100.0) > 0.01:
+                        price = _safe_float(r.get("现价"))
+                        if price is not None and price > 0 and abs(price - 100.0) > 0.01:
                             entry["price"] = price
                     # Change pct: only override if not already set
                     if "change_pct" not in entry:
-                        change_pct = _safe_float(r.get("涨跌幅", 0))
+                        change_pct = _safe_float(r.get("涨跌幅"))
                         if change_pct is not None:
                             entry["change_pct"] = change_pct
                     # Volume: only override if not already set
                     if "volume" not in entry:
-                        volume = _safe_float(r.get("成交额", 0))
-                        if volume and volume > 0:
+                        volume = _safe_float(r.get("成交额"))
+                        if volume is not None and volume > 0:
                             entry["volume"] = volume
 
                     # Always add enriched fields from JISILU
-                    stock_price = _safe_float(r.get("正股价", 0))
-                    if stock_price and stock_price > 0:
+                    stock_price = _safe_float(r.get("正股价"))
+                    if stock_price is not None and stock_price > 0:
                         entry["stock_price"] = stock_price
-                    stock_change = _safe_float(r.get("正股涨跌", 0))
+                    stock_change = _safe_float(r.get("正股涨跌"))
                     if stock_change is not None:
                         entry["stock_change_pct"] = stock_change
-                    conv_price = _safe_float(r.get("转股价", 0))
-                    if conv_price and conv_price > 0:
+                    conv_price = _safe_float(r.get("转股价"))
+                    if conv_price is not None and conv_price > 0:
                         entry["conversion_price"] = conv_price
-                    conv_value = _safe_float(r.get("转股价值", 0))
-                    if conv_value and conv_value > 0:
+                    conv_value = _safe_float(r.get("转股价值"))
+                    if conv_value is not None and conv_value > 0:
                         entry["conversion_value"] = conv_value
-                    premium = _safe_float(r.get("转股溢价率", 0))
+                    premium = _safe_float(r.get("转股溢价率"))
                     if premium is not None:
                         entry["premium_ratio"] = premium
-                    dual_low = _safe_float(r.get("双低", 0))
-                    if dual_low and dual_low > 0:
+                    dual_low = _safe_float(r.get("双低"))
+                    if dual_low is not None and dual_low > 0:
                         entry["dual_low"] = dual_low
-                    ytm = _safe_float(r.get("到期税前收益", 0))
+                    ytm = _safe_float(r.get("到期税前收益"))
                     if ytm is not None:
                         entry["ytm"] = ytm
-                    remaining = _safe_float(r.get("剩余规模", 0))
-                    if remaining and remaining > 0:
+                    remaining = _safe_float(r.get("剩余规模"))
+                    if remaining is not None and remaining > 0:
                         entry["outstanding_scale"] = remaining
-                    turnover = _safe_float(r.get("换手率", 0))
-                    if turnover and turnover > 0:
+                    turnover = _safe_float(r.get("换手率"))
+                    if turnover is not None and turnover > 0:
                         entry["turnover_rate"] = turnover
                     rating = r.get("债券评级", "")
                     if rating:
                         entry["bond_rating"] = str(rating).strip()
-                    remaining_years = _safe_float(r.get("剩余年限", 0))
-                    if remaining_years and remaining_years > 0:
+                    remaining_years = _safe_float(r.get("剩余年限"))
+                    if remaining_years is not None and remaining_years > 0:
                         entry["remaining_years"] = remaining_years
-                    stock_pb = _safe_float(r.get("正股PB", 0))
-                    if stock_pb and stock_pb > 0:
+                    stock_pb = _safe_float(r.get("正股PB"))
+                    if stock_pb is not None and stock_pb > 0:
                         entry["stock_pb"] = stock_pb
                     if not entry.get("stock_price") and r.get("正股价"):
-                        entry["stock_price"] = _safe_float(r.get("正股价", 0))
+                        entry["stock_price"] = _safe_float(r.get("正股价"))
                 logger.info(f"[BondPrice] JISILU merged: {len(result)} total bonds (JISILU contributed to JSL bonds)")
             else:
                 logger.warning("[BondPrice] bond_cb_jsl returned empty")
@@ -1402,17 +1480,38 @@ def _refresh_pledge_cache():
     try:
         import akshare as ak
         logger.info("[Pledge] Refreshing pledge ratio...")
-        df = ak.stock_gpzy_pledge_ratio_em()
         result = {}
-        for _, r in df.iterrows():
+
+        # Source 1: EM
+        try:
+            df = ak.stock_gpzy_pledge_ratio_em()
+            if df is not None and len(df) > 0:
+                for _, r in df.iterrows():
+                    try:
+                        code = str(r.get("股票代码", "")).strip()
+                        ratio = _safe_float(r.get("质押比例"), default=None)
+                        if code and ratio is not None:
+                            result[code] = ratio
+                    except Exception as row_err:
+                        logger.debug(f"[Pledge] Row skipped: {row_err}")
+                        continue
+        except Exception as e:
+            logger.warning(f"[Pledge] EM failed: {e}")
+
+        # Source 2: THS fallback
+        if len(result) < 100:
             try:
-                code = str(r.get("股票代码", "")).strip()
-                ratio = _safe_float(r.get("质押比例"), default=None)
-                if code and ratio is not None:
-                    result[code] = ratio
-            except Exception as row_err:
-                logger.debug(f"[Pledge] Row skipped: {row_err}")
-                continue
+                df_ths = ak.stock_pledge_info_ths()
+                if df_ths is not None and len(df_ths) > 0:
+                    for _, r in df_ths.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        ratio = _safe_float(r.get("质押比例"), default=None)
+                        if code and ratio is not None and code not in result:
+                            result[code] = ratio
+                    logger.info(f"[Pledge] THS: {len(result)} stocks total")
+            except Exception as e_ths:
+                logger.warning(f"[Pledge] THS fallback failed: {e_ths}")
+
         if len(result) > 100:
             _save_cache(cache_path, result)
             logger.info(f"[Pledge] Updated: {len(result)} stocks")
@@ -1774,194 +1873,6 @@ def _refresh_main_biz_cache():
             return 0
     except Exception as e:
         logger.warning(f"[MainBiz] Fetch failed: {e}")
-        return 0
-
-
-# ============================================================
-# Data source: Analyst rank cache
-# ============================================================
-def _refresh_analyst_rank_cache():
-    """刷新分析师排名缓存 — 东方财富分析师指数"""
-    cache_path = _CACHE_DIR / "stock_analyst_rank.json"
-    cached = _load_cache(cache_path)
-    if _fresh(_TTL.get("analyst_rank", 86400 * 7), cached, cache_path):
-        logger.info(f"[AnalystRank] Cache fresh ({len(cached)} analysts), skipping")
-        return len(cached)
-    try:
-        import akshare as ak
-        logger.info("[AnalystRank] Refreshing from ak.stock_analyst_rank_em...")
-        df = ak.stock_analyst_rank_em()
-        result = {}
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                name = str(r.get("分析师名称", "") or r.get("分析师", "")).strip()
-                idx = str(r.get("年度指数", "") or r.get("指数", "")).strip()
-                ret = str(r.get("收益率", "") or r.get("年度收益率", "")).strip()
-                if name:
-                    result[name] = {
-                        "annual_index": idx,
-                        "annual_return": ret,
-                        "industry": str(r.get("行业", "")).strip(),
-                    }
-        if result:
-            _save_cache(cache_path, result)
-            logger.info(f"[AnalystRank] Updated: {len(result)} analysts")
-            return len(result)
-        else:
-            logger.warning("[AnalystRank] Empty result")
-            return 0
-    except Exception as e:
-        logger.warning(f"[AnalystRank] Fetch failed: {e}")
-        return 0
-
-
-# ============================================================
-# Data source: Macro CPI cache
-# ============================================================
-def _refresh_macro_cpi_cache():
-    """刷新宏观 CPI 缓存"""
-    cache_path = _CACHE_DIR / "macro_cpi.json"
-    cached = _load_cache(cache_path)
-    if _fresh(_TTL.get("macro_cpi", 86400 * 7), cached, cache_path):
-        logger.info(f"[MacroCPI] Cache fresh ({len(cached)} months), skipping")
-        return len(cached)
-    try:
-        import akshare as ak
-        logger.info("[MacroCPI] Refreshing from ak.macro_china_cpi...")
-        df = ak.macro_china_cpi()
-        result = {}
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                month = str(r.get("月份", "") or r.get("时间", "")).strip()
-                val = r.get("全国-当月", None)
-                yoy = r.get("全国-同比增长", None)
-                if month:
-                    result[month] = {
-                        "value": safe_float(val),
-                        "yoy": safe_float(yoy),
-                    }
-        if result:
-            _save_cache(cache_path, result)
-            logger.info(f"[MacroCPI] Updated: {len(result)} months")
-            return len(result)
-        else:
-            logger.warning("[MacroCPI] Empty result")
-            return 0
-    except Exception as e:
-        logger.warning(f"[MacroCPI] Fetch failed: {e}")
-        return 0
-
-
-# ============================================================
-# Data source: Macro PPI cache
-# ============================================================
-def _refresh_macro_ppi_cache():
-    """刷新宏观 PPI 缓存"""
-    cache_path = _CACHE_DIR / "macro_ppi.json"
-    cached = _load_cache(cache_path)
-    if _fresh(_TTL.get("macro_ppi", 86400 * 7), cached, cache_path):
-        logger.info(f"[MacroPPI] Cache fresh ({len(cached)} months), skipping")
-        return len(cached)
-    try:
-        import akshare as ak
-        logger.info("[MacroPPI] Refreshing from ak.macro_china_ppi...")
-        df = ak.macro_china_ppi()
-        result = {}
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                month = str(r.get("月份", "") or r.get("时间", "")).strip()
-                val = r.get("当月", None)
-                yoy = r.get("当月同比增长", None)
-                if month:
-                    result[month] = {
-                        "value": safe_float(val),
-                        "yoy": safe_float(yoy),
-                    }
-        if result:
-            _save_cache(cache_path, result)
-            logger.info(f"[MacroPPI] Updated: {len(result)} months")
-            return len(result)
-        else:
-            logger.warning("[MacroPPI] Empty result")
-            return 0
-    except Exception as e:
-        logger.warning(f"[MacroPPI] Fetch failed: {e}")
-        return 0
-
-
-# ============================================================
-# Data source: Macro M2 cache
-# ============================================================
-def _refresh_macro_m2_cache():
-    """刷新宏观 M2 缓存"""
-    cache_path = _CACHE_DIR / "macro_m2.json"
-    cached = _load_cache(cache_path)
-    if _fresh(_TTL.get("macro_m2", 86400 * 7), cached, cache_path):
-        logger.info(f"[MacroM2] Cache fresh ({len(cached)} months), skipping")
-        return len(cached)
-    try:
-        import akshare as ak
-        logger.info("[MacroM2] Refreshing from ak.macro_china_m2_yearly...")
-        df = ak.macro_china_m2_yearly()
-        result = {}
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                date = str(r.get("日期", "") or r.get("时间", "") or r.get("月份", "")).strip()
-                val = r.get("今值", None)
-                pred = r.get("预测值", None)
-                prev = r.get("前值", None)
-                if date:
-                    result[date] = {
-                        "value": safe_float(val),
-                        "predicted": safe_float(pred),
-                        "previous": safe_float(prev),
-                    }
-        if result:
-            _save_cache(cache_path, result)
-            logger.info(f"[MacroM2] Updated: {len(result)} months")
-            return len(result)
-        else:
-            logger.warning("[MacroM2] Empty result")
-            return 0
-    except Exception as e:
-        logger.warning(f"[MacroM2] Fetch failed: {e}")
-        return 0
-
-
-# ============================================================
-# Data source: Macro LPR cache
-# ============================================================
-def _refresh_macro_lpr_cache():
-    """刷新宏观 LPR 缓存"""
-    cache_path = _CACHE_DIR / "macro_lpr.json"
-    cached = _load_cache(cache_path)
-    if _fresh(_TTL.get("macro_lpr", 86400 * 7), cached, cache_path):
-        logger.info(f"[MacroLPR] Cache fresh ({len(cached)} days), skipping")
-        return len(cached)
-    try:
-        import akshare as ak
-        logger.info("[MacroLPR] Refreshing from ak.macro_china_lpr...")
-        df = ak.macro_china_lpr()
-        result = {}
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                date = str(r.get("TRADE_DATE", "") or r.get("日期", "")).strip()
-                lpr1y = r.get("LPR1Y", None)
-                lpr5y = r.get("LPR5Y", None)
-                if date:
-                    result[date] = {
-                        "lpr1y": safe_float(lpr1y),
-                        "lpr5y": safe_float(lpr5y),
-                    }
-        if result:
-            _save_cache(cache_path, result)
-            logger.info(f"[MacroLPR] Updated: {len(result)} days")
-            return len(result)
-        else:
-            logger.warning("[MacroLPR] Empty result")
-            return 0
-    except Exception as e:
-        logger.warning(f"[MacroLPR] Fetch failed: {e}")
         return 0
 
 
@@ -2802,7 +2713,14 @@ def _build_concept_cache():
             f"{len(source_map)} concepts (EM-only={em_only}, THS-only={ths_only}, "
             f"EM+THS={em_ths}, TDX-expanded={with_tdx})"
         )
-    return len(result)
+        return len(result)
+    # Fallback: 加载已有缓存
+    cached = _load_cache(_CACHE_FILES["concept"])
+    if cached:
+        real = {k: v for k, v in cached.items() if k != '_ts'}
+        logger.info(f"[Concept] Build failed, loaded {len(real)} from existing cache")
+        return len(real)
+    return 0
 
 
 # ============================================================
@@ -3148,6 +3066,40 @@ def _refresh_north_cache():
             est_count = sum(1 for k, v in result.items() if isinstance(v, dict) and v.get("_estimated"))
             logger.info(f"[North] Estimated: {est_count} stocks from circulation market value")
 
+        # Source 2 fallback: stock_hsgt_stock_statistics_em
+        _actual_indiv = sum(1 for k in result if not k.startswith('summary_'))
+        if _actual_indiv < 500:
+            try:
+                import akshare as ak
+                df_stats = ak.stock_hsgt_stock_statistics_em(symbol="北向持股", start_date="", end_date="")
+                if df_stats is not None and len(df_stats) > 0:
+                    n_before = sum(1 for k in result if not k.startswith("summary_"))
+                    for _, r in df_stats.iterrows():
+                        code = str(r.get("代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result and not result[code].get("_summary"):
+                            continue
+                        entry = {"code": code, "name": str(r.get("名称", "")).strip(), "type": "北向"}
+                        hold_shares = _safe_float(r.get("持股数量")) or _safe_float(r.get("当日持股数量"))
+                        if hold_shares is not None:
+                            entry["hold_shares"] = hold_shares
+                        hold_market_cap = _safe_float(r.get("持股市值")) or _safe_float(r.get("当日持股市值"))
+                        if hold_market_cap is not None:
+                            entry["hold_market_cap"] = hold_market_cap
+                        hold_ratio = _safe_float(r.get("持股占流通股比例")) or _safe_float(r.get("持股比例"))
+                        if hold_ratio is not None:
+                            entry["hold_ratio"] = hold_ratio
+                        add_shares = _safe_float(r.get("增持数量")) or _safe_float(r.get("增减持股数量"))
+                        if add_shares is not None:
+                            entry["add_shares"] = add_shares
+                        if len(entry) > 3:
+                            result[code] = entry
+                    n_after = sum(1 for k in result if not k.startswith("summary_"))
+                    logger.info(f"[North] stock_hsgt_stock_statistics_em: +{n_after - n_before} new (total {n_after})")
+            except Exception as e_stats:
+                logger.warning(f"[North] stock_hsgt_stock_statistics_em fallback failed: {e_stats}")
+
         if result:
             _save_cache(cache_path, result)
             total_indiv = sum(1 for k in result if not k.startswith("summary_"))
@@ -3395,6 +3347,35 @@ def _refresh_margin_cache():
                         est_count += 1
             logger.info(f"[Margin] Estimated rzye: {est_count} stocks")
 
+        # Source 2 fallback: stock_margin_underlying_em
+        _with_rzye = sum(1 for k, v in result.items()
+                        if len(k) == 6 and k.isdigit() and isinstance(v, dict)
+                        and v.get("rzye") is not None and v["rzye"] > 0)
+        if _with_rzye < 500:
+            try:
+                import akshare as ak
+                df_underlying = ak.stock_margin_underlying_em()
+                if df_underlying is not None and len(df_underlying) > 0:
+                    count_underlying = 0
+                    for _, r in df_underlying.iterrows():
+                        code = str(r.get("证券代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result and isinstance(result.get(code), dict) and result[code].get("rzye") is not None:
+                            continue
+                        balance = _safe_float(r.get("融资余额")) or _safe_float(r.get("融资融券余额"))
+                        if balance is not None:
+                            result[code] = {
+                                "code": code,
+                                "name": str(r.get("证券简称", "")).strip(),
+                                "rzye": balance,
+                                "date": str(r.get("日期", "")).strip(),
+                            }
+                            count_underlying += 1
+                    logger.info(f"[Margin] stock_margin_underlying_em: {count_underlying} stocks added")
+            except Exception as e_underlying:
+                logger.warning(f"[Margin] stock_margin_underlying_em fallback failed: {e_underlying}")
+
         if result:
             _save_cache(cache_path, result)
             with_rzye = sum(1 for k, v in result.items()
@@ -3490,6 +3471,45 @@ def _refresh_lhb_cache():
             logger.info(f"[LHB] jg_statistic: {jg_count} entries merged")
         except Exception as e_jg:
             logger.debug(f"[LHB] jg_statistic failed (non-critical): {e_jg}")
+
+        # Source 2 fallback: stock_lhb_stock_detail_em
+        if len(result) < 100:
+            try:
+                import akshare as ak
+                df_detail = ak.stock_lhb_stock_detail_em()
+                if df_detail is not None and len(df_detail) > 0:
+                    count_detail = 0
+                    for _, r in df_detail.iterrows():
+                        code = str(r.get("代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result:
+                            continue
+                        result[code] = {
+                            "code": code,
+                            "name": str(r.get("名称", "")).strip(),
+                            "last_date": str(r.get("最近上榜日", "")).strip(),
+                            "close": _safe_float(r.get("收盘价", None)),
+                            "change_pct": _safe_float(r.get("涨跌幅", None)),
+                            "times": _safe_int(r.get("上榜次数", None)),
+                            "net_buy_amt": _safe_float(r.get("龙虎榜净买额", None)),
+                            "buy_amt": _safe_float(r.get("龙虎榜买入额", None)),
+                            "sell_amt": _safe_float(r.get("龙虎榜卖出额", None)),
+                            "total_amt": _safe_float(r.get("龙虎榜总成交额", None)),
+                            "buy_org_times": _safe_int(r.get("买方机构次数", None)),
+                            "sell_org_times": _safe_int(r.get("卖方机构次数", None)),
+                            "org_net_buy": _safe_float(r.get("机构买入净额", None)),
+                            "org_buy_amt": _safe_float(r.get("机构买入总额", None)),
+                            "org_sell_amt": _safe_float(r.get("机构卖出总额", None)),
+                            "mom_1m": _safe_float(r.get("近1个月涨跌幅", None)),
+                            "mom_3m": _safe_float(r.get("近3个月涨跌幅", None)),
+                            "mom_6m": _safe_float(r.get("近6个月涨跌幅", None)),
+                            "mom_1y": _safe_float(r.get("近1年涨跌幅", None)),
+                        }
+                        count_detail += 1
+                    logger.info(f"[LHB] stock_lhb_stock_detail_em: {count_detail} stocks added")
+            except Exception as e_detail:
+                logger.warning(f"[LHB] stock_lhb_stock_detail_em fallback failed: {e_detail}")
 
         if result:
             _save_cache(cache_path, result)
@@ -3630,6 +3650,18 @@ def _refresh_block_trade_cache():
                 logger.info(f"[BlockTrade] brokers: {len(broker_rank)} active brokers (近一月)")
         except Exception as e:
             logger.warning(f"[BlockTrade] yybph failed: {e}")
+
+        # Source 4: stock_dzjy_sctj (市场统计 - 按日期)
+        if len(result) < 100:
+            try:
+                from datetime import datetime, timedelta
+                end_d = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+                start_d = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+                df_sctj = ak.stock_dzjy_sctj(start_date=start_d, end_date=end_d)
+                if df_sctj is not None and len(df_sctj) > 0:
+                    logger.info(f"[BlockTrade] sctj: {len(df_sctj)} market records")
+            except Exception as e_sctj:
+                logger.debug(f"[BlockTrade] sctj failed: {e_sctj}")
 
         if result:
             _save_cache(cache_path, result)
@@ -4031,6 +4063,62 @@ def _refresh_holder_num_cache():
             _save_cache(cache_path, result)
         logger.info(f"[HolderNum] Total: {len(result)} stocks")
 
+        # Source 2 fallback: stock_hold_num_em (batch)
+        if len(result) < 100:
+            try:
+                import akshare as ak
+                df_hn = ak.stock_hold_num_em()
+                if df_hn is not None and len(df_hn) > 0:
+                    count_hn = 0
+                    for _, r in df_hn.iterrows():
+                        code = str(r.get("股票代码", "")).strip()
+                        if not code or len(code) != 6 or not code.isdigit():
+                            continue
+                        if code in result:
+                            continue
+                        holders = _safe_float(r.get("股东户数")) or _safe_float(r.get("股东人数")) or _safe_float(r.get("股东总数"))
+                        if holders and holders > 0:
+                            result[code] = {
+                                "code": code,
+                                "name": str(r.get("股票简称", "")).strip(),
+                                "holder_num": int(holders),
+                                "stat_date": str(r.get("统计截止日期", "")).strip()[:10],
+                                "change_pct": _safe_float(r.get("较上期变化", None)),
+                                "_data_source": "stock_hold_num_em",
+                            }
+                            count_hn += 1
+                    logger.info(f"[HolderNum] stock_hold_num_em: {count_hn} stocks added")
+            except Exception as e_hn:
+                logger.warning(f"[HolderNum] stock_hold_num_em fallback failed: {e_hn}")
+
+        # Source 3 fallback: stock_zh_a_gdhs (individual)
+        if len(result) < 100:
+            try:
+                import akshare as ak
+                missing = [c for c in all_codes if c not in result][:100]
+                count_gdhs = 0
+                for code in missing:
+                    try:
+                        df_gdhs = ak.stock_zh_a_gdhs(stock=code)
+                        if df_gdhs is not None and len(df_gdhs) > 0:
+                            last = df_gdhs.iloc[-1]
+                            hn = _safe_float(last.get("股东人数")) or _safe_float(last.get("股东户数")) or _safe_float(last.get("股东总数"))
+                            if hn and hn > 0:
+                                result[code] = {
+                                    "code": code,
+                                    "name": str(last.get("股票简称", "")).strip(),
+                                    "holder_num": int(hn),
+                                    "stat_date": str(last.get("统计截止日期", "")).strip()[:10],
+                                    "change_pct": _safe_float(last.get("较上期变化", None)),
+                                    "_data_source": "stock_zh_a_gdhs",
+                                }
+                                count_gdhs += 1
+                    except Exception:
+                        pass
+                logger.info(f"[HolderNum] stock_zh_a_gdhs: {count_gdhs} stocks added")
+            except Exception as e_gdhs:
+                logger.warning(f"[HolderNum] stock_zh_a_gdhs fallback failed: {e_gdhs}")
+
         if result:
             _save_cache(cache_path, result)
             return len(result)
@@ -4106,6 +4194,54 @@ def _refresh_earnings_forecast_cache():
             except Exception as e:
                 logger.warning(f"[EarnForecast] {period} failed: {str(e)[:80]}")
                 continue
+
+        # Source 2: THS fallback
+        if len(result) < 500:
+            try:
+                import akshare as ak
+                _now = _dt.now()
+                _year = _now.year
+                _month = _now.month
+                ths_periods = []
+                for y in range(_year, _year - 2, -1):
+                    for q_end in ["1231", "0930", "0630", "0331"]:
+                        p = f"{y}{q_end}"
+                        q_month = int(q_end[:2])
+                        if y < _year or (y == _year and q_month < _month):
+                            ths_periods.append(p)
+                for period in ths_periods:
+                    try:
+                        df_ths = ak.stock_yjyg_ths(date=period)
+                        if df_ths is not None and len(df_ths) > 0:
+                            count = 0
+                            for _, r in df_ths.iterrows():
+                                code = str(r.get("股票代码", "")).strip()
+                                if len(code) != 6 or not code.isdigit():
+                                    continue
+                                if code in result:
+                                    continue
+                                result[code] = {
+                                    "code": code,
+                                    "name": str(r.get("股票简称", "")).strip(),
+                                    "period": period,
+                                    "indicator": str(r.get("预测指标", "")).strip(),
+                                    "change_desc": str(r.get("业绩变动", "")).strip()[:200],
+                                    "predict_value": _safe_float(r.get("预测数值", None)),
+                                    "change_pct": _safe_float(r.get("业绩变动幅度", None)),
+                                    "reason": str(r.get("业绩变动原因", "")).strip()[:200],
+                                    "forecast_type": str(r.get("预告类型", "")).strip(),
+                                    "last_year_value": _safe_float(r.get("上年同期值", None)),
+                                    "announce_date": str(r.get("公告日期", "")).strip(),
+                                }
+                                count += 1
+                            logger.info(f"[EarnForecast] THS {period}: {count} entries, total={len(result)}")
+                            if len(result) >= 1000:
+                                break
+                    except Exception as e:
+                        logger.debug(f"[EarnForecast] THS {period} failed: {str(e)[:80]}")
+                        continue
+            except Exception as e_ths:
+                logger.warning(f"[EarnForecast] THS fallback failed: {e_ths}")
 
         if result:
             _save_cache(cache_path, result)
@@ -4191,6 +4327,7 @@ def _refresh_earnings_express_cache():
             _save_cache(cache_path, result)
             logger.info(f"[EarnExpress] Total: {len(result)} entries")
             return len(result)
+        logger.warning("[EarnExpress] All sources empty, keeping existing cache")
         return len(cached or {})
     except Exception as e:
         logger.warning(f"[EarnExpress] Fetch failed: {e}")
@@ -4393,11 +4530,6 @@ def main():
     parser.add_argument("--earnings-express", action="store_true", help="Run earnings express cache")
     parser.add_argument("--restricted-release", action="store_true", help="Run restricted release cache")
     parser.add_argument("--main-biz", action="store_true", help="Run main business cache")
-    parser.add_argument("--analyst-rank", action="store_true", help="Run analyst rank cache")
-    parser.add_argument("--macro-cpi", action="store_true", help="Run macro CPI cache")
-    parser.add_argument("--macro-ppi", action="store_true", help="Run macro PPI cache")
-    parser.add_argument("--macro-m2", action="store_true", help="Run macro M2 cache")
-    parser.add_argument("--macro-lpr", action="store_true", help="Run macro LPR cache")
     parser.add_argument("--all", action="store_true", help="Run all caches")
     args = parser.parse_args()
 
@@ -4455,16 +4587,6 @@ def main():
         tasks.append(("Restricted", _refresh_restricted_release_cache))
     if args.all or getattr(args, 'main_biz', False):
         tasks.append(("MainBiz", _refresh_main_biz_cache))
-    if args.all or getattr(args, 'analyst_rank', False):
-        tasks.append(("AnalystRank", _refresh_analyst_rank_cache))
-    if args.all or getattr(args, 'macro_cpi', False):
-        tasks.append(("MacroCPI", _refresh_macro_cpi_cache))
-    if args.all or getattr(args, 'macro_ppi', False):
-        tasks.append(("MacroPPI", _refresh_macro_ppi_cache))
-    if args.all or getattr(args, 'macro_m2', False):
-        tasks.append(("MacroM2", _refresh_macro_m2_cache))
-    if args.all or getattr(args, 'macro_lpr', False):
-        tasks.append(("MacroLPR", _refresh_macro_lpr_cache))
 
     logger.info(f"Starting {len(tasks)} data enrichment tasks...")
     # NOTE: Tasks run sequentially (not concurrently). Spot must finish before
@@ -4487,11 +4609,8 @@ def main():
             break
         except SystemExit:
             raise
-        except Exception as e:
-            logger.error(f"[{name}] Failed: {e}")
-            _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error=str(e)[:200])
-        except:  # noqa: E722 - Catch segfault/OS errors
-            logger.error(f"[{name}] Crashed (possible AKShare segfault)")
+        except BaseException as e:
+            logger.error(f"[{name}] Crashed (possible AKShare segfault): {e}")
             _record_runner_metric(fn.__name__, time.time() - t0, 0, status="error", error="segfault/os crash")
 
     logger.info("All enrichment tasks completed")

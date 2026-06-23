@@ -147,7 +147,7 @@ class CreditScoringEngine:
 
         AAA=10, AA+=7, AA=5, AA-=3, A+=1, A=0.5, A-及以下=0
         """
-        if not rating:
+        if rating is None:
             return 5.0  # 数据缺失时给中性分
         return self.RATING_SCORES.get(rating.upper(), 0.0)
 

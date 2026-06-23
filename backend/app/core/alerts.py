@@ -100,6 +100,8 @@ class AlertManager:
             if rule.condition(metrics):
                 alert = await self._create_alert(rule, metrics, source)
                 return alert
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[Alert] Rule check error: {e}")
 
@@ -139,6 +141,8 @@ class AlertManager:
                     await callback(alert)
                 else:
                     callback(alert)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"[Alert] Callback error: {e}")
 

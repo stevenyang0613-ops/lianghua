@@ -442,6 +442,8 @@ class LoggingInterceptor:
 
             return response
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[GRPC] 方法异常: {method}, 错误: {e}")
             raise

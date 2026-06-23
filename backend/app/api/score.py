@@ -13,6 +13,14 @@ import asyncio
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
+def _require_storage(request: Request):
+    """获取 storage 实例，未初始化时抛出 500 错误"""
+    storage = getattr(request.app.state, "storage", None)
+    if not storage:
+        raise HTTPException(status_code=500, detail="Storage not available")
+    return storage
+
 # 内存缓存
 _cache: dict = {}
 _CACHE_TTL = 180  # 缓存3分钟（排名等计算型数据）
@@ -276,6 +284,27 @@ async def get_score_ranking(
         }
         df = _compute_scores(df, weights)
 
+        # ── 宏观择时调整 ──
+        # policy_score < 30: 政策收紧期，整体评分打 9 折（降低进攻性）
+        # policy_score > 70: 政策宽松期，整体评分加 5% 奖励（提升进攻性）
+        macro_policy = None
+        for b in bonds:
+            mp = getattr(b, 'macro_policy_score', None)
+            if mp is not None:
+                macro_policy = mp
+                break
+        if macro_policy is not None:
+            if macro_policy < 30:
+                df['score'] = df['score'] * 0.90
+                df['score_macro_adj'] = 0.90
+            elif macro_policy > 70:
+                df['score'] = df['score'] * 1.05
+                df['score_macro_adj'] = 1.05
+            else:
+                df['score_macro_adj'] = 1.0
+        else:
+            df['score_macro_adj'] = 1.0
+
         # 按分数降序排序
         df = df.sort_values('score', ascending=False).reset_index(drop=True)
 
@@ -291,7 +320,7 @@ async def get_score_ranking(
                 "price": round(row['price'], 3),
                 "premium_ratio": round(row['premium_ratio'], 2),
                 "dual_low": round(row['dual_low'], 2),
-                "volume": int(row['volume']),
+                "volume": round(row['volume'], 2) if row['volume'] is not None else None,
                 "change_pct": round(row['change_pct'], 2),
                 "ytm": round(row['ytm'], 2) if row['ytm'] else None,
                 "remaining_years": round(row['remaining_years'], 2) if row['remaining_years'] else None,
@@ -303,6 +332,8 @@ async def get_score_ranking(
                 "score_momentum": round(row['score_momentum'], 4),
                 "score_volume": round(row['score_volume'], 4),
                 "score_price": round(row['score_price'], 4),
+                "score_macro_adj": round(row.get('score_macro_adj', 1.0), 4),
+                "macro_policy_score": macro_policy,
             })
 
         result = {
@@ -377,6 +408,25 @@ async def get_full_score_ranking(request: Request):
         weights = {'dual_low': 0.4, 'premium': 0.2, 'momentum': 0.2, 'volume': 0.1, 'price': 0.1}
         df = _compute_scores(df, weights)
 
+        # ── 宏观择时调整（与 get_score_ranking 保持一致）──
+        macro_policy = None
+        for b in bonds:
+            mp = getattr(b, 'macro_policy_score', None)
+            if mp is not None:
+                macro_policy = mp
+                break
+        if macro_policy is not None:
+            if macro_policy < 30:
+                df['score'] = df['score'] * 0.90
+                df['score_macro_adj'] = 0.90
+            elif macro_policy > 70:
+                df['score'] = df['score'] * 1.05
+                df['score_macro_adj'] = 1.05
+            else:
+                df['score_macro_adj'] = 1.0
+        else:
+            df['score_macro_adj'] = 1.0
+
         df = df.sort_values('score', ascending=False).reset_index(drop=True)
 
         items = []
@@ -388,9 +438,11 @@ async def get_full_score_ranking(request: Request):
                 "price": round(row['price'], 3),
                 "premium_ratio": round(row['premium_ratio'], 2),
                 "dual_low": round(row['dual_low'], 2),
-                "volume": int(row['volume']),
+                "volume": round(row['volume'], 2) if row['volume'] is not None else None,
                 "change_pct": round(row['change_pct'], 2),
                 "score": round(row['score'], 4),
+                "score_macro_adj": round(row.get('score_macro_adj', 1.0), 4),
+                "macro_policy_score": macro_policy,
             })
 
         result = {"total": len(items), "items": items, "cached": False}
@@ -464,9 +516,7 @@ async def get_score_stats(request: Request):
 async def save_score_snapshot(request: Request):
     """保存当日评分快照"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -528,9 +578,7 @@ async def get_score_history(
 ):
     """获取某只转债的评分历史"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         history = storage.get_score_history(code, days)
         return {"code": code, "days": days, "items": history}
@@ -547,9 +595,7 @@ async def get_score_history_batch(
 ):
     """批量获取多只转债的评分历史"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         code_list = [c.strip() for c in codes.split(",") if c.strip()]
         history = storage.get_score_history_batch(code_list, days)
@@ -563,9 +609,7 @@ async def get_score_history_batch(
 async def get_score_dates(request: Request, limit: int = Query(30, ge=1, le=365)):
     """获取有评分数据的日期列表"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         dates = storage.get_score_dates(limit)
         return {"dates": dates}
@@ -582,9 +626,7 @@ async def get_daily_score_ranking(
 ):
     """获取某日的评分排名"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             query_date = date.fromisoformat(snapshot_date)
@@ -615,9 +657,7 @@ class ScoreAlertRequest(BaseModel):
 async def add_score_alert(req: ScoreAlertRequest, request: Request):
     """添加评分预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         alert_id = storage.add_score_alert(req.model_dump())
         return {"status": "ok", "id": alert_id}
@@ -630,9 +670,7 @@ async def add_score_alert(req: ScoreAlertRequest, request: Request):
 async def get_score_alerts(request: Request, enabled_only: bool = False):
     """获取所有评分预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         alerts = storage.get_score_alerts(enabled_only)
         return {"alerts": alerts}
@@ -645,9 +683,7 @@ async def get_score_alerts(request: Request, enabled_only: bool = False):
 async def remove_score_alert(alert_id: int, request: Request):
     """删除评分预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         storage.remove_score_alert(alert_id)
         return {"status": "ok"}
@@ -660,9 +696,7 @@ async def remove_score_alert(alert_id: int, request: Request):
 async def check_score_alerts(request: Request):
     """检查评分预警并返回触发的预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -749,9 +783,7 @@ async def get_score_accuracy(
     分析历史Top N评分的公司在持有期内的收益率
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             start = date.fromisoformat(start_date)
@@ -868,9 +900,7 @@ async def get_backtest_history(
 ):
     """获取回测历史结果列表"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         results, total = storage.get_backtest_results(limit=limit, offset=offset)
         return {"results": results, "total": total}
@@ -887,9 +917,7 @@ async def get_backtest_detail(
 ):
     """获取某次回测的详细结果"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         summary = storage.get_backtest_result(backtest_id)
         if not summary:
@@ -910,9 +938,7 @@ async def delete_backtest_result(
 ):
     """删除某次回测结果"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         deleted = storage.delete_backtest_result(backtest_id)
         if not deleted:
@@ -931,9 +957,7 @@ async def cleanup_backtest_history(
 ):
     """清理过期的回测历史"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         deleted = storage.cleanup_backtest_results(keep_days=keep_days)
         return {"deleted_count": deleted, "keep_days": keep_days}
@@ -954,9 +978,7 @@ async def get_top_performers(
     获取某日Top N评分的公司在持有期内的表现
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             start = date.fromisoformat(snapshot_date)
@@ -1048,9 +1070,7 @@ async def compare_rankings(
     对比两个日期的评分排名变化
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             d1 = date.fromisoformat(date1)
@@ -1517,9 +1537,7 @@ async def stream_xibu_ranking(
 async def save_xibu_snapshot(request: Request):
     """保存当日七维评分快照"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -1572,9 +1590,7 @@ async def get_xibu_history(
 ):
     """获取某只转债的七维评分历史"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         history = storage.get_seven_dim_history(code, days)
         return {"code": code, "days": days, "items": history}
@@ -1768,9 +1784,7 @@ class ComboAlertRequest(BaseModel):
 async def add_combo_alert(req: ComboAlertRequest, request: Request):
     """添加组合预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         alert_id = storage.add_combo_alert({
             'name': req.name,
@@ -1789,9 +1803,7 @@ async def add_combo_alert(req: ComboAlertRequest, request: Request):
 async def get_combo_alerts(request: Request, enabled_only: bool = False):
     """获取所有组合预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         alerts = storage.get_combo_alerts(enabled_only)
         return {"alerts": alerts}
@@ -1804,9 +1816,7 @@ async def get_combo_alerts(request: Request, enabled_only: bool = False):
 async def remove_combo_alert(alert_id: int, request: Request):
     """删除组合预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         storage.remove_combo_alert(alert_id)
         return {"status": "ok"}
@@ -1819,9 +1829,7 @@ async def remove_combo_alert(alert_id: int, request: Request):
 async def check_combo_alerts(request: Request):
     """检查组合预警"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         engine = request.app.state.engine
         bonds = await engine.get_all_quotes()
@@ -1903,9 +1911,7 @@ async def get_alert_history(
 ):
     """获取预警历史记录"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         history = storage.get_alert_history(days, code)
         return {"history": history, "total": len(history)}
@@ -1918,9 +1924,7 @@ async def get_alert_history(
 async def acknowledge_alert(history_id: int, request: Request):
     """确认预警记录"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         storage.acknowledge_alert(history_id)
         return {"status": "ok"}
@@ -1938,9 +1942,7 @@ async def cleanup_data(
 ):
     """执行数据清理"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         results = storage.cleanup_all(keep_days)
         return {"status": "ok", "results": results}
@@ -2011,9 +2013,7 @@ async def compare_strategies(req: StrategyCompareRequest, request: Request):
     对比多个评分策略的回测表现
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             start = date.fromisoformat(req.start_date)
@@ -2148,9 +2148,7 @@ async def get_risk_metrics(
     计算回测期间的风险指标：最大回撤、夏普比率、波动率等
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             start = date.fromisoformat(start_date)
@@ -2310,9 +2308,7 @@ class NotificationChannel(BaseModel):
 async def add_notification_channel(req: NotificationChannel, request: Request):
     """添加通知渠道"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         # 存储通知渠道配置
         with storage._write() as conn:
@@ -2342,9 +2338,7 @@ async def add_notification_channel(req: NotificationChannel, request: Request):
 async def get_notification_channels(request: Request):
     """获取所有通知渠道"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         try:
             storage.conn.execute("SELECT 1 FROM notification_channels LIMIT 0")
@@ -2373,9 +2367,7 @@ async def get_notification_channels(request: Request):
 async def remove_notification_channel(channel_id: int, request: Request):
     """删除通知渠道"""
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         with storage._write() as conn:
             conn.execute("DELETE FROM notification_channels WHERE id = ?", (channel_id,))
@@ -2398,9 +2390,7 @@ async def predict_score_trend(
     使用简单的线性回归进行预测
     """
     try:
-        storage = getattr(request.app.state, "storage", None)
-        if not storage:
-            raise HTTPException(status_code=500, detail="Storage not available")
+        storage = _require_storage(request)
 
         # 获取历史评分数据
         result = storage.conn.execute("""

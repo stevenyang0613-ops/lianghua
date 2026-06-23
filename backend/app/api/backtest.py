@@ -71,6 +71,10 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
         if progress_cb:
             try:
                 progress_cb(pct, msg)
+            except asyncio.CancelledError:
+                raise
+            except GeneratorExit:
+                raise
             except Exception as e:
                 logger.error(f"[BacktestData] _progress callback failed: {e}")
 
@@ -252,7 +256,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                         "mgmt_buy_price": getattr(b, 'mgmt_buy_price', None),
                         "industry": getattr(b, 'industry', None),
                         "rating": getattr(b, 'rating', None),
-                        "outstanding_scale": getattr(b, 'outstanding_scale', 0) or 0,
+                        "outstanding_scale": getattr(b, 'outstanding_scale', None),
                     }
                 from app.engine.historical import HistoricalDataLoader
                 loader = HistoricalDataLoader(storage)
@@ -264,7 +268,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                 try:
                     seed_result = await asyncio.wait_for(
                         loader.seed_historical_data(seed_codes, days=days_span, factor_snapshot=factor_snapshot),
-                        timeout=120.0,
+                        timeout=300.0,
                     )
                 except asyncio.TimeoutError:
                     import logging
@@ -290,16 +294,16 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                         rows.append({
                             "code": b.code,
                             "name": getattr(b, "name", ""),
-                            "price": getattr(b, "price", 0),
-                            "volume": getattr(b, "volume", 0),
+                            "price": getattr(b, "price", None),
+                            "volume": getattr(b, "volume", None),
                             "date": start_date,
-                            "premium_ratio": getattr(b, "premium_ratio", 0),
-                            "change_pct": getattr(b, "change_pct", 0),
-                            "stock_price": getattr(b, "stock_price", 0),
-                            "conversion_value": getattr(b, "conversion_value", 0),
-                            "dual_low": getattr(b, "dual_low", 0),
-                            "ytm": getattr(b, "ytm", 0),
-                            "remaining_years": getattr(b, "remaining_years", 0),
+                            "premium_ratio": getattr(b, "premium_ratio", None),
+                            "change_pct": getattr(b, "change_pct", None),
+                            "stock_price": getattr(b, "stock_price", None),
+                            "conversion_value": getattr(b, "conversion_value", None),
+                            "dual_low": getattr(b, "dual_low", None),
+                            "ytm": getattr(b, "ytm", None),
+                            "remaining_years": getattr(b, "remaining_years", None),
                             "roe": getattr(b, "roe", None),
                             "gpm": getattr(b, "gpm", None),
                             "cagr": getattr(b, "cagr", None),
@@ -311,7 +315,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                             "mgmt_buy_price": getattr(b, "mgmt_buy_price", None),
                             "industry": getattr(b, "industry", None),
                             "rating": getattr(b, "rating", None),
-                            "outstanding_scale": getattr(b, "outstanding_scale", 0),
+                            "outstanding_scale": getattr(b, "outstanding_scale", None),
                             "stock_code": getattr(b, "stock_code", ""),
                         })
                     result = pd.DataFrame(rows)
@@ -346,16 +350,16 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
             rows.append({
                 "code": b.code,
                 "name": getattr(b, "name", ""),
-                "price": getattr(b, "price", 0),
-                "volume": getattr(b, "volume", 0),
+                "price": getattr(b, "price", None),
+                "volume": getattr(b, "volume", None),
                 "date": start_date,
-                "premium_ratio": getattr(b, "premium_ratio", 0),
-                "change_pct": getattr(b, "change_pct", 0),
-                "stock_price": getattr(b, "stock_price", 0),
-                "conversion_value": getattr(b, "conversion_value", 0),
-                "dual_low": getattr(b, "dual_low", 0),
-                "ytm": getattr(b, "ytm", 0),
-                "remaining_years": getattr(b, "remaining_years", 0),
+                "premium_ratio": getattr(b, "premium_ratio", None),
+                "change_pct": getattr(b, "change_pct", None),
+                "stock_price": getattr(b, "stock_price", None),
+                "conversion_value": getattr(b, "conversion_value", None),
+                "dual_low": getattr(b, "dual_low", None),
+                "ytm": getattr(b, "ytm", None),
+                "remaining_years": getattr(b, "remaining_years", None),
                 "roe": getattr(b, "roe", None),
                 "gpm": getattr(b, "gpm", None),
                 "cagr": getattr(b, "cagr", None),
@@ -367,7 +371,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                 "mgmt_buy_price": getattr(b, "mgmt_buy_price", None),
                 "industry": getattr(b, "industry", None),
                 "rating": getattr(b, "rating", None),
-                "outstanding_scale": getattr(b, "outstanding_scale", 0),
+                "outstanding_scale": getattr(b, "outstanding_scale", None),
                 "stock_code": getattr(b, "stock_code", ""),
             })
         result = pd.DataFrame(rows)
@@ -921,7 +925,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             "name": str(r.get("债券简称", "")).strip(),
             "stock_code": str(r.get("正股代码", "")).strip(),
             "stock_name": str(r.get("正股简称", "")).strip(),
-            "conversion_price": float(r.get("转股价格", 0) or 0),
+            "conversion_price": float(r.get("转股价格")) if r.get("转股价格") is not None else None,
             "maturity_date": r.get("到期时间"),
         }
     bond_codes = list(bond_info.keys())
@@ -938,10 +942,10 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             for _, r in df_spot.iterrows():
                 code = str(r.get("code", "")).strip()
                 if code in bond_info:
-                    trade = float(r.get("trade", 0) or 0)
-                    change = float(r.get("changepercent", 0) or 0)
-                    amount = float(r.get("amount", 0) or 0)
-                    if trade > 0:
+                    trade = float(r.get("trade")) if r.get("trade") is not None else None
+                    change = float(r.get("changepercent")) if r.get("changepercent") is not None else None
+                    amount = float(r.get("amount")) if r.get("amount") is not None else None
+                    if trade is not None and trade > 0:
                         spot_prices[code] = {
                             "price": trade,
                             "change_pct": change,
@@ -960,12 +964,12 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                 code = str(r.get("代码", "")).strip()
                 if code in bond_info:
                     jsl_bond_data[code] = {
-                        "premium_ratio": float(r.get("转股溢价率", 0) or 0),
-                        "dual_low": float(r.get("双低", 0) or 0),
+                        "premium_ratio": float(r.get("转股溢价率")) if r.get("转股溢价率") is not None else None,
+                        "dual_low": float(r.get("双低")) if r.get("双低") is not None else None,
                         "rating": str(r.get("债券评级", "")).strip(),
-                        "ytm": float(r.get("到期税前收益", 0) or 0),
-                        "remaining_scale": float(r.get("剩余规模", 0) or 0),
-                        "turnover_rate": float(r.get("换手率", 0) or 0),
+                        "ytm": float(r.get("到期税前收益")) if r.get("到期税前收益") is not None else None,
+                        "remaining_scale": float(r.get("剩余规模")) if r.get("剩余规模") is not None else None,
+                        "turnover_rate": float(r.get("换手率")) if r.get("换手率") is not None else None,
                     }
             logger.info(f"[BacktestData] Jisilu: {len(jsl_bond_data)}只转债数据")
     except Exception as e:
@@ -1025,12 +1029,12 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                 if df_ths is not None and hasattr(df_ths, 'empty') and not df_ths.empty:
                     latest = df_ths.iloc[0]
                     ths_financial[sc] = {
-                        "eps": float(latest.get("基本每股收益", 0) or 0),
-                        "eps_diluted": float(latest.get("稀释每股收益", 0) or 0),
-                        "bps": float(latest.get("每股净资产", 0) or 0),
-                        "roe": float(latest.get("净资产收益率", 0) or 0),
-                        "gpm": float(latest.get("毛利率", 0) or 0),
-                        "npm": float(latest.get("净利率", 0) or 0),
+                        "eps": float(latest.get("基本每股收益")) if latest.get("基本每股收益") is not None else None,
+                        "eps_diluted": float(latest.get("稀释每股收益")) if latest.get("稀释每股收益") is not None else None,
+                        "bps": float(latest.get("每股净资产")) if latest.get("每股净资产") is not None else None,
+                        "roe": float(latest.get("净资产收益率")) if latest.get("净资产收益率") is not None else None,
+                        "gpm": float(latest.get("毛利率")) if latest.get("毛利率") is not None else None,
+                        "npm": float(latest.get("净利率")) if latest.get("净利率") is not None else None,
                     }
             except Exception:
                 pass
@@ -1140,7 +1144,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                 pass
             if (i + 1) % 100 == 0:
                 logger.info(f"[BacktestData] K线进度: {i+1}/{len(bond_codes)}")
-                _time.sleep(0.1)
+                await asyncio.sleep(0.1)
 
     # 获取正股K线 (用于历史conversion_value计算) — BaoStock为主(3.5年), 腾讯备选
     logger.info(f"[BacktestData] 下载正股K线({len(unique_stocks)}只)...")
@@ -1200,7 +1204,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             break
         except Exception as e:
             logger.warning(f"[BacktestData] BaoStock attempt {attempt+1}: {e}")
-            _time.sleep(2)
+            await asyncio.sleep(2)
     
     # BaoStock不足时腾讯补位
     if _bs_ok < len(unique_stocks) * 0.5:
@@ -1219,8 +1223,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                         continue
                     if dt < start_date or dt > end_date:
                         continue
-                    cv = float(r.get("close", 0) or 0)
-                    if cv > 0:
+                    cv = float(r.get("close")) if r.get("close") is not None else None
+                    if cv is not None and cv > 0:
                         records[dt] = cv
                 return (sc, records)
             except Exception:
@@ -1263,7 +1267,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
     df_kline["stock_code"] = df_kline["code"].map(lambda c: bond_info.get(c, {}).get("stock_code", ""))
     df_kline["stock_name"] = df_kline["code"].map(lambda c: bond_info.get(c, {}).get("stock_name", ""))
     df_kline["conversion_price"] = df_kline["code"].map(
-        lambda c: bond_info.get(c, {}).get("conversion_price", 0) or 0
+        lambda c: bond_info.get(c, {}).get("conversion_price") if bond_info.get(c, {}).get("conversion_price") is not None else np.nan
     )
     
     # 行业/剩余规模/换手率 (多源兑底)
@@ -1591,11 +1595,11 @@ def _save_fallback_to_duckdb(df: pd.DataFrame, start_date: date, end_date: date)
                 """, (
                     str(row.get("code", "")),
                     str(row.get("name", "")),
-                    float(row.get("close_price", 0) or 0),
-                    float(row.get("open_price", 0) or 0),
-                    float(row.get("high_price", 0) or 0),
-                    float(row.get("low_price", 0) or 0),
-                    float(row.get("volume", 0) or 0),
+                    float(row.get("close_price", 0) or 0) if pd.notna(row.get("close_price")) else None,
+                    float(row.get("open_price", 0) or 0) if pd.notna(row.get("open_price")) else None,
+                    float(row.get("high_price", 0) or 0) if pd.notna(row.get("high_price")) else None,
+                    float(row.get("low_price", 0) or 0) if pd.notna(row.get("low_price")) else None,
+                    float(row.get("volume", 0) or 0) if pd.notna(row.get("volume")) else None,
                     row.get("date", row.get("snapshot_date", start_date)),
                     float(row.get("premium_ratio", 0) or 0) if pd.notna(row.get("premium_ratio")) else None,
                     float(row.get("change_pct", 0) or 0) if pd.notna(row.get("change_pct")) else None,

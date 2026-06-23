@@ -48,6 +48,11 @@ from app.xb_strategy.core.types import (
 from app.xb_strategy.config.settings import params
 from app.xb_strategy.config.weights import MarketRegime, get_weight_scheme, WeightScheme
 
+try:
+    from app.engine.data_enrich import _news_sentiment_map
+except ImportError:
+    _news_sentiment_map = {}
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,7 +194,7 @@ class SevenDimScoringEngine:
             score.technical = self._score_technical(stock)
             score.chip_structure = self._score_chip_structure(stock)
             score.volatility = self._score_volatility(cb, stock)
-            score.news_factor = self._score_news_factor(stock)
+            score.news_factor = self._score_news_factor(cb, stock)
             score.fundamentals = self._score_fundamentals(stock)
         else:
             # 正股数据缺失时，给予中性分(60%满分)
@@ -445,15 +450,94 @@ class SevenDimScoringEngine:
 
         return min(score, self.DIM_VOLATILITY)
 
-    def _score_news_factor(self, stock: StockData) -> float:
+    def _score_news_factor(self, cb: ConvertibleBondData, stock: StockData) -> float:
         """计算消息面得分(满分3.85分)
 
-        包括: 行业政策 + 公司公告
-        注: 需要外部数据支持，当前返回中性分
+        包括: 行业政策 + 公司公告 + 转债条款消息
+        使用已有数据推导（非外部新闻API）:
+        - 转债事件：大股东减持、强赎公告、触发强赎条件、解禁
+        - 正股业绩：净利润增速大幅变化、营收增速变化
+        - 正股价格行为：涨停/跌停（可能反映消息冲击）
         """
-        # TODO: 接入新闻情绪分析数据源
-        # 实际应结合新闻情绪分析、行业政策、公司公告等
-        return self.DIM_NEWS_FACTOR * 0.5  # 中性分，等待外部数据
+        score = 0.0
+
+        # 1. 转债条款事件（0-1.5分）
+        # 强赎公告 = 重大利空（转债会被强制赎回，价格向强赎价收敛）
+        if cb.is_called:
+            score += 0.0
+        elif cb.redemption_trigger:
+            score += 0.4  # 触发强赎条件但未公告，潜在风险
+        else:
+            score += 1.0  # 无强赎风险，中性偏利好
+
+        # 大股东减持 = 利空（0-0.5分）
+        if cb.has_major_sell:
+            score += 0.0
+        else:
+            score += 0.5
+
+        # 解禁风险（0-0.5分）—— 只考虑30天内的解禁为近期风险
+        from datetime import date, timedelta
+        if cb.unlock_date is not None and cb.unlock_ratio > 5:
+            days_to_unlock = (cb.unlock_date - date.today()).days
+            if 0 <= days_to_unlock <= 30:
+                score += 0.1  # 30天内有解禁，利空
+            else:
+                score += 0.3  # 解禁较远，风险可控
+        else:
+            score += 0.5
+
+        # 2. 正股业绩变化（0-1.0分）
+        # 净利润增速大幅改善 = 利好
+        if stock.net_profit_yoy > 50:
+            score += 1.0
+        elif stock.net_profit_yoy > 20:
+            score += 0.8
+        elif stock.net_profit_yoy > 0:
+            score += 0.6
+        elif stock.net_profit_yoy > -20:
+            score += 0.3
+        else:
+            score += 0.0
+
+        # 营收增速验证（0-0.5分）
+        if stock.revenue_yoy > 30:
+            score += 0.5
+        elif stock.revenue_yoy > 10:
+            score += 0.4
+        elif stock.revenue_yoy > 0:
+            score += 0.3
+        else:
+            score += 0.1
+
+        # 3. 价格异动（0-0.35分）—— 涨停可能有利好，跌停有利空
+        if stock.limit_up:
+            score += 0.35
+        elif stock.limit_down:
+            score -= 0.2
+
+        # 4. 新闻情绪得分（0-0.5分）—— 外部新闻情绪数据增强
+        # 从 data_enrich 的 _news_sentiment_map 获取，-1(极度负面) 到 +1(极度正面)
+        sentiment_entry = _news_sentiment_map.get(cb.stock_code)
+        if sentiment_entry and isinstance(sentiment_entry, dict):
+            sentiment = sentiment_entry.get("sentiment_score", 0.0)
+            if sentiment > 0.5:
+                score += 0.5  # 强烈正面
+            elif sentiment > 0.2:
+                score += 0.3  # 温和正面
+            elif sentiment > -0.2:
+                score += 0.15  # 中性
+            elif sentiment > -0.5:
+                score += 0.0  # 温和负面
+            else:
+                score -= 0.2  # 强烈负面
+        else:
+            score += 0.15  # 无数据时给中性分
+
+        # 归一化到满分3.85分
+        max_raw = 3.85
+        normalized = min(score, max_raw) / max_raw * self.DIM_NEWS_FACTOR
+        return round(max(0.0, normalized), 2)
 
     def _score_fundamentals(self, stock: StockData) -> float:
         """计算基本面得分(满分1.65分)

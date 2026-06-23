@@ -345,7 +345,7 @@ class SimulatedBroker(BrokerInterface):
         """撤单"""
         with self._lock:
             order = self._orders.get(order_id)
-            if not order:
+            if order is None:
                 return False
 
             if order.status not in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL]:
@@ -478,7 +478,7 @@ class SimulatedBroker(BrokerInterface):
                 total_cost = pos['cost_price'] * pos['quantity'] + amount
                 pos['quantity'] += order.quantity
                 pos['available'] += order.quantity
-                pos['cost_price'] = total_cost / pos['quantity']
+                pos['cost_price'] = total_cost / pos['quantity'] if pos['quantity'] > 0 else 0
                 pos['current_price'] = price
 
             else:  # SELL

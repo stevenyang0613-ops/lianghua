@@ -15,6 +15,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -48,29 +49,17 @@ def _fetch_value_analysis_single(code: str) -> list[dict]:
             rec = {
                 "code": code,
                 "date": dt,
-                "bond_value": _safe_float(r.get("纯债价值")),
-                "conversion_value": _safe_float(r.get("转股价值")),
-                "pure_bond_premium_ratio": _safe_float(r.get("纯债溢价率")),
-                "premium_ratio": _safe_float(r.get("转股溢价率")),
-                "close_price": _safe_float(r.get("收盘价")),
+                "bond_value": safe_float(r.get("纯债价值")),
+                "conversion_value": safe_float(r.get("转股价值")),
+                "pure_bond_premium_ratio": safe_float(r.get("纯债溢价率")),
+                "premium_ratio": safe_float(r.get("转股溢价率")),
+                "close_price": safe_float(r.get("收盘价")),
             }
             records.append(rec)
         return records
     except Exception as e:
         logger.debug(f"[ValueAnalysis] {code}: {e}")
         return []
-
-
-def _safe_float(v) -> Optional[float]:
-    if v is None:
-        return None
-    try:
-        f = float(v)
-        if np.isnan(f) or np.isinf(f):
-            return None
-        return f
-    except (ValueError, TypeError):
-        return None
 
 
 def fetch_value_analysis_batch(bond_codes: list[str], max_workers: int = 10) -> pd.DataFrame:
@@ -163,12 +152,12 @@ def _fetch_bond_daily_em(code: str, start_date: date, end_date: date) -> list[di
             records.append({
                 "code": code,
                 "date": dt,
-                "close_price": _safe_float(row.get("CLOSE_PRICE")) or 0,
-                "open_price": _safe_float(row.get("OPEN_PRICE")) or 0,
-                "high_price": _safe_float(row.get("HIGH_PRICE")) or 0,
-                "low_price": _safe_float(row.get("LOW_PRICE")) or 0,
-                "volume": _safe_float(row.get("VOL")) or 0,
-                "amount": _safe_float(row.get("AMOUNT")) or 0,
+                "close_price": safe_float(row.get("CLOSE_PRICE")),
+                "open_price": safe_float(row.get("OPEN_PRICE")),
+                "high_price": safe_float(row.get("HIGH_PRICE")),
+                "low_price": safe_float(row.get("LOW_PRICE")),
+                "volume": safe_float(row.get("VOL")),
+                "amount": safe_float(row.get("AMOUNT")),
             })
         return records
     except Exception as e:
@@ -367,10 +356,10 @@ def fetch_bond_misc_data() -> dict:
                     code = str(r.get("code", "")).strip()
                     if not code or len(code) != 6:
                         continue
-                    out_scale = _safe_float(r.get("剩余规模", 0))
-                    turnover = _safe_float(r.get("换手率", 0))
-                    volume = _safe_float(r.get("成交量", 0))
-                    amount = _safe_float(r.get("成交额", 0))
+                    out_scale = safe_float(r.get("剩余规模"))
+                    turnover = safe_float(r.get("换手率"))
+                    volume = safe_float(r.get("成交量"))
+                    amount = safe_float(r.get("成交额"))
                     result[code] = {
                         "outstanding_scale": out_scale,
                         "turnover_rate": turnover,
@@ -519,12 +508,12 @@ def _fetch_bond_kline_em_dc(code: str, start_date: date, end_date: date) -> list
             records.append({
                 "code": code,
                 "date": dt,
-                "close_price": _safe_float(row.get("CLOSE_PRICE")) or 0,
-                "open_price": _safe_float(row.get("OPEN_PRICE")) or 0,
-                "high_price": _safe_float(row.get("HIGH_PRICE")) or 0,
-                "low_price": _safe_float(row.get("LOW_PRICE")) or 0,
-                "volume": _safe_float(row.get("VOL")) or 0,
-                "amount": _safe_float(row.get("AMOUNT")) or 0,
+                "close_price": safe_float(row.get("CLOSE_PRICE")),
+                "open_price": safe_float(row.get("OPEN_PRICE")),
+                "high_price": safe_float(row.get("HIGH_PRICE")),
+                "low_price": safe_float(row.get("LOW_PRICE")),
+                "volume": safe_float(row.get("VOL")),
+                "amount": safe_float(row.get("AMOUNT")),
             })
         return records
     except Exception as e:

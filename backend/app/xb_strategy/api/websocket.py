@@ -101,6 +101,8 @@ class WSClient:
         try:
             await self.websocket.send_text(message.to_json())
             self.message_count += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[WSClient] 发送失败: {e}")
             self.is_active = False
@@ -352,6 +354,8 @@ class ConnectionManager:
                 await self.broadcast(message, channel)
             except asyncio.TimeoutError:
                 continue
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[WS] 广播失败: {e}")
 
@@ -394,6 +398,8 @@ class QuotePushService:
 
                 await asyncio.sleep(interval)
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[QuotePush] 推送失败: {e}")
                 await asyncio.sleep(1)
@@ -407,15 +413,20 @@ class QuotePushService:
             for _, r in df.iterrows():
                 code = str(r.get("code", "")).strip()
                 if code and len(code) == 6 and code[0] in '12':
-                    trade = float(r.get("trade", 0) or 0)
+                    trade_raw = r.get("trade")
+                    if trade_raw is None:
+                        continue
+                    trade = float(trade_raw)
                     if trade > 0:
                         result[code] = {
                             "price": trade,
-                            "change_pct": float(r.get("changepercent", 0) or 0),
-                            "volume": int(r.get("volume", 0) or 0),
-                            "amount": float(r.get("amount", 0) or 0),
+                            "change_pct": float(r.get("changepercent")) if r.get("changepercent") is not None else None,
+                            "volume": int(r.get("volume")) if r.get("volume") is not None else None,
+                            "amount": float(r.get("amount")) if r.get("amount") is not None else None,
                         }
             return result
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[QuotePush] 获取行情失败: {e}")
             return {}
@@ -477,6 +488,8 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         manager.disconnect(client.client_id)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"[WS] 异常: {e}")
         manager.disconnect(client.client_id)

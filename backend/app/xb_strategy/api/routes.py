@@ -361,6 +361,8 @@ if FASTAPI_AVAILABLE:
             cb_data = pd.DataFrame(rows)
         except HTTPException:
             raise
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"获取历史数据失败: {e}")
 

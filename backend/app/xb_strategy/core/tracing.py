@@ -455,6 +455,8 @@ class TracingMiddleware:
 
             try:
                 await self.app(scope, receive, send_wrapper)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(TraceStatus.ERROR)

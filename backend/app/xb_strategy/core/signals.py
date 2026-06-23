@@ -392,11 +392,11 @@ class SignalGenerator:
                 continue
 
             score = next((s for s in scores if s.cb_code == code), None)
-            if not score:
+            if score is None:
                 continue
 
             cb = cb_data.get(code)
-            if not cb:
+            if cb is None:
                 continue
 
             # 加仓条件: 正股上涨>=5% 且 七维得分上升>=5分

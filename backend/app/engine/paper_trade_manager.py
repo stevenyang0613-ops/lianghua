@@ -41,7 +41,7 @@ class PaperAccount:
     trade_engine: TradeEngine
     strategy: Optional[Strategy] = None
     is_running: bool = False
-    initial_cash: float = 100000.0
+    initial_cash: float = 100_000_000.0
     created_at: datetime = field(default_factory=datetime.now)
     params: dict = field(default_factory=dict)
 
@@ -157,7 +157,7 @@ class PaperTradeManager:
     def create_account(
         self,
         strategy_id: str,
-        initial_cash: float = 100000.0,
+        initial_cash: float = 100_000_000.0,
         params: Optional[dict] = None,
     ) -> PaperAccount:
         """创建模拟盘账户"""
@@ -756,7 +756,9 @@ class PaperTradeManager:
             for sig in result:
                 code = sig.get("code", "")
                 action = sig.get("action", "")
-                price = sig.get("price", 0.0)
+                price = sig.get("price")
+                if price is None or (isinstance(price, (int, float)) and price <= 0):
+                    continue
 
                 # 去重
                 dedup_key = (code, action)
@@ -840,6 +842,7 @@ class PaperTradeManager:
         # 2. 再买（按 confidence 降序排列，总量感知分配）
         # 先过滤低置信度信号，避免 confidence=0 的信号浪费资金
         # 支持策略级 min_confidence 配置（从 account.params 读取），否则用全局默认
+        # 修复: 策略使用 'score' 而非 'confidence'，fallback 到 score 避免所有信号被过滤
         _min_conf_val = account.params.get("min_confidence", self._min_confidence) if isinstance(account.params, dict) else self._min_confidence
         try:
             min_conf = self._min_confidence if _min_conf_val is None else float(_min_conf_val)
@@ -847,8 +850,8 @@ class PaperTradeManager:
             min_conf = self._min_confidence
         all_buy_signals = [s for s in signals if s["action"] == "buy"]
         buy_signals = sorted(
-            [s for s in all_buy_signals if s.get("confidence", 0.0) >= min_conf],
-            key=lambda s: s.get("confidence", 0.0),
+            [s for s in all_buy_signals if s.get("confidence", s.get("score", 0.0)) >= min_conf],
+            key=lambda s: s.get("confidence", s.get("score", 0.0)),
             reverse=True,
         )
         skipped = len(all_buy_signals) - len(buy_signals)
@@ -876,15 +879,15 @@ class PaperTradeManager:
         if total_min <= available_cash:
             # 资金充裕：每个信号至少 min_alloc + 剩余按 confidence 加权
             surplus = available_cash - total_min
-            conf_sum = sum(s.get("confidence", 0.5) for s in buy_signals) or 1.0
+            conf_sum = sum(s.get("confidence", s.get("score", 0.5)) for s in buy_signals) or 1.0
             for sig in buy_signals:
-                extra = surplus * (sig.get("confidence", 0.5) / conf_sum)
+                extra = surplus * (sig.get("confidence", sig.get("score", 0.5)) / conf_sum)
                 targets.append(min_alloc + extra)
         else:
             # 资金紧张：按 confidence 加权分配全部可用资金
-            conf_sum = sum(s.get("confidence", 0.5) for s in buy_signals) or 1.0
+            conf_sum = sum(s.get("confidence", s.get("score", 0.5)) for s in buy_signals) or 1.0
             for sig in buy_signals:
-                targets.append(available_cash * (sig.get("confidence", 0.5) / conf_sum))
+                targets.append(available_cash * (sig.get("confidence", sig.get("score", 0.5)) / conf_sum))
 
         # 按目标分配额执行买入
         for sig, target in zip(buy_signals, targets):
@@ -1243,7 +1246,7 @@ class PaperTradeManager:
                 )
                 continue
             optimal_params = self.get_optimal_params(strategy_id)
-            account = self.create_account(strategy_id, params=optimal_params)
+            account = self.create_account(strategy_id, initial_cash=100_000_000, params=optimal_params)
             new_accounts.append(account)
             logger.info(
                 f"[PaperTrade] Auto-created {strategy_name} with optimal params "

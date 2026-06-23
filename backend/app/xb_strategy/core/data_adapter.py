@@ -145,7 +145,7 @@ class AkshareDataSource(DataSourceInterface):
 
     def _calc_remaining_years(self, maturity_date: str) -> float:
         """计算剩余年限"""
-        if not maturity_date:
+        if maturity_date is None:
             return 3.0
         try:
             if isinstance(maturity_date, str):
@@ -307,7 +307,7 @@ class WindDataSource(DataSourceInterface):
 
     def _calc_remaining_years(self, maturity_date) -> float:
         """计算剩余年限"""
-        if not maturity_date:
+        if maturity_date is None:
             return 3.0
         try:
             delta = maturity_date - datetime.now()
@@ -693,7 +693,7 @@ class DataAdapter:
 
     def _calc_remaining_years(self, maturity_date: str) -> float:
         """计算剩余年限"""
-        if not maturity_date:
+        if maturity_date is None:
             return 3.0
 
         try:

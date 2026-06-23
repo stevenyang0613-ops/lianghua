@@ -21,6 +21,8 @@ import pandas as pd
 
 from .base import DataSourceAdapter, DataSourceConfig, DataQuery, DataType
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +34,7 @@ class MXAdapter(DataSourceAdapter):
         if config is None:
             config = DataSourceConfig(name="mx")
         super().__init__(config)
-        self._api_key = os.environ.get("MX_APIKEY", "") or config.extra.get("api_key", "")
+        self._api_key = settings.MX_APIKEY or os.environ.get("MX_APIKEY", "") or config.extra.get("api_key", "")
         self._initialized = False
 
     async def connect(self) -> bool:
@@ -42,11 +44,10 @@ class MXAdapter(DataSourceAdapter):
             self._connected = True
             self._degraded_mode = True
             return True
-        os.environ["MX_APIKEY"] = self._api_key
         self._initialized = True
         self._connected = True
         self._degraded_mode = False
-        logger.info(f"[MX] Connected (key: {self._api_key[:8]}...)")
+        logger.info(f"[MX] Connected (key masked)")
         return True
 
     async def disconnect(self) -> None:
@@ -161,7 +162,7 @@ class MXAdapter(DataSourceAdapter):
         base.update({
             "configured": bool(self._api_key),
             "degraded_mode": degraded,
-            "api_key_prefix": self._api_key[:8] + "..." if self._api_key else "",
+            "api_key_prefix": "***" if self._api_key else "",
             "skills_installed": skill_install_status,
             "all_skills_ready": all(skill_install_status.values()),
         })

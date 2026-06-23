@@ -31,6 +31,8 @@ from datetime import datetime, date, timedelta
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
+from app.engine import data_enrich as _de
+
 import numpy as np
 import pandas as pd
 import requests
@@ -56,6 +58,10 @@ class MacroData:
     shibor_overnight: float = float('nan')
     shibor_1w: float = float('nan')
     shibor_1m: float = float('nan')
+
+    # === LPR ===
+    lpr_1y: float = float('nan')
+    lpr_5y: float = float('nan')
 
     # === 宏观 ===
     pmi_current: float = float('nan')
@@ -158,7 +164,7 @@ class MacroDataService:
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(self._fetch_all, bonds),
-                timeout=90,
+                timeout=180,
             )
             self._cache = data
             self._cache_time = datetime.now()
@@ -167,6 +173,10 @@ class MacroDataService:
             err_msg = str(e) or f"{type(e).__name__}"
             logger.error(f"[MacroData] Fetch failed: {err_msg}")
             return self._cache or MacroData()
+
+    def get_last_data(self):
+        """获取最近一次缓存的宏观数据（供外部调用）"""
+        return self._cache if self._is_cache_valid() else None
 
     def _fetch_all(self, bonds=None) -> MacroData:
         """同步获取所有宏观数据（独立网络请求并行化，减少总耗时）。"""
@@ -196,6 +206,9 @@ class MacroDataService:
 
         def _task_shibor():
             data.shibor_overnight, data.shibor_1w, data.shibor_1m = self._fetch_shibor()
+
+        def _task_lpr():
+            data.lpr_1y, data.lpr_5y = self._fetch_lpr()
 
         def _task_credit_spread():
             data.credit_spread_aa = self._fetch_credit_spread()
@@ -260,7 +273,7 @@ class MacroDataService:
 
         tasks = [
             _task_treasury, _task_pmi, _task_cpi_ppi, _task_m2,
-            _task_social_financing, _task_gdp, _task_shibor,
+            _task_social_financing, _task_gdp, _task_shibor, _task_lpr,
             _task_credit_spread, _task_market_stats, _task_cb_index,
             _task_stock_index, _task_cb_stats, _task_north_bound,
             _task_margin, _task_main_force, _task_industry_flow,
@@ -356,11 +369,11 @@ class MacroDataService:
                 return float('nan'), float('nan'), float('nan')
             gov_df = gov_df.sort_values('日期', ascending=False)
             latest = gov_df.iloc[0]
-            y10 = float(latest.get('10年', 0))
-            y5 = float(latest.get('5年', 0))
-            y1 = float(latest.get('1年', 0))
-            y3 = float(latest.get('3年', 0))
-            y2 = (y1 + y3) / 2 if y1 > 0 and y3 > 0 else y3 if y3 > 0 else y1
+            y10 = float(latest.get('10年', float('nan')))
+            y5 = float(latest.get('5年', float('nan')))
+            y1 = float(latest.get('1年', float('nan')))
+            y3 = float(latest.get('3年', float('nan')))
+            y2 = (y1 + y3) / 2 if y1 == y1 and y3 == y3 else y3 if y3 == y3 else y1
             return round(y10, 4), round(y5, 4), round(y2, 4)
         except Exception as e:
             logger.warning(f"[MacroData] Treasury yields fetch failed: {e}")
@@ -448,8 +461,11 @@ class MacroDataService:
             prev_month = str(int(latest_month) - 100)
             prev_rows = df[df['月份'].astype(str) == prev_month]
             if not prev_rows.empty:
-                yoy = (latest[col] - prev_rows[col].iloc[0]) / abs(prev_rows[col].iloc[0]) * 100
-                return round(float(yoy), 1)
+                prev_val = float(prev_rows[col].iloc[0])
+                if abs(prev_val) > 1e-12:
+                    yoy = (latest[col] - prev_val) / abs(prev_val) * 100
+                    return round(float(yoy), 1)
+                return round(float(latest[col]), 1)
             return round(float(latest[col]), 1)
         except Exception as e:
             logger.warning(f"[MacroData] Social financing fetch failed: {e}")
@@ -479,13 +495,28 @@ class MacroDataService:
             if df is None or df.empty:
                 return float('nan'), float('nan'), float('nan')
             latest = df.iloc[-1]
-            overnight = float(latest.get('O/N-定价', 0) or 0)
-            w1 = float(latest.get('1W-定价', 0) or 0)
-            m1 = float(latest.get('1M-定价', 0) or 0)
+            overnight = float(latest.get('O/N-定价', float('nan')))
+            w1 = float(latest.get('1W-定价', float('nan')))
+            m1 = float(latest.get('1M-定价', float('nan')))
             return round(overnight, 4), round(w1, 4), round(m1, 4)
         except Exception as e:
             logger.warning(f"[MacroData] Shibor fetch failed: {e}")
             return float('nan'), float('nan'), float('nan')
+
+    def _fetch_lpr(self) -> Tuple[float, float]:
+        try:
+            if ak is None:
+                return float('nan'), float('nan')
+            df = ak.macro_china_lpr()
+            if df is None or df.empty:
+                return float('nan'), float('nan')
+            latest = df.iloc[-1]
+            lpr1y = float(latest.get('LPR1Y', float('nan')))
+            lpr5y = float(latest.get('LPR5Y', float('nan')))
+            return round(lpr1y, 4), round(lpr5y, 4)
+        except Exception as e:
+            logger.warning(f"[MacroData] LPR fetch failed: {e}")
+            return float('nan'), float('nan')
 
     def _fetch_credit_spread(self) -> float:
         try:
@@ -500,9 +531,9 @@ class MacroDataService:
                 return float('nan')
             aa_latest = aa_df.sort_values('日期', ascending=False).iloc[0]
             gov_latest = gov_df.sort_values('日期', ascending=False).iloc[0]
-            aa_5y = float(aa_latest.get('5年', 0))
-            gov_5y = float(gov_latest.get('5年', 0))
-            if aa_5y > 0 and gov_5y > 0:
+            aa_5y = float(aa_latest.get('5年', float('nan')))
+            gov_5y = float(gov_latest.get('5年', float('nan')))
+            if aa_5y == aa_5y and gov_5y == gov_5y and aa_5y > 0 and gov_5y > 0:
                 return round((aa_5y - gov_5y) * 100, 1)
             return float('nan')
         except Exception as e:
@@ -530,8 +561,8 @@ class MacroDataService:
                 hl_df = ak.stock_a_high_low_statistics()
                 if hl_df is not None and not hl_df.empty:
                     latest = hl_df.iloc[-1]
-                    new_high = int(latest.get('high60', 0)) if not pd.isna(latest.get('high60', 0)) else 0
-                    new_low = int(latest.get('low60', 0)) if not pd.isna(latest.get('low60', 0)) else 0
+                    new_high = int(latest.get('high60', float('nan'))) if not pd.isna(latest.get('high60', float('nan'))) else float('nan')
+                    new_low = int(latest.get('low60', float('nan'))) if not pd.isna(latest.get('low60', float('nan'))) else float('nan')
             except Exception:
                 logger.warning("[MacroData] stock_a_high_low_statistics failed, using nan for new_high/new_low")
                 pass
@@ -644,11 +675,20 @@ class MacroDataService:
                 data.cb_below_par_count = float('nan')
                 return
             latest = df.iloc[-1]
-            data.cb_median_premium = round(float(latest.get('mid_premium_rt', 0)), 2)
-            data.cb_median_price = round(float(latest.get('mid_price', 0)), 2)
-            data.cb_avg_daily_amount = round(float(latest.get('amount', 0)), 2)
-            data.cb_count = float(int(latest.get('count', 0)))
-            data.cb_below_par_count = float(int(latest.get('price_90', 0)) + int(latest.get('price_90_100', 0)))
+            data.cb_median_premium = round(float(latest.get('mid_premium_rt', float('nan'))), 2)
+            data.cb_median_price = round(float(latest.get('mid_price', float('nan'))), 2)
+            data.cb_avg_daily_amount = round(float(latest.get('amount', float('nan'))), 2)
+            count_val = latest.get('count')
+            if pd.isna(count_val):
+                data.cb_count = float('nan')
+            else:
+                data.cb_count = float(int(count_val))
+            price_90 = latest.get('price_90')
+            price_90_100 = latest.get('price_90_100')
+            if pd.isna(price_90) or pd.isna(price_90_100):
+                data.cb_below_par_count = float('nan')
+            else:
+                data.cb_below_par_count = float(int(price_90) + int(price_90_100))
         except Exception as e:
             logger.warning(f"[MacroData] CB stats from JSL failed: {e}")
             data.cb_median_premium = float('nan')
@@ -659,6 +699,14 @@ class MacroDataService:
 
     def _fetch_north_bound_flow(self) -> float:
         """北向资金净流入（亿元）"""
+        try:
+            # 优先使用 data_enrich 的 north_map 缓存
+            if _de._north_map:
+                total = sum(v.get("net", 0) for v in _de._north_map.values() if isinstance(v, dict))
+                return round(total / 1e8, 2)  # 元 -> 亿元
+        except Exception as e:
+            logger.debug(f"[MacroData] north_map fallback failed: {e}")
+        # 降级到 AKShare
         try:
             if ak is None:
                 return float('nan')
@@ -681,7 +729,15 @@ class MacroDataService:
             return float('nan')
 
     def _fetch_main_force_flow(self) -> float:
-        """主力资金净流入（亿元）。使用行业资金流向汇总"""
+        """主力资金净流入（亿元）"""
+        try:
+            # 优先使用 data_enrich 的 fund_flow_map 缓存
+            if _de._fund_flow_map:
+                total = sum(v.get("net_main", 0) for v in _de._fund_flow_map.values() if isinstance(v, dict))
+                return round(total / 1e8, 2)
+        except Exception as e:
+            logger.debug(f"[MacroData] fund_flow_map fallback failed: {e}")
+        # 降级到 AKShare 行业资金流向汇总
         try:
             if ak is None:
                 return float('nan')
@@ -699,7 +755,20 @@ class MacroDataService:
             return float('nan')
 
     def _fetch_industry_net_inflow(self) -> float:
-        """行业净流入占比评分（0-100）。使用行业资金流向计算"""
+        """行业净流入占比评分（0-100）。使用 data_enrich fund_flow_map 缓存或行业资金流向计算"""
+        try:
+            # 优先使用 data_enrich 的 fund_flow_map 缓存
+            if _de._fund_flow_map:
+                net_main_vals = [v.get("net_main", 0) for v in _de._fund_flow_map.values() if isinstance(v, dict)]
+                if net_main_vals:
+                    total = sum(abs(v) for v in net_main_vals)
+                    if total == 0:
+                        return 50.0
+                    weighted = sum(v for v in net_main_vals if v > 0) / total * 100
+                    return round(weighted, 1)
+        except Exception as e:
+            logger.debug(f"[MacroData] fund_flow_map fallback for industry failed: {e}")
+        # 降级到 AKShare 行业资金流向
         try:
             if ak is None:
                 return float('nan')
@@ -741,6 +810,11 @@ class MacroDataService:
             return float('nan')
 
     def _fetch_margin_data(self) -> Tuple[float, float, float]:
+        """融资融券余额（亿元）+ 变化 + 融资买入比例
+        
+        Primary: stock_margin_sse / stock_margin_szse (daily)
+        Fallback: macro_china_market_margin_sh / macro_china_market_margin_sz (historical series)
+        """
         try:
             if ak is None:
                 return float('nan'), float('nan'), float('nan')
@@ -748,7 +822,7 @@ class MacroDataService:
             prev_balance = 0.0
             buy_amount = 0.0
 
-            # SSE 汇总（单位：元）
+            # Primary: SSE 汇总（单位：元）
             for offset in range(1, 5):
                 d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')
                 try:
@@ -769,6 +843,20 @@ class MacroDataService:
                         break
                 except Exception:
                     continue
+
+            # Fallback: SSE 宏观序列（AKShare 1.18.x  daily API 可能损坏）
+            if current_balance == 0.0:
+                try:
+                    df = ak.macro_china_market_margin_sh()
+                    if df is not None and not df.empty:
+                        df = df.sort_values('日期', ascending=True)
+                        latest = df.iloc[-1]
+                        current_balance = float(latest['融资融券余额']) / 1e8
+                        buy_amount = float(latest['融资买入额']) / 1e8
+                        if len(df) >= 2:
+                            prev_balance = float(df.iloc[-2]['融资融券余额']) / 1e8
+                except Exception as e:
+                    logger.debug(f"[MacroData] SSE margin fallback failed: {e}")
 
             # SZSE 今日和昨日余额
             sz_balance = 0.0
@@ -794,6 +882,20 @@ class MacroDataService:
                         break
                 except Exception:
                     continue
+
+            # Fallback: SZSE 宏观序列
+            if sz_balance == 0.0:
+                try:
+                    df = ak.macro_china_market_margin_sz()
+                    if df is not None and not df.empty:
+                        df = df.sort_values('日期', ascending=True)
+                        latest = df.iloc[-1]
+                        sz_balance = float(latest['融资融券余额']) / 1e8
+                        sz_buy = float(latest['融资买入额']) / 1e8
+                        if len(df) >= 2:
+                            sz_prev_balance = float(df.iloc[-2]['融资融券余额']) / 1e8
+                except Exception as e:
+                    logger.debug(f"[MacroData] SZSE margin fallback failed: {e}")
 
             total_balance = current_balance + sz_balance
             total_prev = prev_balance + sz_prev_balance
@@ -877,8 +979,8 @@ class MacroDataService:
 
             latest_pe = pe_data[-1]
             latest_pb = pb_data[-1]
-            pe_median = round(float(latest_pe.get("middleTtmPe", 0)), 2)
-            pb_median = round(float(latest_pb.get("middlePb", 0)), 2)
+            pe_median = round(float(latest_pe.get("middleTtmPe", float('nan'))), 2)
+            pb_median = round(float(latest_pb.get("middlePb", float('nan'))), 2)
             pe_hist = pd.Series([d.get("middleTtmPe") for d in pe_data]).dropna()
             pb_hist = pd.Series([d.get("middlePb") for d in pb_data]).dropna()
             pe_hist = pd.to_numeric(pe_hist, errors="coerce").dropna()

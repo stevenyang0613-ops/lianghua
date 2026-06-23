@@ -11,6 +11,7 @@
 
 import pandas as pd
 import numpy as np
+from datetime import date
 from typing import Optional
 from app.strategies.base import Strategy
 from app.models.backtest import StrategyParam
@@ -141,6 +142,19 @@ class FusionStrategy(Strategy):
         self._peak_prices: dict[str, float] = {}
         self._prev_selected: set[str] = set()
         self._buffer_tracker: dict[str, int] = {}
+        # 修复: 统一 date 列为 datetime.date 类型，避免 mixed types 排序失败
+        from datetime import datetime
+        def _norm_date(d):
+            if hasattr(d, 'date'):
+                return d.date()
+            if isinstance(d, str):
+                try:
+                    return datetime.strptime(d[:10], '%Y-%m-%d').date()
+                except Exception:
+                    return None
+            return d if isinstance(d, date) else None
+        self._data['date'] = self._data['date'].apply(_norm_date)
+        self._data = self._data[self._data['date'].notna()]
         self._dates = sorted(self._data['date'].unique())
         self._date_data_map = {d: group for d, group in self._data.groupby('date')}
         self._portfolio_peak = 1.0

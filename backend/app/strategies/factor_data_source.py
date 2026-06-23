@@ -17,6 +17,7 @@ import numpy as np
 import logging
 import threading
 import time
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 try:
     import akshare as ak
@@ -72,26 +73,31 @@ class FactorDataSource:
             try:
                 from app.engine import data_enrich as _de
 
+                # 使用公共 API 获取批量数据快照，避免直接访问内部缓存
+                _spot_data = _de.get_all_spot_data()
+                _fin_data = _de.get_all_fin_data()
+                _industry_data = _de.get_all_industry_map()
+
                 industry_pe: dict[str, list[float]] = {}
-                for sc, info in list((_de._spot_map or {}).items()):
+                for sc, info in list(_spot_data.items()):
                     if not isinstance(info, dict):
                         continue
                     pe = info.get("pe")
                     if pe is None or not (5 < float(pe) < 200):
                         continue
-                    ind = _de._industry_map.get(str(sc).strip())
+                    ind = _industry_data.get(str(sc).strip())
                     if not ind:
                         continue
                     industry_pe.setdefault(ind, []).append(float(pe))
 
                 industry_roe: dict[str, list[float]] = {}
-                for sc, info in list((_de._fin_map or {}).items()):
+                for sc, info in list(_fin_data.items()):
                     if not isinstance(info, dict):
                         continue
                     roe = info.get("roe")
                     if roe is None:
                         continue
-                    ind = _de._industry_map.get(str(sc).strip())
+                    ind = _industry_data.get(str(sc).strip())
                     if not ind:
                         continue
                     industry_roe.setdefault(ind, []).append(float(roe))
@@ -152,12 +158,17 @@ class FactorDataSource:
             if not self._industry_pmi_map:
                 self._refresh_industry_pmi()
 
+            # 使用公共 API 获取批量数据快照
+            _spot_data = _de.get_all_spot_data()
+            _fin_data = _de.get_all_fin_data()
+            _industry_data = _de.get_all_industry_map()
+
             industry_stats: dict[str, dict] = {}
-            for sc, info in list((_de._spot_map or {}).items()):
+            for sc, info in list(_spot_data.items()):
                 if not isinstance(info, dict):
                     continue
                 pe = info.get("pe")
-                ind = _de._industry_map.get(str(sc).strip())
+                ind = _industry_data.get(str(sc).strip())
                 if not ind:
                     continue
                 stats = industry_stats.setdefault(ind, {"pe": [], "change_pct": [], "count": 0})
@@ -168,11 +179,11 @@ class FactorDataSource:
                     stats["change_pct"].append(float(ch))
                 stats["count"] += 1
 
-            for sc, info in list((_de._fin_map or {}).items()):
+            for sc, info in list(_fin_data.items()):
                 if not isinstance(info, dict):
                     continue
                 roe = info.get("roe")
-                ind = _de._industry_map.get(str(sc).strip())
+                ind = _industry_data.get(str(sc).strip())
                 if not ind or roe is None:
                     continue
                 stats = industry_stats.setdefault(ind, {"pe": [], "change_pct": [], "count": 0})
@@ -325,7 +336,7 @@ class FactorDataSource:
                 total_change = 0.0
                 valid_change_count = 0
                 stock_count = 0
-                _spot_iter = _de._spot_map or {}
+                _spot_iter = _de.get_all_spot_data()
                 for sc, info in list(_spot_iter.items()):
                     if not isinstance(info, dict):
                         continue
@@ -386,15 +397,9 @@ class FactorDataSource:
                     'avg_price': 0.0,
                     'total_volume': 0.0,
                 }
-            def _safe_float(v):
-                try:
-                    f = float(v)
-                    return 0.0 if pd.isna(f) else f
-                except (TypeError, ValueError):
-                    return 0.0
-            premiums = [_safe_float(getattr(q, 'premium_ratio', None)) for q in quotes]
-            prices = [_safe_float(getattr(q, 'price', None)) for q in quotes]
-            volumes = [_safe_float(getattr(q, 'volume', None)) for q in quotes]
+            premiums = [safe_float(getattr(q, 'premium_ratio', None), default=0.0) for q in quotes]
+            prices = [safe_float(getattr(q, 'price', None), default=0.0) for q in quotes]
+            volumes = [safe_float(getattr(q, 'volume', None), default=0.0) for q in quotes]
             sorted_p = sorted(premiums)
             median = sorted_p[len(sorted_p) // 2] if sorted_p else 0.0
             return {

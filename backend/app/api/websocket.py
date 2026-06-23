@@ -287,15 +287,18 @@ class RealtimeQuotePusher:
             return True
 
         # 价格变化超过阈值
-        old_price = old.get('price', 0)
-        new_price = new.get('price', 0)
-        if abs(new_price - old_price) / max(old_price, 1) > threshold:
+        old_price = old.get('price')
+        new_price = new.get('price')
+        if old_price is not None and new_price is not None:
+            if abs(new_price - old_price) / max(old_price, 1) > threshold:
+                return True
+        elif old_price != new_price:
             return True
 
         # 成交量变化
-        old_vol = old.get('volume', 0)
-        new_vol = new.get('volume', 0)
-        if new_vol != old_vol:
+        old_vol = old.get('volume')
+        new_vol = new.get('volume')
+        if old_vol != new_vol:
             return True
 
         return False
@@ -382,6 +385,8 @@ async def websocket_handler(websocket: WebSocket, client_id: str):
 
     except WebSocketDisconnect:
         logger.info(f"[WS] 客户端主动断开: {client_id}")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"[WS] 连接错误 {client_id}: {e}")
     finally:

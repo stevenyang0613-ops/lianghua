@@ -266,6 +266,8 @@ class TaskScheduler:
                 execution.error = f"任务超时 ({config.timeout}秒)"
                 logger.error(f"[TaskScheduler] 任务超时: {config.task_id}")
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 execution.error = str(e)
                 execution.traceback = traceback.format_exc()
@@ -289,6 +291,8 @@ class TaskScheduler:
                             logger.info(f"[TaskScheduler] 任务重试成功: {config.task_id}")
                             break
 
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as retry_error:
                             execution.error = str(retry_error)
                             execution.traceback = traceback.format_exc()

@@ -349,7 +349,7 @@ class DatabaseConnectionManager:
                 await self.health_check()
                 await asyncio.sleep(self.config.health_check_interval)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as e:
                 logger.error(f"[DBPool] 健康检查失败: {e}")
                 await asyncio.sleep(5)

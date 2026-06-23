@@ -64,7 +64,8 @@ if _AKSHARE_PROXY_ENABLED:
     except Exception as e:
         print(f"[Main] AKShare proxy patch install failed: {e}")
 else:
-    print("[Main] AKShare proxy patch DISABLED via LH_AKSHARE_PROXY_ENABLED=0")
+    if _settings.debug:
+        print("[Main] AKShare proxy patch DISABLED via LH_AKSHARE_PROXY_ENABLED=0")
 
 # 模块级引用 — 供 factor_data_source 等模块导入
 market_engine = None  # type: ignore
@@ -329,16 +330,23 @@ async def lifespan(app: FastAPI):
     engine = MarketEngine(refresh_interval=_settings.market_refresh_interval, storage=storage)
     global market_engine
     market_engine = engine
-    signal_engine = SignalEngine()
-    signal_engine.set_storage(storage)
-    trade_engine = TradeEngine()
-    signal_engine.set_trade_engine(trade_engine)
+    try:
+        signal_engine = SignalEngine()
+        signal_engine.set_storage(storage)
+        trade_engine = TradeEngine()
+        signal_engine.set_trade_engine(trade_engine)
+        app.state.signal_engine = signal_engine
+        app.state.trade_engine = trade_engine
+    except Exception as e:
+        logger.error(f"[Startup] SignalEngine init failed: {e}")
+        signal_engine = None
+        trade_engine = None
+        app.state.signal_engine = None
+        app.state.trade_engine = None
     scheduler = Scheduler()
 
     app.state.engine = engine
     app.state.storage = storage
-    app.state.signal_engine = signal_engine
-    app.state.trade_engine = trade_engine
     app.state.scheduler = scheduler
     app.state.analysis_engine = AnalysisEngine(cache_ttl=30, max_entries=100)
     print(f"[Startup 3/5] ✅ Engines ready (market, signal, trade, analysis)")
@@ -355,6 +363,14 @@ async def lifespan(app: FastAPI):
         })
         app.state.data_source_manager = data_source_manager
         print(f"[Startup 4/5] ✅ Data source manager initialized (eastmoney+cninfo)")
+        # 启动配置状态自检
+        print(f"[Config] MX: {'✅ configured' if settings.MX_APIKEY else '⚠️  not configured'}")
+        print(f"[Config] TAVILY: {'✅ configured' if settings.TAVILY_API_KEY else '⚠️  not configured'}")
+        print(f"[Config] MINIMAX: {'✅ configured' if settings.MINIMAX_API_KEY else '⚠️  not configured'}")
+        print(f"[Config] GITHUB: {'✅ configured' if settings.GITHUB_TOKEN else '⚠️  not configured'}")
+        print(f"[Config] DEEPSEEK: {'✅ configured' if settings.DEEPSEEK_API_KEY else '⚠️  not configured'}")
+        print(f"[Config] AKShare proxy: {'✅ enabled' if settings.AKSHARE_PROXY_ENABLED else '⚠️  disabled (direct)'}")
+        print(f"[Config] JWT secret: {'✅ persistent' if settings.JWT_SECRET_KEY else '⚠️  auto-generated'}")
     except Exception as e:
         print(f"[Startup 4/5] ⚠ Data source init failed (non-fatal): {e}")
 
@@ -391,7 +407,10 @@ async def lifespan(app: FastAPI):
         pass
 
     # Connect signal engine to market engine for real-time signal generation
-    engine.subscribe(signal_engine.process_quotes)
+    if signal_engine is not None:
+        engine.subscribe(signal_engine.process_quotes)
+    else:
+        logger.warning("[Startup] signal_engine is None, skipping real-time signal subscription")
 
     # Initialize PaperTradeManager for simulated trading
     try:
@@ -558,9 +577,13 @@ async def lifespan(app: FastAPI):
             # 第0步：从磁盘加载所有数据增强缓存到内存
             # 这样即使子进程还没写完，enrich_quotes 也能用旧缓存数据
             try:
-                from app.engine.data_enrich import start_background_refresh
+                from app.engine.data_enrich import start_background_refresh, set_event_source_instance
+                from app.strategies.event_data_source import EventDataSource
                 await start_background_refresh()
-                logger.info("[Startup] Data enrichment caches loaded from disk")
+                # Register EventDataSource for event-score enrichment in enrich_quotes
+                _event_src = EventDataSource()
+                set_event_source_instance(_event_src)
+                logger.info("[Startup] Data enrichment caches loaded from disk + EventDataSource registered")
             except Exception as e:
                 logger.warning(f"[Startup] Cache loading failed: {e}")
 
@@ -713,8 +736,7 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     pass
             # Wait briefly then SIGKILL if still alive
-            import time
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
             for p in enrich_procs:
                 if p.poll() is None:
                     try:
@@ -825,6 +847,7 @@ async def spa_fallback(request: Request, call_next):
 def _health_response(request: Request | None = None) -> dict:
     engine_running = False
     db_ok = False
+    signal_engine_available = False
     try:
         engine_running = getattr(app.state, "engine", None) and app.state.engine.is_running
     except Exception:
@@ -837,12 +860,17 @@ def _health_response(request: Request | None = None) -> dict:
             db_ok = True
     except Exception:
         pass
+    try:
+        signal_engine_available = getattr(app.state, "signal_engine", None) is not None
+    except Exception:
+        pass
     result = {
         "status": "ok",
         "app": _settings.app_name,
         "version": _settings.app_version,
         "market_running": engine_running,
         "db_ok": db_ok,
+        "signal_engine_available": signal_engine_available,
     }
     # ws_auth_token 仅在本地请求中返回，避免 SSRF 窃取
     if request is not None:

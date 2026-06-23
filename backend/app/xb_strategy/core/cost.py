@@ -148,7 +148,7 @@ class TransactionCostModel:
         daily_amount_yuan = daily_amount * 10000
 
         # 冲击成本率
-        impact_rate = (trade_amount / daily_amount_yuan) * params.impact_factor
+        impact_rate = (trade_amount / daily_amount_yuan) * params.impact_factor if daily_amount_yuan > 0 else 0
 
         # 限制最大冲击成本
         impact_rate = min(impact_rate, 0.02)  # 最大2%

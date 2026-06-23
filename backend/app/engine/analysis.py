@@ -128,9 +128,9 @@ class AnalysisEngine:
         from app.engine.filters import is_tradeable_bond
         if not is_tradeable_bond(b):
             return False
-        if (not b.volume or b.volume == 0) and b.remaining_years is not None and b.remaining_years < 0.5:
+        if (b.volume is None or b.volume == 0) and b.remaining_years is not None and b.remaining_years < 0.5:
             return False
-        if min_volume > 0 and (not b.volume or b.volume < min_volume):
+        if min_volume > 0 and (b.volume is None or b.volume < min_volume):
             return False
         return True
 
@@ -204,7 +204,7 @@ class AnalysisEngine:
             forced_call_days = getattr(b, "forced_call_days", 0) or 0
 
             put_back_pressure = (
-                b.conversion_price and b.conversion_price > 0 and b.stock_price < b.conversion_price
+                b.conversion_price and b.conversion_price > 0 and b.stock_price is not None and b.stock_price < b.conversion_price
                 and b.remaining_years is not None and 0 < b.remaining_years < 2
             )
 
@@ -275,7 +275,7 @@ class AnalysisEngine:
     def scan_pulse(bonds: list[ConvertibleQuote], limit: int = 0, offset: int = 0, min_volume: float = 0, storage=None, start_date: str | None = None, end_date: str | None = None, sort_by: str = "", sort_order: str = "asc") -> list[dict]:
         """Scan for unusual price/volume movements."""
         valid_bonds = [b for b in bonds if AnalysisEngine.is_valid_bond(b, min_volume=min_volume) and b.volume and b.volume > 0]
-        avg_volume = sum(b.volume for b in valid_bonds) / len(valid_bonds) if valid_bonds else 0
+        avg_volume = sum(b.volume for b in valid_bonds if b.volume is not None) / max(sum(1 for b in valid_bonds if b.volume is not None), 1) if valid_bonds else 0
 
         # Batch fetch history for sustained divergence detection
         history_batch: dict = {}
@@ -321,7 +321,7 @@ class AnalysisEngine:
                     "severity": "medium",
                 })
 
-            if b.remaining_years and b.remaining_years < 0.5:
+            if b.remaining_years is not None and b.remaining_years < 0.5:
                 results.append({
                     "code": b.code,
                     "name": b.name,
@@ -371,9 +371,9 @@ class AnalysisEngine:
                 if history_batch and b.code in history_batch:
                     sustained_count = 0
                     for h in history_batch[b.code]:
-                        h_bond_chg = float(h.get("change_pct", 0) or 0)
-                        h_stock_chg = float(h.get("stock_change_pct", 0) or 0)
-                        if abs(h_bond_chg) >= 0.5 and abs(h_stock_chg) >= 0.5 and h_bond_chg * h_stock_chg < 0:
+                        h_bond_chg = float(h.get("change_pct")) if h.get("change_pct") is not None else None
+                        h_stock_chg = float(h.get("stock_change_pct")) if h.get("stock_change_pct") is not None else None
+                        if h_bond_chg is not None and h_stock_chg is not None and abs(h_bond_chg) >= 0.5 and abs(h_stock_chg) >= 0.5 and h_bond_chg * h_stock_chg < 0:
                             sustained_count += 1
                     if sustained_count >= 3:
                         severity = "high"
@@ -417,7 +417,7 @@ class AnalysisEngine:
         for b in bonds:
             if not AnalysisEngine.is_valid_bond(b, min_volume=min_volume):
                 continue
-            if not b.conversion_price or b.conversion_price <= 0 or not b.stock_price or b.stock_price <= 0:
+            if b.conversion_price is None or b.conversion_price <= 0 or b.stock_price is None or b.stock_price <= 0:
                 continue
 
             ratio = b.stock_price / b.conversion_price

@@ -16,7 +16,7 @@ def _get_manager(request: Request):
 
 class CreateAccountRequest(BaseModel):
     strategy_id: str = Field(min_length=1)
-    initial_cash: float = Field(default=100000.0, gt=0)
+    initial_cash: float = Field(default=100_000_000.0, gt=0)
     params: Optional[dict] = None
 
 

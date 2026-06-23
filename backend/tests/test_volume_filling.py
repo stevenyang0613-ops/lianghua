@@ -34,7 +34,7 @@ class TestAKShareVolumeFilling:
         assert result.volume > 0
 
     def test_cov_data_fallback_has_no_volume(self):
-        """当无 spot 数据时，volume 为 0"""
+        """当无 spot 数据时，volume 为 None（区分"缺失"和"真实零值"）"""
         adapter = AKShareAdapter()
 
         mock_cov_df = pd.DataFrame({
@@ -50,7 +50,7 @@ class TestAKShareVolumeFilling:
         result = adapter._row_to_quote(mock_cov_df.iloc[0], {}, {})
         assert result is not None
         assert result.code == '128139'
-        assert result.volume == 0.0
+        assert result.volume is None
 
     def test_volume_filling_from_bond_zh_cov(self):
         """测试能否从 bond_zh_cov 获取 volume（如果有的话）
@@ -74,8 +74,8 @@ class TestAKShareVolumeFilling:
                 # 如果 adapter 调用失败，应该优雅处理
                 pass
 
-    def test_empty_price_becomes_zero(self):
-        """测试 price 为空时会被设置为 0 而不是返回 None"""
+    def test_empty_price_becomes_none(self):
+        """测试 price 为空时会被设置为 None 而不是 0（区分"缺失"和"真实零值"）"""
         adapter = AKShareAdapter()
 
         mock_df = pd.DataFrame({
@@ -86,10 +86,10 @@ class TestAKShareVolumeFilling:
 
         result = adapter._row_to_quote(mock_df.iloc[0], {}, {})
         assert result is not None
-        assert result.price == 0.0
+        assert result.price is None
 
-    def test_volume_zero_filter_not_applied(self):
-        """验证 volume=0 的记录不会被过滤掉"""
+    def test_volume_missing_becomes_none(self):
+        """验证 volume 缺失时返回 None 而不是 0"""
         adapter = AKShareAdapter()
 
         mock_cov_df = pd.DataFrame({
@@ -104,7 +104,7 @@ class TestAKShareVolumeFilling:
 
         result = adapter._row_to_quote(mock_cov_df.iloc[0], {}, {})
         assert result is not None
-        assert result.volume == 0.0
+        assert result.volume is None
 
 
 if __name__ == '__main__':

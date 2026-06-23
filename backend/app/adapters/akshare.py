@@ -9,6 +9,7 @@ import pandas as pd
 
 from app.adapters.base import DataSourceAdapter
 from app.models.convertible import ConvertibleQuote
+from app.engine.data_enrich_utils import safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class AKShareAdapter(DataSourceAdapter):
             if elapsed < self._cache_ttl:
                 return self._cache
 
+        bonds = []
+        eb_bonds = []
         for attempt in range(self._max_retries):
             try:
                 bonds, eb_bonds = await asyncio.wait_for(
@@ -92,16 +95,16 @@ class AKShareAdapter(DataSourceAdapter):
             for _, r in df_spot.iterrows():
                 code = str(r.get("code", "")).strip()
                 if code and len(code) == 6 and code[0] in '12':
-                    trade = self._safe_float(r.get("trade", 0))
-                    if trade > 0:
+                    trade = safe_float(r.get("trade"))
+                    if trade is not None and trade > 0:
                         spot_map[code] = {
                             "price": trade,
-                            "open": self._safe_float(r.get("open", 0)),
-                            "high": self._safe_float(r.get("high", 0)),
-                            "low": self._safe_float(r.get("low", 0)),
-                            "change_pct": self._safe_float(r.get("changepercent", 0)),
-                            "amount": self._safe_float(r.get("amount", 0)),
-                            "volume": self._safe_float(r.get("volume", 0)),
+                            "open": safe_float(r.get("open")),
+                            "high": safe_float(r.get("high")),
+                            "low": safe_float(r.get("low")),
+                            "change_pct": safe_float(r.get("changepercent")),
+                            "amount": safe_float(r.get("amount")),
+                            "volume": safe_float(r.get("volume")),
                         }
         except Exception as e:
             logger.warning(f"[AKShare] bond_zh_hs_cov_spot failed: {e}")
@@ -133,13 +136,13 @@ class AKShareAdapter(DataSourceAdapter):
                 if not raw_code or raw_code.startswith("bj"):
                     continue
                 s_code = raw_code[2:] if (raw_code.startswith("sz") or raw_code.startswith("sh")) else raw_code
-                chg = self._safe_float(r.get("涨跌幅", 0))
+                chg = safe_float(r.get("涨跌幅"))
                 stock_chg_map[s_code] = chg
-                sp_v = self._safe_float(r.get("最新价", 0))
-                if sp_v:
+                sp_v = safe_float(r.get("最新价"))
+                if sp_v is not None:
                     stock_price_map[s_code] = sp_v
-                sv_v = self._safe_float(r.get("成交额", 0))
-                if sv_v:
+                sv_v = safe_float(r.get("成交额"))
+                if sv_v is not None:
                     stock_volume_map[s_code] = sv_v
             logger.info(f"[AKShare] Fetched {len(stock_chg_map)} stock change data from Sina ({len(stock_price_map)} prices)")
 
@@ -174,8 +177,8 @@ class AKShareAdapter(DataSourceAdapter):
                 if not f_code:
                     continue
                 fund_flow_map[f_code] = {
-                    "net_main": self._safe_float(r.get("今日主力净流入-净额", 0)),
-                    "net_main_pct": self._safe_float(r.get("今日主力净流入-净占比", 0)),
+                    "net_main": safe_float(r.get("今日主力净流入-净额")),
+                    "net_main_pct": safe_float(r.get("今日主力净流入-净占比")),
                 }
             logger.info(f"[AKShare] Fetched fund flow: {len(fund_flow_map)} stocks")
         except Exception as e:
@@ -230,9 +233,9 @@ class AKShareAdapter(DataSourceAdapter):
                 call_status = str(r.get("强赎状态", "")).strip()
                 last_trade_date = self._parse_iso_date(r.get("最后交易日", ""))
                 maturity = self._parse_iso_date(r.get("到期日", ""))
-                redemption_price = self._safe_float(r.get("强赎价", 0))
-                jsl_price = self._safe_float(r.get("现价", 0))
-                jsl_premium = self._safe_float(r.get("转股溢价率", 0))
+                redemption_price = safe_float(r.get("强赎价"))
+                jsl_price = safe_float(r.get("现价"))
+                jsl_premium = safe_float(r.get("转股溢价率"))
                 is_called = call_status in ("已公告强赎", "公告要强赎", "已满足强赎条件")
                 # 强赎天计数 (格式: "0/15 | 30")
                 forced_call_days = 0
@@ -252,7 +255,7 @@ class AKShareAdapter(DataSourceAdapter):
                     "forced_call_days": forced_call_days,
                     "jsl_price": jsl_price,
                     "jsl_premium": jsl_premium,
-                    "remaining_scale": self._safe_float(r.get("剩余规模")),
+                    "remaining_scale": safe_float(r.get("剩余规模"), default=0.0),
                 }
 
                 # 可交换债额外构建行情(EB 单独走另一条数据流)
@@ -262,20 +265,22 @@ class AKShareAdapter(DataSourceAdapter):
                 # 从spot_map补充涨跌幅、成交额和价格
                 spot = spot_map.get(code, {})
                 sina_price_eb = float(spot.get("price", 0) or 0)
-                jsl_price_eb = self._safe_float(r.get("现价", 0))
-                price = sina_price_eb if sina_price_eb > 0 else jsl_price_eb
-                stock_price = self._safe_float(r.get("正股价", 0))
-                conversion_price = self._safe_float(r.get("转股价", 0))
-                conversion_value = round(stock_price / conversion_price * 100, 2) if conversion_price > 0 else 0.0
-                premium_ratio = round((price - conversion_value) / conversion_value * 100, 2) if conversion_value > 0 else 0.0
-                dual_low = round(price + premium_ratio, 2) if price > 0 else 0.0
+                jsl_price_eb = safe_float(r.get("现价"))
+                price = sina_price_eb if sina_price_eb > 0 else (jsl_price_eb if jsl_price_eb is not None and jsl_price_eb > 0 else None)
+                stock_price = safe_float(r.get("正股价", 0))
+                conversion_price = safe_float(r.get("转股价", 0))
+                conversion_value = round(stock_price / conversion_price * 100, 2) if stock_price is not None and stock_price > 0 and conversion_price is not None and conversion_price > 0 else None
+                premium_ratio = round((price - conversion_value) / conversion_value * 100, 2) if price is not None and conversion_value is not None and conversion_value > 0 else None
+                dual_low = round(price + premium_ratio, 2) if price is not None and premium_ratio is not None else None
                 remaining_years = self._calc_remaining_years(r.get("到期日", ""))
                 forced_call_days = redeem_map.get(code, {}).get("forced_call_days", 0)
-                change_pct = spot.get("change_pct", 0.0)
-                raw_amount = spot.get("amount", 0.0)
-                volume = round(raw_amount / 100000000, 4) if raw_amount > 0 else 0.0
+                change_pct = spot.get("change_pct") if spot.get("change_pct") is not None else None
+                raw_amount = spot.get("amount")
+                volume = round(raw_amount / 100000000, 4) if raw_amount is not None else None
                 eb_stock_code = str(r.get("正股代码", "")).strip()
-                stock_change_pct = stock_chg_map.get(eb_stock_code, 0.0)
+                stock_change_pct = stock_chg_map.get(eb_stock_code)
+                if stock_change_pct is None:
+                    stock_change_pct = None
                 ff = fund_flow_map.get(eb_stock_code, {})
                 eb_bonds.append(ConvertibleQuote(
                     code=code,
@@ -289,7 +294,7 @@ class AKShareAdapter(DataSourceAdapter):
                     conversion_value=conversion_value,
                     premium_ratio=premium_ratio,
                     dual_low=dual_low,
-                    ytm=self._calc_ytm(price, remaining_years),
+                    ytm=self._calc_ytm(price, remaining_years) if price is not None else None,
                     volume=volume,
                     remaining_years=remaining_years,
                     forced_call_days=forced_call_days,
@@ -300,10 +305,10 @@ class AKShareAdapter(DataSourceAdapter):
                     pe=stock_pe_map.get(eb_stock_code),
                     pb=stock_pb_map.get(eb_stock_code),
                     turnover_rate=stock_turnover_map.get(eb_stock_code),
-                    net_capital_flow=ff.get("net_main"),
-                    net_capital_flow_pct=ff.get("net_main_pct"),
+                    net_capital_flow=ff.get("net_main") if ff.get("net_main") is not None else None,
+                    net_capital_flow_pct=ff.get("net_main_pct") if ff.get("net_main_pct") is not None else None,
                     redemption_price=redemption_price,
-                    outstanding_scale=self._safe_float(r.get("剩余规模")),
+                    outstanding_scale=safe_float(r.get("剩余规模")),
                 ))
             if eb_bonds:
                 logger.info(f"[AKShare] Fetched {len(eb_bonds)} exchangeable bonds from JSL")
@@ -338,7 +343,7 @@ class AKShareAdapter(DataSourceAdapter):
             tdx = get_tdx_adapter()
 
             # TDX 补充转债价格
-            missing_cb_codes = [b.code for b in bonds if not b.price or b.price <= 0]
+            missing_cb_codes = [b.code for b in bonds if b.price is None or b.price <= 0]
             if missing_cb_codes:
                 tdx_q = tdx.fetch_quotes(missing_cb_codes)
                 if tdx_q:
@@ -347,7 +352,7 @@ class AKShareAdapter(DataSourceAdapter):
                         price = q.get("price", 0)
                         if price and price > 0:
                             for b in bonds:
-                                if b.code == code and (not b.price or b.price <= 0):
+                                if b.code == code and (b.price is None or b.price <= 0):
                                     b.price = price
                                     b.change_pct = q.get("change_pct")
                                     filled += 1
@@ -367,50 +372,6 @@ class AKShareAdapter(DataSourceAdapter):
                 return bond
         return None
 
-    @staticmethod
-    def _safe_float(value) -> float:
-        """将任意输入安全转换为 float，缺失/无效输入返回 0.0
-
-        ⚠️ 注意：返回 0.0 在两个场景下含义不同：
-          - 数据源返回 0（合法值，如 change_pct=0%）
-          - 数据源缺失/解析失败（应理解为"无数据"）
-
-        对真实 0 与缺失敏感的字段（如价格、转股价），请使用 `_safe_float_opt`
-        让下游通过 None 区分"真实 0"和"缺失"。_is_stopped_trading 已实现对
-        price=0 的兜底逻辑（remaining_years==0 时保留，>=1.0 时判定停牌），
-        所以本方法在大多场景下仍然安全。
-        """
-        if value is None or value == '' or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
-            return 0.0
-        try:
-            v = float(value)
-            if math.isnan(v) or math.isinf(v):
-                return 0.0
-            return v
-        except (TypeError, ValueError):
-            return 0.0
-
-    @staticmethod
-    def _safe_float_opt(value) -> Optional[float]:
-        """区别于 _safe_float: 缺失值返回 None 而非 0.0
-
-        用于价格/转股价/正股价等"0 是非法值"的字段，
-        让下游 safe_score / has_data 优先级能正确区分"真实 0"和"缺失"。
-
-        ⚠️ 注意：调用方所在字段的 schema 必须声明为 Optional[float]，
-        否则 Pydantic 校验会失败（None 不能赋值给 float=0.0 字段）。
-        ConvertibleQuote 等模型当前仍使用 float=0.0，需先用 _safe_float，
-        后续迁移到 Optional[float] 后可切换此方法。
-        """
-        if value is None or value == '':
-            return None
-        try:
-            v = float(value)
-            if math.isnan(v) or math.isinf(v):
-                return None
-            return v
-        except (TypeError, ValueError):
-            return None
 
     @staticmethod
     def _calc_ytm(price: float, remaining_years: float) -> float:
@@ -557,38 +518,38 @@ class AKShareAdapter(DataSourceAdapter):
             # 价格优先级: Sina实时 > JSL现价 > 东财债现价
             sina_price = float(spot.get("price", 0) or 0)
             jsl_price = float(ri.get("jsl_price", 0) or 0)
-            em_price = self._safe_float(row.get("债现价", 0))
+            em_price = safe_float(row.get("债现价", 0))
 
             if sina_price > 0:
                 price = sina_price
             elif jsl_price > 0:
                 price = jsl_price
-            elif em_price > 0:
+            elif em_price is not None and em_price > 0:
                 price = em_price
             else:
                 price = 0.0
 
-            conversion_value = self._safe_float(row.get("转股价值", 0))
-            conversion_price = self._safe_float(row.get("转股价", 0))
-            stock_price = self._safe_float(row.get("正股价", 0))
+            conversion_value = safe_float(row.get("转股价值", 0))
+            conversion_price = safe_float(row.get("转股价", 0))
+            stock_price = safe_float(row.get("正股价", 0))
             stock_code = str(row.get("正股代码", "")).strip()
 
             # 溢价率优先级: JSL > 东财
             jsl_premium = float(ri.get("jsl_premium", 0) or 0)
-            em_premium = self._safe_float(row.get("转股溢价率", 0))
-            premium_ratio = jsl_premium if jsl_premium > 0 else em_premium
+            em_premium = safe_float(row.get("转股溢价率", 0))
+            premium_ratio = jsl_premium if jsl_premium > 0 else (em_premium if em_premium is not None else None)
 
             # 重新计算转股价值（如果东财给的是NaN但正股价和转股价有值）
-            if conversion_value == 0 and stock_price > 0 and conversion_price > 0:
+            if (conversion_value is None or conversion_value == 0) and stock_price is not None and stock_price > 0 and conversion_price is not None and conversion_price > 0:
                 conversion_value = round(stock_price / conversion_price * 100, 2)
 
-            dual_low = round(price + premium_ratio, 2) if price > 0 else 0.0
+            dual_low = round(price + (premium_ratio or 0), 2) if price > 0 else None
 
             # 从实时行情补充涨跌幅和成交额
-            change_pct = spot.get("change_pct", 0.0)
-            raw_amount = spot.get("amount", 0.0)
+            change_pct = spot.get("change_pct") if spot.get("change_pct") is not None else None
+            raw_amount = spot.get("amount")
             # amount 单位是元，转为亿元
-            volume = round(raw_amount / 100000000, 4) if raw_amount > 0 else 0.0
+            volume = round(raw_amount / 100000000, 4) if raw_amount is not None else None
 
             # 从同花顺补充到期时间，计算剩余年限
             maturity_str = maturity_map.get(code, "")
@@ -622,13 +583,13 @@ class AKShareAdapter(DataSourceAdapter):
             ):
                 return None
 
-            # 所有数据源均无真实价格 → price=0, 不丢弃（数据源缺失≠确认停牌）
+            # 所有数据源均无真实价格 → price=None, 不丢弃（数据源缺失≠确认停牌）
             # _is_stopped_trading 会根据其他字段做进一步判断
-            if price <= 0:
-                price = 0.0
+            if price is not None and price <= 0:
+                price = None
 
             # 无 Sina 无 JSL 价格（即东财默认100元）→ 数据源均不跟踪，过滤
-            if sina_price <= 0 and jsl_price <= 0 and em_price == 100.0:
+            if (sina_price is None or sina_price <= 0) and (jsl_price is None or jsl_price <= 0) and em_price == 100.0:
                 return None
 
             return ConvertibleQuote(
@@ -638,22 +599,20 @@ class AKShareAdapter(DataSourceAdapter):
                 price=price,
                 change_pct=change_pct,
                 stock_price=stock_price,
-                stock_change_pct=(stock_chg_map or {}).get(
-                    stock_code, 0.0
-                ),
+                stock_change_pct=(stock_chg_map or {}).get(stock_code),
                 conversion_price=conversion_price,
                 conversion_value=conversion_value,
                 premium_ratio=premium_ratio,
                 dual_low=dual_low,
                 volume=volume,
-                ytm=self._calc_ytm(price, remaining_years),
+                ytm=self._calc_ytm(price, remaining_years) if price is not None else None,
                 remaining_years=remaining_years,
                 forced_call_days=ri.get("forced_call_days", 0),
                 is_called=bool(ri.get("is_called", False)),
                 call_status=str(ri.get("call_status", "")),
                 last_trade_date=ri.get("last_trade_date"),
                 maturity_date=maturity,
-                redemption_price=float(ri.get("redemption_price", 0.0) or 0.0),
+                redemption_price=safe_float(ri.get("redemption_price")),
                 rating=rating,
                 pe=(stock_pe_map or {}).get(stock_code),
                 pb=(stock_pb_map or {}).get(stock_code),

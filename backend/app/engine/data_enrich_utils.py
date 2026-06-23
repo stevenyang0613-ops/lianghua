@@ -71,6 +71,9 @@ def _sanitize_for_json(v):
     if isinstance(v, dict):
         cleaned = {}
         for k, val in v.items():
+            # Skip zero_fill debugging keys to reduce cache file size
+            if k == "_data_source":
+                continue
             cv = _sanitize_for_json(val)
             if cv is not _DROP:
                 cleaned[k] = cv
@@ -165,12 +168,17 @@ def fresh(ttl: int, data, cache_path=None) -> bool:
 
 
 def safe_float(v, default=None) -> Optional[float]:
-    """Safely convert any value to float; returns default for None/NaN/Inf/empty."""
+    """Safely convert any value to float; returns default for None/NaN/Inf/empty.
+    Supports comma-separated numbers like "1,000.5"."""
     if v is None or v == "" or (isinstance(v, float) and v != v):
         return default
     try:
+        if isinstance(v, str):
+            v = v.replace(",", "").strip()
+            if v == "" or v == "-":
+                return default
         fv = float(v)
-        if fv != fv:
+        if fv != fv or math.isinf(fv):
             return default
         return fv
     except (ValueError, TypeError):
@@ -178,12 +186,15 @@ def safe_float(v, default=None) -> Optional[float]:
 
 
 def safe_int(v, default=None) -> Optional[int]:
-    """Safely convert any value to int; returns default for None/invalid."""
+    """Safely convert any value to int; returns default for None/invalid/inf."""
     if v is None or v == "":
         return default
     try:
-        return int(v)
-    except (ValueError, TypeError):
+        f = float(v)
+        if math.isinf(f) or math.isnan(f):
+            return default
+        return int(f)
+    except (ValueError, TypeError, OverflowError):
         return default
 
 
@@ -292,6 +303,11 @@ def record_refresh_metric(
     """
     if "_inproc" in name:
         return
+    # Debug: track caller for metrics writes to diagnose stale/race issues
+    import traceback as _tb
+    _stack = _tb.extract_stack()
+    _callers = [f"{s.filename.split('/')[-1]}:{s.lineno}({s.name})" for s in _stack[-4:-1]]
+    logger.info(f"[MetricsTrace] record_refresh_metric({name}, count={count}, status={status}) callers={' <- '.join(_callers)}")
     metrics_file = Path(metrics_file)
     metrics_file.parent.mkdir(parents=True, exist_ok=True)
     lock_path = _lock_file_path(metrics_file)

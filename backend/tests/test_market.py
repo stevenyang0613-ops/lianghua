@@ -33,7 +33,7 @@ def test_convertible_quote_model():
     assert q.code == "113044"
     assert q.name == "测试转债"
     assert q.price == 128.5
-    assert q.dual_low == 0.0
+    assert q.dual_low is None
 
 
 def test_premium_calculation():

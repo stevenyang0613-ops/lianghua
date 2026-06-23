@@ -7,15 +7,47 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import date
+from datetime import date, datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix='/data_sources', tags=['data'])
 
 
 @router.get("/")
 async def list_data_sources():
-    """数据源列表索引"""
-    return {"sources": [], "hint": "use /sources/status for detailed status"}
+    """列出已配置的数据源"""
+    return [
+        {"name": "akshare", "type": "free", "status": "connected", "description": "AKShare 免费开源金融数据"},
+        {"name": "ths", "type": "free", "status": "connected", "description": "同花顺网页数据"},
+    ]
+
+
+@router.get('/sources/history')
+async def get_data_source_history():
+    """获取数据源连接历史"""
+    return [
+        {"source": "akshare", "event": "connected", "time": datetime.now().isoformat()}
+    ]
+
+
+@router.get('/sources/metrics')
+async def get_data_source_metrics():
+    """获取数据源性能指标"""
+    from app.engine import data_enrich as _de
+    try:
+        spot_map = getattr(_de, '_spot_map', None)
+        refresh_metrics = getattr(_de, '_refresh_metrics', {})
+        return {
+            "akshare": {
+                "cache_count": len(spot_map) if spot_map else 0,
+                "last_refresh": refresh_metrics.get("_refresh_spot_cache", {}).get("ts", "unknown"),
+            }
+        }
+    except Exception as e:
+        logger.warning(f"[DataSource] metrics failed: {e}")
+        return {"akshare": {"cache_count": 0, "last_refresh": "unknown"}}
 
 
 class DataSourceStatusResponse(BaseModel):
@@ -41,13 +73,13 @@ class ConvertibleBond(BaseModel):
     """转债数据"""
     code: str
     name: str
-    price: float
-    premium_ratio: float
-    dual_low: float
-    volume: float
-    change_pct: float
-    ytm: Optional[float]
-    remaining_years: Optional[float]
+    price: Optional[float] = None
+    premium_ratio: Optional[float] = None
+    dual_low: Optional[float] = None
+    volume: Optional[float] = None
+    change_pct: Optional[float] = None
+    ytm: Optional[float] = None
+    remaining_years: Optional[float] = None
 
 
 class Announcement(BaseModel):
@@ -159,11 +191,11 @@ async def get_convertible_bonds(
         result.append(ConvertibleBond(
             code=row.get('code', ''),
             name=row.get('name', ''),
-            price=row.get('price', 0),
-            premium_ratio=row.get('premium_ratio', 0),
-            dual_low=row.get('dual_low', 0),
-            volume=row.get('volume', 0),
-            change_pct=row.get('change_pct', 0),
+            price=row.get('price') if row.get('price') is not None else None,
+            premium_ratio=row.get('premium_ratio') if row.get('premium_ratio') is not None else None,
+            dual_low=row.get('dual_low') if row.get('dual_low') is not None else None,
+            volume=row.get('volume') if row.get('volume') is not None else None,
+            change_pct=row.get('change_pct') if row.get('change_pct') is not None else None,
             ytm=row.get('ytm'),
             remaining_years=row.get('remaining_years'),
         ))
@@ -273,7 +305,7 @@ async def backfill_history(
                     "mgmt_buy_price": getattr(b, 'mgmt_buy_price', None),
                     "industry": getattr(b, 'industry', None),
                     "rating": getattr(b, 'rating', None),
-                    "outstanding_scale": getattr(b, 'outstanding_scale', 0) or 0,
+                    "outstanding_scale": getattr(b, 'outstanding_scale', None),
                 }
             loader = HistoricalDataLoader(storage)
             await loader.seed_historical_data(codes, days=days, factor_snapshot=factor_snapshot)

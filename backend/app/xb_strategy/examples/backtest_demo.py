@@ -1,6 +1,13 @@
-"""运行完整回测示例"""
+"""运行完整回测示例
+
+⚠️ 注意：此示例文件使用模拟数据生成器，仅供演示回测框架的 API 用法。
+实际回测应接入真实数据源（如 app.engine.data_enrich 的缓存或 AKShare）。
+"""
+import os
 import sys
-sys.path.insert(0, '/Users/stevenyang/Public/lianghua/backend')
+# 自动推导项目根目录（当前文件位于 backend/app/xb_strategy/examples/）
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+sys.path.insert(0, os.path.join(_project_root, 'backend'))
 
 from datetime import date, timedelta
 import pandas as pd
@@ -12,7 +19,7 @@ from app.xb_strategy.config.weights import MarketRegime
 
 
 def generate_mock_data(days: int = 365, n_bonds: int = 50):
-    """生成模拟数据"""
+    """生成模拟转债数据（仅用于演示，非真实数据）"""
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
 

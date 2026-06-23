@@ -167,19 +167,20 @@ def fetch_sina_bond_premium(bonds: dict) -> dict:
             if code not in bonds:
                 continue
             
-            bond_price = float(r.get("trade", 0) or 0)
-            if bond_price <= 0:
+            bond_price = float(r.get("trade")) if r.get("trade") is not None else None
+            if bond_price is None or bond_price <= 0:
                 continue
             
             info = bonds[code]
-            conv_price = info.get("conversion_price", 0)
+            conv_price = info.get("conversion_price")
             stock_code = info.get("stock_code", "")
             
             # 需要正股价格计算转股价值
             # 通过stock_zh_a_spot获取 (但这里没有, 只存premium)
+            sina_change = float(r.get("changepercent")) if r.get("changepercent") is not None else None
             entry = {
                 "sina_price": bond_price,
-                "sina_change": float(r.get("changepercent", 0) or 0),
+                "sina_change": sina_change,
             }
             
             # 如果有转股价, 可以计算转股价值 (但需要正股价)

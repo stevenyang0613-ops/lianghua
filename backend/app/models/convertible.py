@@ -9,10 +9,10 @@ class ConvertibleBond(BaseModel):
     name: str = Field(..., description="转债简称")
     stock_code: str = Field("", description="正股代码")
     stock_name: str = Field("", description="正股名称")
-    conversion_price: float = Field(0.0, description="转股价")
+    conversion_price: Optional[float] = Field(None, description="转股价")
     maturity_date: Optional[date] = Field(None, description="到期日")
     rating: str = Field("", description="评级")
-    outstanding_scale: float = Field(0.0, description="剩余规模(亿元)")
+    outstanding_scale: Optional[float] = Field(None, description="剩余规模(亿元)")
 
 
 # 评级 → 数值分映射（0-100 量表，供 data_enrich 和策略共用）
@@ -31,23 +31,23 @@ class ConvertibleQuote(BaseModel):
     name: str = Field("", description="转债简称")
     stock_code: str = Field("", description="正股代码")
     stock_name: str = Field("", description="正股名称")
-    price: float = Field(0.0, description="最新价")
-    change_pct: float = Field(0.0, description="涨跌幅(%)")
-    stock_price: float = Field(0.0, description="正股价")
-    stock_change_pct: float = Field(0.0, description="正股涨跌幅(%)")
-    conversion_price: float = Field(0.0, description="转股价")
-    conversion_value: float = Field(0.0, description="转股价值")
-    premium_ratio: float = Field(0.0, description="转股溢价率(%)")
-    dual_low: float = Field(0.0, description="双低值")
-    ytm: float = Field(0.0, description="到期收益率(%)")
-    volume: float = Field(0.0, description="成交额(亿元)")
-    remaining_years: float = Field(0.0, description="剩余年限")
-    forced_call_days: int = Field(0, description="强赎倒计时天数,0=未触发")
+    price: Optional[float] = Field(None, description="最新价")
+    change_pct: Optional[float] = Field(None, description="涨跌幅(%)")
+    stock_price: Optional[float] = Field(None, description="正股价")
+    stock_change_pct: Optional[float] = Field(None, description="正股涨跌幅(%)")
+    conversion_price: Optional[float] = Field(None, description="转股价")
+    conversion_value: Optional[float] = Field(None, description="转股价值")
+    premium_ratio: Optional[float] = Field(None, description="转股溢价率(%)")
+    dual_low: Optional[float] = Field(None, description="双低值")
+    ytm: Optional[float] = Field(None, description="到期收益率(%)")
+    volume: Optional[float] = Field(None, description="成交额(亿元)")
+    remaining_years: Optional[float] = Field(None, description="剩余年限")
+    forced_call_days: Optional[int] = Field(None, description="强赎倒计时天数,None=未触发")
     is_called: bool = Field(False, description="是否已公告强赎/将强赎")
     call_status: str = Field("", description="强赎状态原文(集思录:已公告强赎/公告要强赎/已满足强赎条件/公告不强赎)")
     last_trade_date: Optional[date] = Field(None, description="最后交易日(强赎公告后停止交易日)")
     maturity_date: Optional[date] = Field(None, description="到期日(用于临近退市过滤)")
-    redemption_price: float = Field(0.0, description="强赎价格(元/张)")
+    redemption_price: Optional[float] = Field(None, description="强赎价格(元/张)")
     industry: Optional[str] = Field(None, description="正股所属行业")
     rating: Optional[str] = Field(None, description="转债信用评级")
     roe: Optional[float] = Field(None, description="净资产收益率(%)")
@@ -90,6 +90,13 @@ class ConvertibleQuote(BaseModel):
     revenue_yoy: Optional[float] = Field(None, description="营业总收入同比增长(%)")
     profit_yoy: Optional[float] = Field(None, description="净利润同比增长(%)")
     restricted_release_amount: Optional[float] = Field(None, description="近期解禁金额(亿元)")
+    sentiment_score: Optional[float] = Field(None, description="新闻情绪得分(-1到1)")
+    macro_cpi: Optional[float] = Field(None, description="最新CPI同比(%)")
+    macro_ppi: Optional[float] = Field(None, description="最新PPI同比(%)")
+    macro_m2: Optional[float] = Field(None, description="最新M2同比(%)")
+    macro_lpr: Optional[float] = Field(None, description="最新LPR(%)")
+    macro_policy_score: Optional[float] = Field(None, description="宏观政策信号评分(0-100)")
+    macro_event_score: Optional[float] = Field(None, description="宏观事件冲击评分(0-100)")
     timestamp: datetime = Field(default_factory=datetime.now)
 
     def to_strategy_dict(self) -> dict:
@@ -131,4 +138,5 @@ class ConvertibleQuote(BaseModel):
             "call_status": self.call_status,
             "is_called": self.is_called,
             "forced_call_days": self.forced_call_days,
+            "sentiment_score": self.sentiment_score,
         }

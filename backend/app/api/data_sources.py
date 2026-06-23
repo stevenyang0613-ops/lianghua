@@ -20,8 +20,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import akshare as ak
 import pandas as pd
 import numpy as np
+from fastapi import APIRouter
 
 logger = logging.getLogger(__name__)
+
+router = APIRouter()
 
 
 # ============================================================
@@ -367,11 +370,11 @@ def fetch_cb_basic_tushare() -> dict:
                     'stock_code': str(r.get('stk_code', '')).split('.')[0],
                     'stock_name': str(r.get('stk_short_name', '')),
                     'maturity_date': r.get('maturity_date'),
-                    'conv_price': float(r.get('conv_price', 0) or 0),
-                    'coupon_rate': float(r.get('coupon_rate', 0) or 0),
-                    'add_rate': float(r.get('add_rate', 0) or 0),
-                    'remain_size': float(r.get('remain_size', 0) or 0),
-                    'issue_size': float(r.get('issue_size', 0) or 0),
+                    'conv_price': float(r.get('conv_price')) if r.get('conv_price') is not None else None,
+                    'coupon_rate': float(r.get('coupon_rate')) if r.get('coupon_rate') is not None else None,
+                    'add_rate': float(r.get('add_rate')) if r.get('add_rate') is not None else None,
+                    'remain_size': float(r.get('remain_size')) if r.get('remain_size') is not None else None,
+                    'issue_size': float(r.get('issue_size')) if r.get('issue_size') is not None else None,
                     'list_date': r.get('list_date'),
                 }
             logger.info(f"[Tushare] cb_basic: {len(result)} bonds")
@@ -379,3 +382,32 @@ def fetch_cb_basic_tushare() -> dict:
     except Exception as e:
         logger.debug(f"[Tushare] cb_basic error: {e}")
     return {}
+
+
+# ============================================================
+# 数据源连接/断开 API 端点
+# ============================================================
+from app.data import get_data_source_manager
+
+data_source_manager = get_data_source_manager()
+
+@router.post("/connect")
+async def connect_data_sources():
+    """连接所有已配置的数据源"""
+    try:
+        results = await data_source_manager.connect_all()
+        return {"status": "ok", "results": results}
+    except Exception as e:
+        logger.warning(f"[DataSources] connect failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@router.post("/disconnect")
+async def disconnect_data_sources():
+    """断开所有已连接的数据源"""
+    try:
+        await data_source_manager.disconnect_all()
+        return {"status": "ok", "results": {}}
+    except Exception as e:
+        logger.warning(f"[DataSources] disconnect failed: {e}")
+        return {"status": "error", "message": str(e)}
+

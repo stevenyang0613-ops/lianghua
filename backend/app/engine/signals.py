@@ -428,7 +428,7 @@ class SignalEngine:
                     code=s.get('code', ''),
                     name=s.get('name', ''),
                     side=s.get('side', ''),
-                    price=s.get('price', 0.0),
+                    price=s.get('price'),
                     volume=s.get('volume', 0),
                     ts=s.get('ts', datetime.now()),
                 ))

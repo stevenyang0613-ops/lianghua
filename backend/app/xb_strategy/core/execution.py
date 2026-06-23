@@ -162,7 +162,7 @@ class ExecutionEngine:
                 pos = portfolio.positions[order.cb_code]
                 total_qty = pos.quantity + fill_quantity
                 total_cost = pos.cost_basis + fill_price * fill_quantity
-                pos.avg_cost = total_cost / total_qty
+                pos.avg_cost = total_cost / total_qty if total_qty > 0 else 0
                 pos.quantity = total_qty
                 pos.cost_basis = total_cost
             else:

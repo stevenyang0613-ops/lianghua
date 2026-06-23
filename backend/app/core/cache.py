@@ -95,6 +95,8 @@ class CacheManager:
                     # 回写内存缓存
                     self.memory_cache.set(key, parsed)
                     return parsed
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
         
@@ -108,6 +110,8 @@ class CacheManager:
         if self.redis_client:
             try:
                 await self.redis_client.setex(key, ttl, json.dumps(value))
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
     
@@ -116,6 +120,8 @@ class CacheManager:
         if self.redis_client:
             try:
                 await self.redis_client.delete(key)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
     
@@ -132,6 +138,8 @@ class CacheManager:
                 keys = await self.redis_client.keys(pattern)
                 if keys:
                     await self.redis_client.delete(*keys)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
     
