@@ -14,6 +14,8 @@ interface AppState {
   setSelectedBond: (code: string | null) => void
   marketWsConnected: boolean
   signalWsConnected: boolean
+  marketRunning: boolean
+  setMarketRunning: (v: boolean) => void
   dataSources: Record<string, DataSourceStatus> | null
   setDataSources: (v: Record<string, DataSourceStatus> | null) => void
 }

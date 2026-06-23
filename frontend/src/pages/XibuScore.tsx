@@ -519,6 +519,7 @@ export default function XibuScore() {
               </Button>
               <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => {
                 setBacktestResult(null)
+                setBacktestDataWarning(undefined)
                 setBacktestVisible(true)
               }}>
                 回测此策略
@@ -1001,7 +1002,6 @@ export default function XibuScore() {
                 description={backtestDataWarning}
                 type="warning"
                 showIcon
-                icon={<WarningOutlined />}
                 style={{ marginBottom: 12 }}
               />
             )}
