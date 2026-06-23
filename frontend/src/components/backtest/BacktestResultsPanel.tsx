@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react'
-import { Card, Row, Col, Statistic, Table, Collapse, Skeleton, Spin, Typography } from 'antd'
-import { BarChartOutlined } from '@ant-design/icons'
+import { Card, Row, Col, Statistic, Table, Collapse, Skeleton, Spin, Typography, Alert } from 'antd'
+import { BarChartOutlined, WarningOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
 import echarts from '../../utils/echarts'
 import type { BacktestResult } from '../../services/api'
@@ -16,12 +16,14 @@ interface BacktestResultsPanelProps {
   result: BacktestResult | null
   loading: boolean
   optEnabled: boolean
+  dataWarning?: string
 }
 
 const BacktestResultsPanel = memo(function BacktestResultsPanel({
   result,
   loading,
   optEnabled,
+  dataWarning,
 }: BacktestResultsPanelProps) {
   const equityOption = useMemo(() => result
     ? {
@@ -103,6 +105,16 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
 
   return (
     <>
+      {dataWarning && (
+        <Alert
+          message="数据不足"
+          description={dataWarning}
+          type="warning"
+          showIcon
+          icon={<WarningOutlined />}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       {/* 绩效指标卡片 */}
       <Card title="绩效指标" size="small" style={{ marginBottom: 12 }}>
         <Row gutter={[16, 16]}>

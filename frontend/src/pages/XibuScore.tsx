@@ -202,6 +202,7 @@ export default function XibuScore() {
   const [backtestVisible, setBacktestVisible] = useState(false)
   const [backtestLoading, setBacktestLoading] = useState(false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
+  const [backtestDataWarning, setBacktestDataWarning] = useState<string | undefined>(undefined)
   const [backtestDateRange, setBacktestDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
     dayjs().subtract(6, 'month'), dayjs()
   ])
@@ -456,6 +457,7 @@ export default function XibuScore() {
       // [Fix #8] 安全类型断言：检查 type 字段
       if (res.type === 'backtest' && res.result && 'metrics' in res.result) {
         setBacktestResult(res.result as BacktestResult)
+        setBacktestDataWarning(res.data_warning)
         message.success('回测完成')
       } else {
         message.error('回测返回了非预期的结果类型')
@@ -993,6 +995,16 @@ export default function XibuScore() {
 
         {backtestResult && (
           <div style={{ opacity: backtestLoading ? 0.5 : 1, pointerEvents: backtestLoading ? 'none' : 'auto' }}>
+            {backtestDataWarning && (
+              <Alert
+                message="数据不足"
+                description={backtestDataWarning}
+                type="warning"
+                showIcon
+                icon={<WarningOutlined />}
+                style={{ marginBottom: 12 }}
+              />
+            )}
             <Row gutter={16} style={{ marginBottom: 16 }}>
               <Col span={4}><Card size="small"><Statistic title="总收益率" value={m?.total_return_pct?.toFixed(2) ?? '-'} suffix="%" valueStyle={{ color: (m?.total_return_pct ?? 0) >= 0 ? '#cf1322' : '#3f8600' }} /></Card></Col>
               <Col span={4}><Card size="small"><Statistic title="年化收益" value={m?.annual_return_pct?.toFixed(2) ?? '-'} suffix="%" valueStyle={{ color: (m?.annual_return_pct ?? 0) >= 0 ? '#cf1322' : '#3f8600' }} /></Card></Col>

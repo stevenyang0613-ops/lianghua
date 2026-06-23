@@ -6111,7 +6111,7 @@ def _refresh_lhb_cache():
                 cnt = _sf(r.get("上榜次数"))
                 new_count = int(cnt) if cnt else 0
                 old_entry = prev.get(code, {})
-                old_count = old_entry.get("lhb_count", 0) if isinstance(old_entry, dict) else 0
+                old_count = (old_entry.get("lhb_count") or 0) if isinstance(old_entry, dict) else 0
                 result[code] = {
                     "lhb_count": new_count,
                     "_prev_count": old_count,
@@ -6202,8 +6202,8 @@ def _refresh_block_trade_cache():
                 if not code or len(code) != 6:
                     continue
                 amount = _sf(r.get("成交额"))
-                if amount and amount > 0:
-                    result[code] = {"block_trade_amount": amount}
+                if amount is not None and amount >= 0:
+                    result[code] = {"block_trade_amount": amount, "_data_source": "dzjy_mrmx"}
 
         # Source 2 fallback: stock_dzjy_mrtj
         if len([k for k in result if not k.startswith("_")]) < 100:
@@ -6225,8 +6225,8 @@ def _refresh_block_trade_cache():
                         if code in result:
                             continue
                         amt = _sf(r.get("成交总额"))
-                        if amt and amt > 0:
-                            result[code] = {"block_trade_amount": amt}
+                        if amt is not None and amt >= 0:
+                            result[code] = {"block_trade_amount": amt, "_data_source": "dzjy_mrtj"}
                             count_mrtj += 1
                     logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
             except Exception as e_mrtj:

@@ -712,8 +712,8 @@ def _refresh_fin_cache():
                 continue
             entry = {
                 "roe": _safe_float(r.get("净资产收益率", None)),
-                # NOTE: 银行等行业毛利率可能返回 -1 或 None，表示"不适用"。
-                # 前端 DetailPanel 将 gpm=-1 识别为"银行(无毛利率)"。
+                # NOTE: 银行等行业毛利率可能返回 BANK_GPM_SENTINEL 或 None，表示"不适用"。
+                # 前端 DetailPanel 将 gpm=BANK_GPM_SENTINEL 识别为"银行(无毛利率)"。
                 "gpm": _safe_float(r.get("销售毛利率", None)),
                 "industry": str(r.get("所处行业", "")) if r.get("所处行业") else None,
                 "eps": _safe_float(r.get("每股收益", None)),

@@ -28,6 +28,7 @@ export default function Backtest() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestResult | null>(null)
   const [optResult, setOptResult] = useState<OptimizationResult | null>(null)
+  const [dataWarning, setDataWarning] = useState<string | undefined>(undefined)
   const [strategiesLoading, setStrategiesLoading] = useState(true)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -152,6 +153,7 @@ export default function Backtest() {
         },
       )
       if (res.data_source) setDataSource(res.data_source)
+      if (res.data_warning) setDataWarning(res.data_warning)
       if (res.type === 'optimization' && res.result) {
         setOptResult(res.result as OptimizationResult)
         message.success(`参数优化完成，共测试 ${(res.result as OptimizationResult).total_combinations} 种组合`)
@@ -236,6 +238,7 @@ export default function Backtest() {
               result={result}
               loading={loading}
               optEnabled={optEnabled}
+              dataWarning={dataWarning}
             />
           )}
         </Col>

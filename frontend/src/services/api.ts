@@ -325,6 +325,8 @@ export interface BacktestResult {
   monthly_returns?: { year: number; month: number; return_pct: number }[]
   benchmark_curve?: { date: string; value: number }[]
   execution_time_ms: number
+  /** 数据充足性警告（数据量不足时后端填充） */
+  data_warning?: string
 }
 
 export interface OptimizationResultItem {
@@ -361,8 +363,8 @@ export async function fetchStrategies(): Promise<StrategyInfo[]> {
   return resp.strategies
 }
 
-export async function runBacktest(req: BacktestRequest): Promise<{ type: string; result: BacktestResult | OptimizationResult }> {
-  return postJSON<{ type: string; result: BacktestResult | OptimizationResult }>(getBase() + '/backtest/run', req)
+export async function runBacktest(req: BacktestRequest): Promise<{ type: string; result: BacktestResult | OptimizationResult; data_warning?: string }> {
+  return postJSON<{ type: string; result: BacktestResult | OptimizationResult; data_warning?: string }>(getBase() + '/backtest/run', req)
 }
 
 export async function runOptimization(req: BacktestRequest): Promise<{ success: boolean; data_source?: string; result: OptimizationResult }> {
@@ -375,6 +377,7 @@ export interface BacktestProgressEvent {
   msg: string
   type?: string
   data_source?: string
+  data_warning?: string
   result?: any
 }
 
@@ -382,7 +385,7 @@ export function runBacktestStream(
   req: BacktestRequest,
   onProgress: (evt: BacktestProgressEvent) => void,
   timeoutMs: number = 30 * 60 * 1000,
-): Promise<{ type: string; result: BacktestResult | OptimizationResult; data_source?: string }> {
+): Promise<{ type: string; result: BacktestResult | OptimizationResult; data_source?: string; data_warning?: string }> {
    return new Promise((resolve, reject) => {
       const controller = new AbortController()
       let _settled = false
@@ -468,7 +471,7 @@ export function runBacktestStream(
             try {
               const evt: BacktestProgressEvent = JSON.parse(line.slice(6))
               if (evt.phase === 'done' && evt.result) {
-                finalResult = { type: evt.type || 'backtest', result: evt.result, data_source: evt.data_source }
+                finalResult = { type: evt.type || 'backtest', result: evt.result, data_source: evt.data_source, data_warning: evt.data_warning }
               }
               if (evt.phase === 'error') {
                 clearTimeout(timeoutId)
