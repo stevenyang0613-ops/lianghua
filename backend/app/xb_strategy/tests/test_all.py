@@ -86,5 +86,45 @@ def test_score_all_bonds():
         assert scores[i].rank == i + 1
 
 
+# ==================== V4 → V3 统一映射测试 ====================
+
+class TestV4toV3RegimeMapping:
+    """验证 map_v4_to_v3_regime 的正确性"""
+
+    def test_none_returns_range(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime(None) == MarketRegime.RANGE
+
+    def test_strong_bull_maps_to_bull(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("STRONG_BULL") == MarketRegime.BULL
+
+    def test_bull_maps_to_bull(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("BULL") == MarketRegime.BULL
+
+    def test_range_maps_to_range(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("RANGE") == MarketRegime.RANGE
+
+    def test_bear_maps_to_bear(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("BEAR") == MarketRegime.BEAR
+
+    def test_strong_bear_maps_to_bear(self):
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("STRONG_BEAR") == MarketRegime.BEAR
+
+    def test_case_insensitive(self):
+        """不区分大小写"""
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("strong_bull") == MarketRegime.BULL
+
+    def test_unknown_regime_falls_back_to_range(self):
+        """未知 regime 默认回退到 RANGE"""
+        from app.xb_strategy.config.weights import map_v4_to_v3_regime
+        assert map_v4_to_v3_regime("UNKNOWN") == MarketRegime.RANGE
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

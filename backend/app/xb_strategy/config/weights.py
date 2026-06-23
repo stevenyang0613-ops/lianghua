@@ -1,11 +1,21 @@
-"""不同市场环境下的因子权重方案"""
+"""不同市场环境下的因子权重方案
+
+V3 简化版市场环境（基于月涨跌幅 > 5%）：
+- BULL: 指数月涨 > 5%
+- RANGE: 月波动 ±3%
+- BEAR: 指数月跌 > 5%
+
+V4 多维度综合择时模型（enhanced_timing_model.py）使用更细致的 5 档分类：
+STRONG_BULL/BULL/RANGE/BEAR/STRONG_BEAR，基于 SSD/Bollinger/标准差。
+当 V4 模型激活时，通过 map_v4_to_v3_regime() 将 5 档映射到此 3 档。
+"""
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 from enum import Enum
 
 
 class MarketRegime(str, Enum):
-    """市场环境"""
+    """市场环境（V3 简化版）"""
     BULL = "bull"        # 牛市：指数月涨 > 5%
     RANGE = "range"      # 震荡市：月波动 ±3%
     BEAR = "bear"        # 熊市：指数月跌 > 5%
@@ -126,7 +136,7 @@ def detect_market_regime(
     index_month_change: float,
     index_volatility: float = 0.0
 ) -> MarketRegime:
-    """检测市场环境
+    """检测市场环境（V3 简化版：仅基于月涨跌幅）
 
     Args:
         index_month_change: 指数月涨跌幅(%)
@@ -138,6 +148,38 @@ def detect_market_regime(
     if index_month_change > 5.0:
         return MarketRegime.BULL
     elif index_month_change < -5.0:
+        return MarketRegime.BEAR
+    else:
+        return MarketRegime.RANGE
+
+
+def map_v4_to_v3_regime(v4_regime: Optional[str]) -> MarketRegime:
+    """将 V4 模型的 5 档市场环境映射到 V3 的 3 档
+
+    V4（EnhancedTimingModel）:
+      STRONG_BULL（深度超买）→ V3 BULL
+      BULL（轻度超买）       → V3 BULL
+      RANGE                  → V3 RANGE
+      BEAR（轻度超卖）       → V3 BEAR
+      STRONG_BEAR（深度超卖）→ V3 BEAR
+
+    当 V4 模型激活时，旧的权重方案（WEIGHT_SCHEMES）可以复用此映射
+    来选择合适的因子权重，保持与 V4 择时信号一致的方向。
+
+    Args:
+        v4_regime: V4 模型输出的市场环境字符串（如 "STRONG_BEAR"），
+                   或 None（表示未检测到）
+
+    Returns:
+        MarketRegime: V3 简化的市场环境
+    """
+    if v4_regime is None:
+        return MarketRegime.RANGE
+
+    v4_upper = v4_regime.upper()
+    if v4_upper in ('STRONG_BULL', 'BULL'):
+        return MarketRegime.BULL
+    elif v4_upper in ('STRONG_BEAR', 'BEAR'):
         return MarketRegime.BEAR
     else:
         return MarketRegime.RANGE
