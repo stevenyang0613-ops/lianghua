@@ -426,6 +426,9 @@ class MacroDataService:
         try:
             if ak is None:
                 return -1.0, -1.0
+            # AGENTS.md #67: 健康检查
+            if self._should_skip_source('ak_pmi'):
+                return -1.0, -1.0
             df = ak.macro_china_pmi_yearly()
             if df is None or df.empty:
                 return -1.0, -1.0
@@ -435,8 +438,10 @@ class MacroDataService:
             df = df.sort_values('日期', ascending=True)
             current = float(df['今值'].iloc[-1])
             prev = float(df['前值'].iloc[-1]) if len(df) >= 1 else current
+            self._record_source_success('ak_pmi')
             return round(current, 1), round(prev, 1)
         except Exception as e:
+            self._record_source_failure('ak_pmi')
             logger.warning(f"[MacroData] PMI fetch failed: {e}")
             return -1.0, -1.0
 
@@ -446,21 +451,28 @@ class MacroDataService:
                 return float('nan'), float('nan')
             cpi = float('nan')
             try:
-                df = ak.macro_china_cpi_yearly()
-                if df is not None and not df.empty:
-                    df = df.dropna(subset=['今值']).copy()
-                    if not df.empty:
-                        cpi = round(float(df['今值'].iloc[-1]), 1)
+                # AGENTS.md #67: 健康检查
+                if not self._should_skip_source('ak_cpi'):
+                    df = ak.macro_china_cpi_yearly()
+                    if df is not None and not df.empty:
+                        df = df.dropna(subset=['今值']).copy()
+                        if not df.empty:
+                            cpi = round(float(df['今值'].iloc[-1]), 1)
+                            self._record_source_success('ak_cpi')
             except Exception as e:
+                self._record_source_failure('ak_cpi')
                 logger.warning(f"[MacroData] CPI fetch failed: {e}")
             ppi = float('nan')
             try:
-                df = ak.macro_china_ppi_yearly()
-                if df is not None and not df.empty:
-                    df = df.dropna(subset=['今值']).copy()
-                    if not df.empty:
-                        ppi = round(float(df['今值'].iloc[-1]), 1)
+                if not self._should_skip_source('ak_ppi'):
+                    df = ak.macro_china_ppi_yearly()
+                    if df is not None and not df.empty:
+                        df = df.dropna(subset=['今值']).copy()
+                        if not df.empty:
+                            ppi = round(float(df['今值'].iloc[-1]), 1)
+                            self._record_source_success('ak_ppi')
             except Exception as e:
+                self._record_source_failure('ak_ppi')
                 logger.warning(f"[MacroData] PPI fetch failed: {e}")
             return cpi, ppi
         except Exception as e:
@@ -1181,6 +1193,9 @@ class MacroDataService:
         """出口同比(%) — 带重试和备用数据源"""
         if ak is None:
             return float('nan')
+        # AGENTS.md #67: 健康检查 — 已知故障的 jin10 数据源暂时跳过
+        if self._should_skip_source('jin10_export'):
+            return float('nan')
         # 重试链：[主源] 1s retry → [备用源 贸易差额 proxy]
         delays = [0, 1, 3]
         for i, delay in enumerate(delays):
@@ -1191,8 +1206,10 @@ class MacroDataService:
                 if df is not None and not df.empty:
                     df = df.dropna(subset=['今值']).copy()
                     if not df.empty:
+                        self._record_source_success('jin10_export')
                         return round(float(df['今值'].iloc[-1]), 1)
             except Exception as e:
+                self._record_source_failure('jin10_export')
                 if i < len(delays) - 1:
                     logger.warning(f"[MacroData] Export growth 重试{i+1}失败: {e}")
                 else:
@@ -1215,8 +1232,10 @@ class MacroDataService:
                     if latest_balance > 0:
                         estimated = round(min(15, max(-5, latest_balance / 100)), 1)
                         logger.info(f"[MacroData] Export growth 用 trade_balance={latest_balance:.0f} 估算={estimated}%")
+                        self._record_source_success('jin10_export')
                         return estimated
         except Exception as e:
+            self._record_source_failure('jin10_export')
             logger.warning(f"[MacroData] Export growth trade_balance fallback 失败: {e}")
         return float('nan')
 
