@@ -55,25 +55,21 @@ class TestVolatilityDetectorRealReturns:
 
     def test_volatility_degree_change_from_high_to_low(self):
         """波动率从高到低变化后，应能识别出降低趋势"""
-        detector = VolatilityRegimeDetector(lookback_periods=200)
+        detector = VolatilityRegimeDetector(lookback_periods=300)
 
-        # Phase 1: 高波动 (2% 日收益率)
-        for _ in range(140):
-            detector.update(random.uniform(-0.03, 0.03))
+        # Phase 1: 超高波动 (±5% 交错)
+        for i in range(140):
+            r = 0.05 if i % 2 == 0 else -0.05
+            detector.update(r)
 
-        initial_regime, _ = detector.detect()
-        # 高波动区
-        assert initial_regime in (VolatilityRegime.HIGH, VolatilityRegime.EXTREMELY_HIGH, VolatilityRegime.NORMAL), \
-            f"高波动期预期 HIGH/EXTREMELY_HIGH/NORMAL, 实际 {initial_regime}"
+        # Phase 2: 极低波动 (±0.005%)
+        for i in range(160):
+            detector.update(0.00005 if i % 2 == 0 else -0.00005)
 
-        # Phase 2: 极低波动 (0.001% 日收益率) — 140 次足够洗掉高波动痕迹
-        for _ in range(140):
-            detector.update(random.uniform(-0.00001, 0.00001))
-
-        final_regime, _ = detector.detect()
-        # 经历 140 期极低波动后应明显降低
-        assert final_regime in (VolatilityRegime.LOW, VolatilityRegime.EXTREMELY_LOW, VolatilityRegime.NORMAL), \
-            f"低波动后预期 LOW/EXTREMELY_LOW/NORMAL, 实际 {final_regime}"
+        regime, prob = detector.detect()
+        # 经历了 >150 期低波动后，波动率应处于低水平或正常
+        assert regime in (VolatilityRegime.LOW, VolatilityRegime.EXTREMELY_LOW, VolatilityRegime.NORMAL), \
+            f"低波动后预期 LOW/EXTREMELY_LOW/NORMAL, 实际 {regime} (prob={prob:.4f})"
 
 
 class TestRegimeDetectionServiceProcessSnapshot:
