@@ -6223,7 +6223,9 @@ def _refresh_block_trade_cache():
                         if code[0] not in '036':
                             continue
                         if code in result:
-                            continue
+                            existing = result[code]
+                            if isinstance(existing, dict) and existing.get("_data_source") not in (None, "zero_fill"):
+                                continue
                         amt = _sf(r.get("成交总额"))
                         if amt is not None and amt >= 0:
                             result[code] = {"block_trade_amount": amt, "_data_source": "dzjy_mrtj"}
