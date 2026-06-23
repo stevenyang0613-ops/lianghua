@@ -1951,6 +1951,23 @@ class BacktestEngine:
         # 用归一化后的日期列表
         dates = sorted(date_data_map.keys())
 
+        # ── 构建 next_open 查找表：修复 close-close lookahead bias ──
+        #  策略用当日收盘价生成信号 → 回测用次日开盘价执行
+        _next_open_lookup: dict[tuple[str, date], float] = {}
+        if 'open_price' in data.columns:
+            _data_sorted = data.sort_values(['code', 'date']).copy()
+            _data_sorted['_next_open'] = _data_sorted.groupby('code')['open_price'].shift(-1)
+            for _, _row in _data_sorted.iterrows():
+                _no = _row['_next_open']
+                if not pd.isna(_no) and _no > 0:
+                    _next_open_lookup[(_row['code'], _row['date'])] = _no
+            if _next_open_lookup:
+                logger.info(
+                    f"[BacktestEngine] 启用 next-open fill: "
+                    f"共 {len(_next_open_lookup)} 个条目，"
+                    f"用次日开盘价替代当日收盘价执行以消除 lookahead bias"
+                )
+
         # 初始化策略 & 投资组合
         # 改进 (2025-06-15ao): 防御策略初始化异常——不终止回测，返回空结果
         try:
@@ -1989,6 +2006,15 @@ class BacktestEngine:
 
             # 增强：防御策略.on_data返回非dict元素（如None、字符串等）导致sig['action']抛异常
             signals = [s for s in (strategy.on_data(day_data, i) or []) if isinstance(s, dict)]
+
+            # ── next-open fill: 用次日开盘价替代信号中的收盘价 ──
+            #   修复 close-close lookahead bias
+            if _next_open_lookup:
+                for _sig in signals:
+                    _key = (_sig.get('code', ''), current_date)
+                    _no = _next_open_lookup.get(_key)
+                    if _no is not None and _no > 0:
+                        _sig['price'] = _no
 
             # 3. 先卖后买
             for sig in [s for s in signals if s.get('action') == 'sell']:
