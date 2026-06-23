@@ -19,7 +19,7 @@ class BacktestConfig(BaseModel):
     """回测配置参数"""
     commission_pct: float = Field(default=0.0003, ge=0, le=0.03, description="佣金率")
     slippage_pct: float = Field(default=0.0003, ge=0, le=0.05, description="滑点率")
-    impact_cost_pct: float = Field(default=0.0000, ge=0, le=0.01, description="冲击成本率（大资金日频调仓时显著）")
+    impact_cost_pct: float = Field(default=0.001, ge=0, le=0.01, description="冲击成本率（可转债流动性较差，日频调仓建议 0.001~0.003）")
     min_commission: float = Field(default=1.0, ge=0, description="最低佣金(元)")
     risk_free_rate: float = Field(default=0.02, ge=0, le=0.1, description="无风险利率(年化)")
     initial_cash: float = Field(default=1_000_000.0, gt=0, description="初始资金(元), 默认100万")
