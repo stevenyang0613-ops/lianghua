@@ -105,7 +105,8 @@ class PaperAccount:
             # 调仓倒计时信息
             "trade_day_count": self._trade_day_count,
             "rebalance_days": self.params.get("rebalance_days", 7) if isinstance(self.params, dict) else 7,
-        }
+            # 关键: 返回真实的距离下一次调仓的 idx 差值
+            "next_rebalance_idx": self._sim_idx + (self.params.get("rebalance_days", 7) - self._sim_idx % self.params.get("rebalance_days", 7)) % self.params.get("rebalance_days", 7) if isinstance(self.params, dict) and self.params.get("rebalance_days", 7) > 0 else self._sim_idx,
 
 
 # ── 核心管理器 ──────────────────────────────────────────
@@ -254,15 +255,17 @@ class PaperTradeManager:
                 # 初始化模拟索引为历史数据的最后一个索引，使 idx 始终指向 "今天"
                 account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
                 # 关键修复: 确保 _sim_idx 对齐调仓日，否则启动后可能需等待多个交易日才调仓
+                # 对齐到前一个调仓日，这样 _process_account 中首次 +=1 后正好落在调仓日
                 if hasattr(account.strategy, 'get_param'):
                     rebalance_days = account.strategy.get_param('rebalance_days')
                     if rebalance_days and rebalance_days > 0:
                         orig_idx = account._sim_idx
-                        account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
+                        aligned = (account._sim_idx // rebalance_days) * rebalance_days
+                        account._sim_idx = aligned - 1 if aligned > 0 else 0
                         if account._sim_idx != orig_idx:
                             logger.info(
                                 f"[PaperTrade] Aligned sim_idx {orig_idx} -> {account._sim_idx} "
-                                f"to nearest rebalance day (rebalance_days={rebalance_days})"
+                                f"(aligned={aligned}, rebalance_days={rebalance_days})"
                             )
                 account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 logger.info(
@@ -333,11 +336,12 @@ class PaperTradeManager:
                 try:
                     account.strategy.on_init(init_df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
-                    # 关键修复: 重置后也要对齐调仓日
+                    # 关键修复: 重置后也要对齐到前一个调仓日
                     if hasattr(account.strategy, 'get_param'):
                         rebalance_days = account.strategy.get_param('rebalance_days')
                         if rebalance_days and rebalance_days > 0:
-                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
+                            aligned = (account._sim_idx // rebalance_days) * rebalance_days
+                            account._sim_idx = aligned - 1 if aligned > 0 else 0
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after reset failed for {account_id}: {e}")
@@ -370,11 +374,12 @@ class PaperTradeManager:
                 try:
                     account.strategy.on_init(init_df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
-                    # 关键修复: 参数更新后也要对齐调仓日
+                    # 关键修复: 参数更新后也要对齐到前一个调仓日
                     if hasattr(account.strategy, 'get_param'):
                         rebalance_days = account.strategy.get_param('rebalance_days')
                         if rebalance_days and rebalance_days > 0:
-                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
+                            aligned = (account._sim_idx // rebalance_days) * rebalance_days
+                            account._sim_idx = aligned - 1 if aligned > 0 else 0
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after param update failed for {account_id}: {e}")
@@ -678,11 +683,13 @@ class PaperTradeManager:
                     placeholders = ",".join("?" for _ in trading_dates)
                     cursor = self._storage.conn.execute(f"""
                         SELECT code, name, close_price AS price, premium_ratio, volume, dual_low,
-                               ytm, remaining_years, change_pct, stock_price,
+                               ytm, remaining_years, change_pct, stock_price, stock_change_pct,
                                conversion_value, snapshot_date AS date,
                                momentum_5d, momentum_10d, momentum_20d, momentum_60d,
                                hv, rating_score, pure_bond_premium_ratio, bond_value,
-                               industry, pe, pb, roe, gpm, call_status, is_called, forced_call_days
+                               industry, pe, pb, roe, gpm, call_status, is_called, forced_call_days,
+                               cagr, debt_ratio, buyback_amount, mgmt_buy_price, event_score,
+                               conversion_price, sentiment_score
                         FROM daily_snapshots
                         WHERE snapshot_date IN ({placeholders})
                         ORDER BY snapshot_date ASC
@@ -741,11 +748,13 @@ class PaperTradeManager:
                                             supp_date_ph = ",".join("?" for _ in supp_dates)
                                             supp_cur = conn.execute(f"""
                                                 SELECT q.code, q.name, q.price, q.premium_ratio, q.volume, q.dual_low,
-                                                       q.ytm, q.remaining_years, q.change_pct, q.stock_price,
+                                                       q.ytm, q.remaining_years, q.change_pct, q.stock_price, q.stock_change_pct,
                                                        q.conversion_value, q.momentum_5d, q.momentum_10d,
                                                        q.momentum_20d, q.momentum_60d, q.timestamp,
                                                        q.hv, q.rating_score, q.pure_bond_premium_ratio, q.bond_value,
-                                                       q.industry, q.pe, q.pb, q.roe, q.gpm, q.call_status, q.is_called, q.forced_call_days
+                                                       q.industry, q.pe, q.pb, q.roe, q.gpm, q.call_status, q.is_called, q.forced_call_days,
+                                                       q.cagr, q.debt_ratio, q.buyback_amount, q.mgmt_buy_price, q.event_score,
+                                                       q.conversion_price, q.sentiment_score
                                                 FROM quotes_history q
                                                 INNER JOIN {tmp_table} s ON q.code = s.code
                                                 WHERE CAST(q.timestamp AS DATE) IN ({supp_date_ph})
@@ -779,9 +788,13 @@ class PaperTradeManager:
                         placeholders = ",".join("?" for _ in trading_dates)
                         cursor = self._storage.conn.execute(f"""
                             SELECT code, name, price, premium_ratio, volume, dual_low,
-                                   ytm, remaining_years, change_pct, stock_price,
+                                   ytm, remaining_years, change_pct, stock_price, stock_change_pct,
                                    conversion_value, momentum_5d, momentum_10d,
-                                   momentum_20d, momentum_60d, timestamp
+                                   momentum_20d, momentum_60d, timestamp,
+                                   hv, rating_score, pure_bond_premium_ratio, bond_value,
+                                   industry, pe, pb, roe, gpm, call_status, is_called, forced_call_days,
+                                   cagr, debt_ratio, buyback_amount, mgmt_buy_price, event_score,
+                                   conversion_price, sentiment_score
                             FROM quotes_history
                             WHERE CAST(timestamp AS DATE) IN ({placeholders})
                             ORDER BY timestamp ASC
@@ -978,11 +991,12 @@ class PaperTradeManager:
                 try:
                     account.strategy.on_init(df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
-                    # 关键修复: 延迟初始化后也要对齐调仓日
+                    # 关键修复: 延迟初始化后也要对齐到前一个调仓日
                     if hasattr(account.strategy, 'get_param'):
                         rebalance_days = account.strategy.get_param('rebalance_days')
                         if rebalance_days and rebalance_days > 0:
-                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
+                            aligned = (account._sim_idx // rebalance_days) * rebalance_days
+                            account._sim_idx = aligned - 1 if aligned > 0 else 0
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                     account._needs_init = False
                     logger.info(
@@ -1144,9 +1158,12 @@ class PaperTradeManager:
         except (ValueError, TypeError):
             min_conf = self._min_confidence
         all_buy_signals = [s for s in signals if s["action"] == "buy"]
+        # 如果策略未设置 confidence/score（均为 0），视为有效信号（置信度=1.0）
         buy_signals = sorted(
-            [s for s in all_buy_signals if s.get("confidence", s.get("score", 0.0)) >= min_conf],
-            key=lambda s: s.get("confidence", s.get("score", 0.0)),
+            [s for s in all_buy_signals if s.get("confidence", s.get("score", 0.0)) > 0 or
+             (s.get("confidence", 0) == 0 and s.get("score", 0) == 0) or
+             s.get("confidence", s.get("score", 0.0)) >= min_conf],
+            key=lambda s: s.get("confidence", s.get("score", 0.0)) or 1.0,
             reverse=True,
         )
         skipped = len(all_buy_signals) - len(buy_signals)
@@ -1187,7 +1204,7 @@ class PaperTradeManager:
         # 按目标分配额执行买入
         for sig, target in zip(buy_signals, targets):
             try:
-                volume = max(1, int(target / sig["price"] / 10) * 10)  # 按10张取整
+                volume = max(10, int(target / sig["price"] / 10) * 10)  # 按10张取整，最小10张
                 if volume <= 0 or sig["price"] <= 0:
                     continue
                 order = trade_engine.buy(

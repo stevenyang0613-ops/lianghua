@@ -51,7 +51,24 @@ _DEBT_CACHE_TTL = 3600 * 24
 _VOL_CACHE_TTL = 3600 * 24
 _MGMT_CACHE_TTL = 3600 * 24
 
-_PLEDGE_CACHE_TTL = 3600 * 24
+_RESTRICTED_RELEASE_CACHE_TTL = 3600 * 24
+_BOND_PRICE_CACHE_TTL = 300
+_STOCK_NAME_CACHE_TTL = 3600 * 24
+_COUPON_RATE_CACHE_TTL = 3600 * 24
+_MAIN_BIZ_CACHE_TTL = 3600 * 24
+_ANALYST_RANK_CACHE_TTL = 3600 * 24
+_MACRO_CPI_CACHE_TTL = 3600 * 24
+_MACRO_PPI_CACHE_TTL = 3600 * 24
+_MACRO_M2_CACHE_TTL = 3600 * 24
+_MACRO_LPR_CACHE_TTL = 3600 * 24
+_EARNINGS_FORECAST_CACHE_TTL = 7 * 24 * 3600
+_EARNINGS_EXPRESS_CACHE_TTL = 7 * 24 * 3600
+_LHB_CACHE_TTL = 12 * 3600
+_BLOCK_TRADE_CACHE_TTL = 12 * 3600
+_HOLDER_NUM_CACHE_TTL = 24 * 3600
+_NORTH_CACHE_TTL = 6 * 3600
+_MARGIN_CACHE_TTL = 12 * 3600
+
 _MOMENTUM_CACHE_TTL = 86400
 _EVENT_CACHE_TTL = 3600 * 24
 _CONCEPT_CACHE_TTL = 86400 * 7
@@ -4520,20 +4537,20 @@ async def enrich_quotes(bonds: list) -> list:
                 b.margin_balance = 0
 
         # Long-Hu-Bang enrichment
-        # 非龙虎榜股票不在 cache 中，lhb_count = 0
+        # 非龙虎榜股票不在 cache 中，lhb_count = None（表示数据缺失或零填充）
         # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
         if lhb_ref:
             lhb = lhb_ref.get(stock_code)
             if lhb is not None:
                 if isinstance(lhb, dict):
-                    b.lhb_count = lhb.get("lhb_count", 0)
+                    b.lhb_count = lhb.get("lhb_count")
                 else:
                     b.lhb_count = lhb
             else:
-                b.lhb_count = 0
+                b.lhb_count = None
 
         # Block trade enrichment
-        # 无大宗交易的股票不在 cache 中，block_trade_amount = 0
+        # 无大宗交易的股票不在 cache 中，block_trade_amount = None（表示数据缺失或零填充）
         # 只在缓存非空时处理，避免 API 失败导致所有股票被误标为 0
         if block_trade_ref:
             bt = block_trade_ref.get(stock_code)
@@ -4543,7 +4560,7 @@ async def enrich_quotes(bonds: list) -> list:
                 else:
                     b.block_trade_amount = bt
             else:
-                b.block_trade_amount = 0
+                b.block_trade_amount = None
 
         # Holder number change enrichment
         # 0 is a valid value (股东户数无变化), not "missing"
@@ -6079,12 +6096,12 @@ def _refresh_lhb_cache():
             except Exception as e_detail:
                 logger.warning(f"[DataEnrich] LHB stock_lhb_stock_detail_em fallback failed: {e_detail}")
 
-        # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
+        # Zero-fill: 未上榜的股票显式写入 lhb_count=None，区分"无上榜"与"数据缺失"
         # 放在 fallback 之后，确保 fallback 有机会填充真实数据
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "lhb_count": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
+                    "lhb_count": None,  # 零填充用 None，enrich_quotes 中处理为 None
                     "_prev_count": 0,
                     "_delta": 0,
                     "_data_source": "zero_fill",
@@ -6164,12 +6181,12 @@ def _refresh_block_trade_cache():
                     logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
             except Exception as e_mrtj:
                 logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
-        # Zero-fill: 无大宗交易的股票显式写入 0，区分"无交易"与"数据缺失"
+        # Zero-fill: 无大宗交易的股票显式写入 None，区分"无交易"与"数据缺失"
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
         # 避免启动阶段 AKShare 信号量争用导致超时
         for code in _get_bond_or_fallback_codes():
             if code not in result:
-                result[code] = {"block_trade_amount": 0}
+                result[code] = {"block_trade_amount": None}
         if result:
             _set_global_map("_block_trade_map", result, replace=True)
             _save_cache(_BLOCK_TRADE_CACHE, result)
@@ -6564,12 +6581,12 @@ def _refresh_lhb_cache():
             except Exception as e_detail:
                 logger.warning(f"[DataEnrich] LHB stock_lhb_stock_detail_em fallback failed: {e_detail}")
 
-        # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
+        # Zero-fill: 未上榜的股票显式写入 lhb_count=None，区分"无上榜"与"数据缺失"
         # 放在 fallback 之后，确保 fallback 有机会填充真实数据
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "lhb_count": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
+                    "lhb_count": None,  # 零填充用 None，enrich_quotes 中处理为 None
                     "_prev_count": 0,
                     "_delta": 0,
                     "_data_source": "zero_fill",
@@ -6649,12 +6666,12 @@ def _refresh_block_trade_cache():
                     logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
             except Exception as e_mrtj:
                 logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
-        # Zero-fill: 无大宗交易的股票显式写入 0，区分"无交易"与"数据缺失"
+        # Zero-fill: 无大宗交易的股票显式写入 None，区分"无交易"与"数据缺失"
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
         # 避免启动阶段 AKShare 信号量争用导致超时
         for code in _get_bond_or_fallback_codes():
             if code not in result:
-                result[code] = {"block_trade_amount": 0}
+                result[code] = {"block_trade_amount": None}
         if result:
             _set_global_map("_block_trade_map", result, replace=True)
             _save_cache(_BLOCK_TRADE_CACHE, result)

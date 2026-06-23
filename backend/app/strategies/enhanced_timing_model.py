@@ -515,6 +515,8 @@ class EnhancedTimingModel:
         self._pending_position: Optional[float] = None
         self._pending_days: int = 0
         self._confirmed_position: float = self._last_position_ratio
+        # 波动率目标仓位保护：追踪近20日指数收益率
+        self._daily_returns: deque = deque(maxlen=20)
         
     # ========== 市场环境检测 ==========
     
@@ -962,28 +964,12 @@ class EnhancedTimingModel:
             description=pledge_desc,
         ))
         
-        # 3.4 IPO/转债新发节奏（供给压力）
-        # 用PE分位作为供给压力的间接指标（线性插值避免阶梯跳跃）
-        # NOTE: math.isnan(pe_pct) checks DATA FIELD availability
-        pe_pct = data.stock_pe_percentile
-        if math.isnan(pe_pct):
-            supply_score = 50.0
-        else:
-            # 低PE分位=供给压力小=看多=高分；高PE分位=供给压力大=看空=低分
-            # 20%→75分, 50%→50分, 80%→25分
-            if pe_pct <= 20:
-                supply_score = 75.0
-            elif pe_pct <= 50:
-                supply_score = 75 - (pe_pct - 20) / 30 * 25
-            elif pe_pct <= 80:
-                supply_score = 50 - (pe_pct - 50) / 30 * 25
-            else:
-                supply_score = 25.0
+        # 3.4 IPO/转债新发节奏（供给压力）— 原使用PE分位作为替代指标（与估值面[1.4]重复），改为NaN避免双重计数
         sub_factors.append(FactorScore(
-            name="供给压力评估", score=supply_score, weight=0.25,
+            name="供给压力评估", score=float('nan'), weight=0.25,
             category="chip", raw_value=data.stock_pe_percentile,
-            signal="bullish" if supply_score > 55 else "bearish" if supply_score < 45 else "neutral",
-            description=f"基于PE分位{data.stock_pe_percentile:.0f}%评估供给压力",
+            signal="neutral",
+            description="指标来源与估值面PE分位重复，此处避免双重计数",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -1568,23 +1554,12 @@ class EnhancedTimingModel:
             description=vix_desc,
         ))
         
-        # 6.6 融资买入占比（均值回归：过高=过热=风险，过低=冷清=机会）
-        # 使用 sigmoid_score，center=3.0 使正常2-5%得中性分
-        mb = data.margin_buy_ratio if not math.isnan(data.margin_buy_ratio) else float('nan')
-        mb_available = not math.isnan(mb)
-        if mb_available:
-            mb_score = sigmoid_score(mb, 3, steepness=0.3, invert=True)
-            mb_signal = "bearish" if mb > 8 else "bullish" if mb < 2 else "neutral"
-            mb_desc = f"融资买入占比{mb:.1f}%，{'过热' if mb>8 else '过冷' if mb<2 else '正常'}"
-        else:
-            mb_score = 50.0
-            mb_signal = "neutral"
-            mb_desc = "无融资买入数据"
+        # 6.6 融资买入占比（已在筹码面[3.2]重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="融资买入占比", score=mb_score, weight=0.10,
-            category="sentiment", raw_value=mb,
-            signal=mb_signal,
-            description=mb_desc,
+            name="融资买入占比", score=float('nan'), weight=0.10,
+            category="sentiment", raw_value=data.margin_buy_ratio,
+            signal="neutral",
+            description="已在筹码面评分中计入，此处避免重复",
         ))
         
         # 6.7 新增开户数（情绪指标，区别于资金面的换手率）
@@ -1608,48 +1583,23 @@ class EnhancedTimingModel:
             confidence=1.0 if new_acc_available else 0.0,
         ))
         
-        # 6.8 转债恐慌指标（均值回归：高恐慌=市场恐慌=买入机会=高分）
-        cb_below_ratio = data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0
-        if data.cb_count > 0:
-            # 不使用 invert：高恐慌 = 高分（ bullish ），与均值回归一致
-            cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=False)
-            cb_panic_signal = "bullish" if cb_below_ratio > 8 else "bearish" if cb_below_ratio < 2 else "neutral"
-            cb_panic_desc = f"{int(data.cb_below_par_count)}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌=机会' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
-        else:
-            cb_panic_score = 50.0
-            cb_panic_signal = "neutral"
-            cb_panic_desc = "无转债数据"
+        # 6.8 转债恐慌指标（已在筹码面[3.3]重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="转债恐慌指标", score=cb_panic_score, weight=0.10,
-            category="sentiment", raw_value=cb_below_ratio,
-            signal=cb_panic_signal,
-            description=cb_panic_desc,
+            name="转债恐慌指标", score=float('nan'), weight=0.10,
+            category="sentiment",
+            raw_value=data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0,
+            signal="neutral",
+            description="已在筹码面评分中计入，此处避免重复",
         ))
         
-        # 6.9 北向资金情绪（趋势跟踪：流入=看多，流出=看空）
-        # 与资金面一致，使用 sigmoid_score 无 invert
-        north = data.north_bound_net_flow
-        north_available = not math.isnan(north)
-        if north_available:
-            north_score = sigmoid_score(north, 0, steepness=0.03)
-            north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
-            north_desc = f"北向资金{north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}"
-        else:
-            north_score = 50.0
-            north_signal = "neutral"
-            north_desc = "无北向数据"
+        # 6.9 北向资金情绪（已在资金面[4.3]重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="北向资金情绪", score=north_score, weight=0.10,
-            category="sentiment", raw_value=north,
-            signal=north_signal,
-            description=north_desc,
+            name="北向资金情绪", score=float('nan'), weight=0.10,
+            category="sentiment", raw_value=data.north_bound_net_flow,
+            signal="neutral",
+            description="已在资金面评分中计入，此处避免重复",
         ))
         
-        # 恐慌时均值回归加分：高恐慌=买入机会=情绪面加分
-        panic_boost = 0.0
-        for sf in sub_factors:
-            if sf.name == "转债恐慌指标" and sf.signal == "bullish":
-                panic_boost += 0.15
         # 过滤掉NaN项（缺失数据）后再加权
         valid_factors = [sf for sf in sub_factors if not math.isnan(sf.score)]
         total = sum(sf.score * sf.weight for sf in valid_factors)
@@ -1658,10 +1608,6 @@ class EnhancedTimingModel:
             cat_score = total / w_sum
         else:
             cat_score = 50.0
-        
-        # 恐慌时额外提升分数（均值回归：恐慌=机会）
-        if panic_boost > 0:
-            cat_score = min(100, cat_score + panic_boost * 30)
         
         return CategoryScore(
             name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'],
@@ -1794,34 +1740,28 @@ class EnhancedTimingModel:
             description=f"出口同比{export:.1f}%" if not math.isnan(export) else "无数据",
         ))
         
-        # 8.4 GDP增速
-        gdp = data.gdp_growth
-        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(gdp)), treat_zero_as_missing=False)
+        # 8.4 GDP增速（已在基本面重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="GDP增速", score=gdp_score, weight=0.20,
-            category="macro", raw_value=gdp,
-            signal="bullish" if gdp > 5.5 else "bearish" if gdp < 4.5 else "neutral",
-            description=f"GDP同比{gdp:.1f}%" if not math.isnan(gdp) else "无数据",
+            name="GDP增速", score=float('nan'), weight=0.20,
+            category="macro", raw_value=data.gdp_growth,
+            signal="neutral",
+            description="已在基本面评分中计入，此处避免重复",
         ))
         
-        # 8.5 工业增加值
-        io = data.industrial_output
-        io_score = safe_score(io, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(io)), treat_zero_as_missing=False)
+        # 8.5 工业增加值（已在基本面重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="工业增加值", score=io_score, weight=0.15,
-            category="macro", raw_value=io,
-            signal="bullish" if io > 6 else "bearish" if io < 4 else "neutral",
-            description=f"工业增加值同比{io:.1f}%" if not math.isnan(io) else "无数据",
+            name="工业增加值", score=float('nan'), weight=0.15,
+            category="macro", raw_value=data.industrial_output,
+            signal="neutral",
+            description="已在基本面评分中计入，此处避免重复",
         ))
         
-        # 8.6 社零
-        retail = data.retail_sales
-        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(retail)), treat_zero_as_missing=False)
+        # 8.6 社零增速（已在基本面重复，此处置NaN避免双重计数）
         sub_factors.append(FactorScore(
-            name="社零增速", score=retail_score, weight=0.10,
-            category="macro", raw_value=retail,
-            signal="bullish" if retail > 6 else "bearish" if retail < 4 else "neutral",
-            description=f"社零同比{retail:.1f}%" if not math.isnan(retail) else "无数据",
+            name="社零增速", score=float('nan'), weight=0.10,
+            category="macro", raw_value=data.retail_sales,
+            signal="neutral",
+            description="已在基本面评分中计入，此处避免重复",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -2166,6 +2106,27 @@ class EnhancedTimingModel:
                                    self._last_position_ratio - max_change)
         else:
             position_ratio = base_position
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 波动率目标仓位保护（P1-3）
+        # 当近20日年化波动率超过目标值时，线性压低仓位
+        # 公式: vol_cap = max(0, min(1, target_vol / realized_vol))
+        # ═══════════════════════════════════════════════════════════════
+        TARGET_ANNUAL_VOL = 0.18  # 目标年化波动率 18%
+        if not math.isnan(data.stock_index_change):
+            self._daily_returns.append(data.stock_index_change)
+        if len(self._daily_returns) >= 10:
+            realized_daily_vol = pd.Series(list(self._daily_returns)).std()
+            realized_ann_vol = realized_daily_vol * math.sqrt(252)
+            if realized_ann_vol > TARGET_ANNUAL_VOL:
+                vol_cap = TARGET_ANNUAL_VOL / realized_ann_vol
+                capped_position = position_ratio * vol_cap
+                if capped_position < position_ratio:
+                    logger.debug(
+                        f"[VolTarget] 年化波动率{realized_ann_vol:.1%} > 目标{TARGET_ANNUAL_VOL:.0%}，"
+                        f"仓位从{position_ratio*100:.0f}%降至{capped_position*100:.0f}%"
+                    )
+                    position_ratio = max(0.05, capped_position)
         self._last_position_ratio = position_ratio
         
         # 对冲推荐

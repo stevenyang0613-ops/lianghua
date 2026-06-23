@@ -1074,6 +1074,10 @@ class XibuSevenDimensionStrategy(Strategy):
         buffer_size = self.get_param('buffer_size')
         buffer_days = self.get_param('buffer_days')
 
+        # 首次运行（无持仓）时跳过缓冲带，直接买入
+        if not self._prev_selected:
+            return True, "首次建仓"
+
         status = self._update_buffer_status(code, rank)
 
         # 在前60名内：直接持有

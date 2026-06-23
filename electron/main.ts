@@ -92,7 +92,7 @@ function startFrontendServer(): Promise<number> {
       '.map': 'application/json',
     }
 
-    const server = http.createServer((req, res) => {
+    const server = http.createServer(async (req, res) => {
       try {
         // Normalize URL and prevent directory traversal
         const urlPath = new URL(req.url || '/', `http://localhost:${FRONTEND_PORT}`).pathname
@@ -119,6 +119,15 @@ function startFrontendServer(): Promise<number> {
             if (hopByHopHeaders.has(key.toLowerCase())) continue
             if (value !== undefined) {
               proxyHeaders[key] = Array.isArray(value) ? value.join(', ') : String(value)
+            }
+          }
+
+          // 代理层自动注入认证令牌：前端 fetch 不带 Authorization，代理负责补充
+          // 若前端已携带（如用户自定义请求），则保留前端值
+          if (!proxyHeaders['authorization'] && !proxyHeaders['Authorization']) {
+            const authToken = await ensureDesktopAuthToken()
+            if (authToken) {
+              proxyHeaders['Authorization'] = `Bearer ${authToken}`
             }
           }
 
@@ -1809,16 +1818,21 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
     }
 
     // 获取桌面认证 token 并附加到 WebSocket URL
-    // 后端 ws.py 通过 query_params.get("token") 验证，必须带上 token 否则返回 403
-    // 修复：如果 URL 已包含 token，则不再重复添加
+    // 后端 ws.py 通过 query_params.get("token") 验证，必须带上正确的 token
+    // 修复：即使 URL 已包含 token，也要用 ensureDesktopAuthToken 返回的最新 token 覆盖，
+    // 避免前端 localStorage 缓存的旧 token 导致认证失败（token mismatch）
     let wsUrl = url
     try {
-      if (!wsUrl.includes('token=')) {
-        const token = await ensureDesktopAuthToken()
-        if (token) {
-          const sep = wsUrl.includes('?') ? '&' : '?'
-          wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`
+      const token = await ensureDesktopAuthToken()
+      if (token) {
+        // 先移除 URL 中可能存在的旧 token 参数
+        wsUrl = wsUrl.replace(/[?&]token=[^&]*/, '')
+        // 移除后如果 URL 以 ? 结尾，去掉末尾的 ?
+        if (wsUrl.endsWith('?')) {
+          wsUrl = wsUrl.slice(0, -1)
         }
+        const sep = wsUrl.includes('?') ? '&' : '?'
+        wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`
       }
     } catch (e) {
       console.warn('[Electron] Failed to get WS auth token:', (e as Error).message)

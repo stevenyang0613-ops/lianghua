@@ -377,6 +377,10 @@ class XuanjiTwelveFactorStrategy(Strategy):
         buffer_size = self.get_param('buffer_size')
         buffer_days = self.get_param('buffer_days')
 
+        # 首次运行（无持仓）时跳过缓冲带，直接买入
+        if not self._prev_selected:
+            return True, "首次建仓"
+
         if rank <= hold_count:
             # 排名回到前hold_count，重置缓冲带计数器
             self._buffer_tracker.pop(code, None)
@@ -546,10 +550,17 @@ class XuanjiTwelveFactorStrategy(Strategy):
         if not is_rebalance_day:
             return None
 
-        # === 调仓日逻辑 ===
+        # factor_data 回退: 若 _date_data_map 缺失当前日期，用 data 参数本身计算基础因子
         factor_data = self._date_data_map.get(current_date, pd.DataFrame()).copy()
         if factor_data.empty:
-            return None
+            factor_data = data.copy()
+            if 'momentum' not in factor_data.columns and 'price' in factor_data.columns:
+                factor_data['momentum'] = 0.0
+            if 'hv' not in factor_data.columns:
+                factor_data['hv'] = 20.0
+            logger.info(
+                f"[XuanjiTwelve] factor_data empty for {current_date}, using live data fallback"
+            )
 
         merge_cols = ['code', 'momentum', 'hv']
         cols_to_merge = [c for c in merge_cols if c in factor_data.columns]
@@ -714,6 +725,10 @@ class XuanjiTwelveFactorStrategy(Strategy):
 
         # 波动率因子
         vol_factor = self._compute_vol_factor(day_data)
+        # NaN 防御: vol_factor 全为 NaN 时回退到 1.0（中性权重）
+        if pd.isna(vol_factor).all():
+            logger.warning(f"[XuanjiTwelve] vol_factor all NaN, fallback to 1.0")
+            vol_factor = pd.Series(1.0, index=day_data.index)
 
         # 过滤不可用因子
         active_weights = dict(weights)

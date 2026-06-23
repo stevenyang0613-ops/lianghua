@@ -64,7 +64,6 @@ router.include_router(auth_router, prefix="/auth", tags=["auth"])  # 无需认�
 router.include_router(accounts_router, prefix="/accounts", tags=["accounts"], dependencies=[Depends(verify_token)])
 router.include_router(logs_router, prefix="/logs", tags=["logs"], dependencies=[Depends(verify_token)])
 router.include_router(mx_router, tags=["mx"], dependencies=[Depends(verify_token)])
-router.include_router(mx_router, tags=["mx"], dependencies=[Depends(verify_token)])
 router.include_router(data_source_router, tags=["data"], dependencies=[Depends(verify_token)])
 router.include_router(data_sources_router, prefix="/data-sources-v2", tags=["data-sources-v2"], dependencies=[Depends(verify_token)])
 router.include_router(extra_data_sources_router, prefix="/extra", tags=["extra"], dependencies=[Depends(verify_token)])
@@ -174,6 +173,7 @@ async def data_enrich_self_check():
         _north_map, _margin_map, _lhb_map, _block_trade_map,
         _holder_num_map, _earnings_forecast_map, _earnings_express_map,
         _restricted_release_map, _fin_map, _spot_map,
+        _RESTRICTED_RELEASE_CACHE_TTL, _FIN_CACHE_TTL, _SPOT_CACHE_TTL,
     )
     from app.engine.data_enrich import _last_enriched_bonds
 
@@ -199,14 +199,14 @@ async def data_enrich_self_check():
         "holder_num": (_HOLDER_NUM_CACHE, 24 * 3600, len(_holder_num_map)),
         "earnings_forecast": (_EARNINGS_FORECAST_CACHE, 7 * 24 * 3600, len(_earnings_forecast_map)),
         "earnings_express": (_EARNINGS_EXPRESS_CACHE, 7 * 24 * 3600, len(_earnings_express_map)),
-        "restricted_release": (_RESTRICTED_RELEASE_CACHE, 0, len(_restricted_release_map)),
-        "fin": (_FIN_CACHE, 0, len(_fin_map)),
-        "spot": (_SPOT_CACHE, 0, len(_spot_map)),
+        "restricted_release": (_RESTRICTED_RELEASE_CACHE, _RESTRICTED_RELEASE_CACHE_TTL, len(_restricted_release_map)),
+        "fin": (_FIN_CACHE, _FIN_CACHE_TTL, len(_fin_map)),
+        "spot": (_SPOT_CACHE, _SPOT_CACHE_TTL, len(_spot_map)),
     }
 
     caches = {}
     for name, (path, ttl, mem_size) in cache_paths.items():
-        status = _cache_status(path, ttl=ttl) if ttl else "unknown"
+        status = _cache_status(path, ttl=ttl)
         caches[name] = {
             "status": status,
             "memory_entries": mem_size,

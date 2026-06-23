@@ -112,7 +112,9 @@ class ConvertibleQuote(BaseModel):
             "remaining_years": self.remaining_years,
             "change_pct": self.change_pct,
             "stock_price": self.stock_price,
+            "stock_change_pct": self.stock_change_pct,
             "conversion_value": self.conversion_value,
+            "conversion_price": self.conversion_price,
             "hv": self.hv,
             "iv": self.iv,
             "rating_score": (
@@ -135,8 +137,13 @@ class ConvertibleQuote(BaseModel):
             "pb": self.pb,
             "roe": self.roe,
             "gpm": self.gpm,
+            "cagr": self.cagr,
+            "debt_ratio": self.debt_ratio,
             "call_status": self.call_status,
             "is_called": self.is_called,
             "forced_call_days": self.forced_call_days,
+            "buyback_amount": self.buyback_amount,
+            "mgmt_buy_price": self.mgmt_buy_price,
+            "event_score": self.event_score,
             "sentiment_score": self.sentiment_score,
         }
