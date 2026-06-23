@@ -820,21 +820,21 @@ class EnhancedTimingModel:
             description=f"盈利超预期公司占比{surprise*100:.0f}%" if not math.isnan(surprise) else "无数据",
         ))
         
-        # 2.2 GDP增速贡献
+        # 2.2 GDP增速贡献（与宏观面[8.4]共享，权重减半避免双重计数）
         gdp = data.gdp_growth
         gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(gdp)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="GDP增速", score=gdp_score, weight=0.20,
+            name="GDP增速", score=gdp_score, weight=0.10,  # 半权重，宏观面另有0.20
             category="fundamental", raw_value=gdp,
             signal="bullish" if gdp > 5.5 else "bearish" if gdp < 4.5 else "neutral",
             description=f"GDP同比增速{gdp:.1f}%" if not math.isnan(gdp) else "无数据",
         ))
         
-        # 2.3 工业增加值
+        # 2.3 工业增加值（与宏观面[8.5]共享，权重减半）
         industrial = data.industrial_output
         ind_score = safe_score(industrial, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(industrial)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="工业增加值增速", score=ind_score, weight=0.20,
+            name="工业增加值增速", score=ind_score, weight=0.10,  # 半权重，宏观面另有0.15
             category="fundamental", raw_value=industrial,
             signal="bullish" if industrial > 6 else "bearish" if industrial < 4 else "neutral",
             description=f"工业增加值同比{industrial:.1f}%" if not math.isnan(industrial) else "无数据",
@@ -880,11 +880,11 @@ class EnhancedTimingModel:
             description=f"基于PE推断股息吸引力，PE={data.stock_pe_median:.1f}" if not math.isnan(data.stock_pe_median) else "无PE数据",
         ))
         
-        # 2.6 社零增速
+        # 2.6 社零增速（与宏观面[8.6]共享，权重减半）
         retail = data.retail_sales
         retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(retail)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="社零增速", score=retail_score, weight=0.10,
+            name="社零增速", score=retail_score, weight=0.05,  # 半权重，宏观面另有0.10
             category="fundamental", raw_value=retail,
             signal="bullish" if retail > 6 else "bearish" if retail < 4 else "neutral",
             description=f"社会消费品零售同比{retail:.1f}%" if not math.isnan(retail) else "无数据",
@@ -1740,28 +1740,34 @@ class EnhancedTimingModel:
             description=f"出口同比{export:.1f}%" if not math.isnan(export) else "无数据",
         ))
         
-        # 8.4 GDP增速（已在基本面重复，此处置NaN避免双重计数）
+        # 8.4 GDP增速
+        gdp = data.gdp_growth
+        gdp_score = safe_score(gdp, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(gdp)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="GDP增速", score=float('nan'), weight=0.20,
-            category="macro", raw_value=data.gdp_growth,
-            signal="neutral",
-            description="已在基本面评分中计入，此处避免重复",
+            name="GDP增速", score=gdp_score, weight=0.20,
+            category="macro", raw_value=gdp,
+            signal="bullish" if gdp > 5.5 else "bearish" if gdp < 4.5 else "neutral",
+            description=f"GDP同比{gdp:.1f}%" if not math.isnan(gdp) else "无数据",
         ))
         
-        # 8.5 工业增加值（已在基本面重复，此处置NaN避免双重计数）
+        # 8.5 工业增加值
+        io = data.industrial_output
+        io_score = safe_score(io, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(io)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="工业增加值", score=float('nan'), weight=0.15,
-            category="macro", raw_value=data.industrial_output,
-            signal="neutral",
-            description="已在基本面评分中计入，此处避免重复",
+            name="工业增加值", score=io_score, weight=0.15,
+            category="macro", raw_value=io,
+            signal="bullish" if io > 6 else "bearish" if io < 4 else "neutral",
+            description=f"工业增加值同比{io:.1f}%" if not math.isnan(io) else "无数据",
         ))
         
-        # 8.6 社零增速（已在基本面重复，此处置NaN避免双重计数）
+        # 8.6 社零增速
+        retail = data.retail_sales
+        retail_score = safe_score(retail, lambda v: sigmoid_score(v, 5.0, steepness=2), has_data=(not math.isnan(retail)), treat_zero_as_missing=False)
         sub_factors.append(FactorScore(
-            name="社零增速", score=float('nan'), weight=0.10,
-            category="macro", raw_value=data.retail_sales,
-            signal="neutral",
-            description="已在基本面评分中计入，此处避免重复",
+            name="社零增速", score=retail_score, weight=0.10,
+            category="macro", raw_value=retail,
+            signal="bullish" if retail > 6 else "bearish" if retail < 4 else "neutral",
+            description=f"社零同比{retail:.1f}%" if not math.isnan(retail) else "无数据",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
