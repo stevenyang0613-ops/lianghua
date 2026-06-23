@@ -649,7 +649,7 @@ class XibuSevenDimensionStrategy(Strategy):
         premium_ratio = df['premium_ratio'].values if 'premium_ratio' in df.columns else np.zeros(n)
         ytm = df['ytm'].values if 'ytm' in df.columns else np.zeros(n)
         remaining_years = df['remaining_years'].values if 'remaining_years' in df.columns else np.zeros(n)
-        forced_call_days = df['forced_call_days'].values if 'forced_call_days' in df.columns else np.zeros(n)
+        forced_call_days = pd.to_numeric(df['forced_call_days'], errors='coerce').fillna(0).values if 'forced_call_days' in df.columns else np.zeros(n)
         codes = np.asarray(df['code']) if 'code' in df.columns else np.array([str(i) for i in range(n)])
         names = np.asarray(df['name']) if 'name' in df.columns else np.array([''] * n)
 
@@ -684,7 +684,11 @@ class XibuSevenDimensionStrategy(Strategy):
         veto1 = credit < min_credit_score
         veto2 = premium_ratio > max_premium
         veto3 = remaining_years * 12 < min_months
-        veto4 = (forced_call_days > 0) & (forced_call_days < 15)
+        # 安全处理 forced_call_days 可能为 None 的情况
+        veto4 = np.zeros(n, dtype=bool)
+        if 'forced_call_days' in df.columns:
+            fcd = pd.to_numeric(df['forced_call_days'], errors='coerce').fillna(-1).values
+            veto4 = (fcd > 0) & (fcd < 15)
         volume_wan = volume * 10000
         veto5 = volume_wan < min_liquidity
         veto6 = (price <= 0) | (price > 300)

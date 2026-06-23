@@ -398,7 +398,13 @@ export default function PaperTrade() {
         sessionStorage.setItem('lianghua_tab_id', id)
       }
       return id
-    } catch { return 'tab_default' }
+    } catch (e) {
+      // QuotaExceededError 时生成随机 tabId（不持久化），避免所有标签页共享固定值
+      if (e instanceof Error && e.name === 'QuotaExceededError') {
+        return 'tab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6)
+      }
+      return 'tab_default'
+    }
   })())
   const storageKey = useCallback((suffix: string) => `${tabIdRef.current}_${suffix}`, [])
   // 不能加入 useCallback deps（否则无限循环），用 ref 避免 stale closure

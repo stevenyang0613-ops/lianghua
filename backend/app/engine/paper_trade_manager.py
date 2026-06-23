@@ -465,6 +465,9 @@ class PaperTradeManager:
         strategy = account.strategy
         today_str = str(datetime.now().date())
 
+        # 清空近期信号去重缓存，确保本轮信号不被前一轮过滤
+        account._recent_signals.clear()
+
         # ── 获取最新行情（优先实时，回退历史快照） ──
         bonds = None
         df = pd.DataFrame()

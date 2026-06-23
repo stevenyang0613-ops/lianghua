@@ -537,11 +537,17 @@ def _get_bond_or_fallback_codes() -> frozenset:
                 if k and len(k) == 6 and k.isdigit()
             )
     # 回退 3：从 _spot_map 或 _fin_map 的键中提取代码（确保 zero-fill 始终有目标集合）
+    # 过滤掉 price=0 或 volume=0 的已退市/异常股票，避免 zero-fill 无意义条目
     fallback_codes = set()
     for m in (_spot_map, _fin_map):
         if m:
-            for k in m.keys():
+            for k, v in m.items():
                 if isinstance(k, str) and len(k) == 6 and k.isdigit():
+                    if isinstance(v, dict):
+                        price = v.get("price") if v.get("price") is not None else v.get("最新价")
+                        vol = v.get("volume") if v.get("volume") is not None else v.get("成交量")
+                        if price == 0 or vol == 0:
+                            continue
                     fallback_codes.add(k)
     if fallback_codes:
         logger.info(f"[DataEnrich] _get_bond_or_fallback_codes 回退到 spot/fin map，{len(fallback_codes)} codes")
@@ -6110,6 +6116,14 @@ def _refresh_lhb_cache():
 
         # Zero-fill: 未上榜的股票显式写入 lhb_count=None，区分"无上榜"与"数据缺失"
         # 放在 fallback 之后，确保 fallback 有机会填充真实数据
+        # 保留旧缓存中的真实数据，避免 API 失败时 zero-fill 覆盖旧数据
+        prev = _lhb_map if isinstance(_lhb_map, dict) else {}
+        for code, entry in prev.items():
+            if code.startswith("_"):
+                continue
+            if isinstance(entry, dict) and entry.get("_data_source") not in (None, "zero_fill"):
+                if code not in result:
+                    result[code] = entry
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
@@ -6122,8 +6136,9 @@ def _refresh_lhb_cache():
         if result:
             _set_global_map("_lhb_map", result, replace=True)
             _save_cache(_LHB_CACHE, result)
-            logger.info(f"[DataEnrich] LHB: {len(result)} stocks refreshed (含 _delta 增量)")
-            return len(result)
+            real_count = len([k for k in result if not k.startswith("_") and isinstance(result[k], dict) and result[k].get("_data_source") != "zero_fill"])
+            logger.info(f"[DataEnrich] LHB: {real_count} real stocks refreshed (total {len(result)} with zero_fill)")
+            return real_count
         return 0
     except Exception as e:
         logger.warning(f"[DataEnrich] LHB in-proc refresh failed: {e}")
@@ -6202,9 +6217,19 @@ def _refresh_block_trade_cache():
                     logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj_added}, overwritten {count_mrtj_overwritten} stocks")
             except Exception as e_mrtj:
                 logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
+        else:
+            logger.info("[DataEnrich] BlockTrade: stock_dzjy_mrtj no data")
         # Zero-fill: 无大宗交易的股票显式写入 None，区分"无交易"与"数据缺失"
         # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
         # 避免启动阶段 AKShare 信号量争用导致超时
+        # 保留旧缓存中的真实数据，避免 API 失败时 zero-fill 覆盖旧数据
+        prev_bt = _block_trade_map if isinstance(_block_trade_map, dict) else {}
+        for code, entry in prev_bt.items():
+            if code.startswith("_"):
+                continue
+            if isinstance(entry, dict) and entry.get("_data_source") not in (None, "zero_fill"):
+                if code not in result:
+                    result[code] = entry
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {"block_trade_amount": None}

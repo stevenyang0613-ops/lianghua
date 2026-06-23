@@ -519,6 +519,9 @@ class EnhancedTimingModel:
         self._daily_returns: deque = deque(maxlen=20)
         # 连续急跌追踪（回撤保护增强）
         self._sharp_decline_days: int = 0
+        self._sharp_decline_cooldown: int = 0  # 保护退出缓冲（天）
+        # Vix 日度历史（用于 vol target 平滑）
+        self._vix_history: deque = deque(maxlen=5)
         
     # ========== 市场环境检测 ==========
     
@@ -2129,13 +2132,17 @@ class EnhancedTimingModel:
         # ═══════════════════════════════════════════════════════════════
         # 波动率目标仓位保护（P1-3）— 在 raw_position 层面截断
         # 设计要点：在仓位平滑/确认之前应用，不锁定 _last_position_ratio
-        # 目标波动率基于 vix_index 动态调节（vix 高时更保守）
+        # 目标波动率基于 vix_index 5 日均线动态调节（vix 高时更保守）
         # 注意：stock_index_change 是百分比值（如 1.5 = 1.5%），std 需 /100 转小数
         # ═══════════════════════════════════════════════════════════════
-        # 动态目标：vix 高→保守，vix 低→激进，默认 0.28
+        # 维护 vix 历史（用于 5 日均线）
         if not math.isnan(data.vix_index) and data.vix_index > 0:
-            vix = min(max(data.vix_index, 10), 50)
-            TARGET_ANNUAL_VOL = max(0.22, min(0.35, 0.32 - (vix - 15) * 0.004))
+            self._vix_history.append(data.vix_index)
+        vix_smooth = float(np.mean(self._vix_history)) if len(self._vix_history) >= 3 else float('nan')
+        # 动态目标：vix 高→保守，vix 低→激进，默认 0.28
+        if not math.isnan(vix_smooth):
+            vix_smooth = min(max(vix_smooth, 10), 50)
+            TARGET_ANNUAL_VOL = max(0.22, min(0.35, 0.32 - (vix_smooth - 15) * 0.004))
         else:
             TARGET_ANNUAL_VOL = 0.28
         if not math.isnan(data.stock_index_change):
@@ -2193,20 +2200,30 @@ class EnhancedTimingModel:
         # ═══════════════════════════════════════════════════════════════
         # 回撤保护增强：连续 3 日急跌（日跌幅 > 2%）时额外减仓 20%
         # 作用：在极端下跌行情中快速降低风险暴露
+        # 退出：急跌结束后仍有 2 天缓冲期，防止反复触发
         # ═══════════════════════════════════════════════════════════════
         if not math.isnan(data.stock_index_change):
             if data.stock_index_change < -2.0:
                 self._sharp_decline_days += 1
+                self._sharp_decline_cooldown = 0  # 仍在急跌，无需冷却
             else:
-                self._sharp_decline_days = 0
+                if self._sharp_decline_days >= 3:
+                    # 已满足触发条件，开始冷却倒计时
+                    if self._sharp_decline_cooldown > 0:
+                        self._sharp_decline_cooldown -= 1
+                    else:
+                        self._sharp_decline_days = 0
+                else:
+                    self._sharp_decline_days = 0
         
         if self._sharp_decline_days >= 3:
-            # 连续急跌 3 天，在现有仓位基础上再减 20%
+            # 连续急跌 >= 3 天（含缓冲期），在现有仓位基础上再减 20%
             drawdown_cap = 0.8
             capped_pos = position_ratio * drawdown_cap
             if capped_pos < position_ratio:
                 logger.debug(
-                    f"[DrawdownProt] 连续{self._sharp_decline_days}日急跌，"
+                    f"[DrawdownProt] 连续{self._sharp_decline_days}日急跌"
+                    f"冷却={self._sharp_decline_cooldown}，"
                     f"仓位从{position_ratio*100:.0f}%降至{capped_pos*100:.0f}%"
                 )
                 position_ratio = max(0.05, min(1.0, capped_pos))

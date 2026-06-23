@@ -386,7 +386,7 @@ class TestDayDataOptimization:
                     'stock_change_pct': round(rng.normal() * 3, 4),
                     'ytm': round(rng.normal(-2, 3), 4),
                     'remaining_years': round(rng.uniform(0.5, 5), 2),
-                    'forced_call_days': 0,
+                    'forced_call_days': None,
                 })
         return pd.DataFrame(records)
 
