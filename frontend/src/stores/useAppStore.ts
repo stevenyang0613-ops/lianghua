@@ -52,6 +52,8 @@ export const useAppStore = create<AppState>()(
       setSelectedBond: (code) => set({ selectedBond: code }),
       marketWsConnected: marketWs.isConnected(),
       signalWsConnected: signalsWs.isConnected(),
+      marketRunning: false,
+      setMarketRunning: (v) => set({ marketRunning: v }),
       dataSources: null,
       setDataSources: (v) => set({ dataSources: v }),
     }),

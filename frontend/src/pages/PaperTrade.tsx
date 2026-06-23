@@ -418,6 +418,27 @@ export default function PaperTrade() {
   })())
   const { isElectron, showNotification, restartBackend } = useElectron()
 
+  // 清理其他标签页过期的 localStorage key（避免累积废弃 key）
+  useEffect(() => {
+    try {
+      const now = Date.now()
+      const expireMs = 5 * 60 * 1000
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i)
+        if (!key) continue
+        if (key.endsWith('_load_fail_ts')) {
+          const ts = Number(localStorage.getItem(key))
+          if (!isNaN(ts) && now - ts > expireMs) {
+            const prefix = key.replace('_load_fail_ts', '')
+            localStorage.removeItem(key)
+            localStorage.removeItem(prefix + '_load_fail_count')
+            localStorage.removeItem(prefix + '_dismiss_refresh_warning')
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }, [])
+
   // setState 函数是稳定引用，无需列入 useCallback 依赖
   const handleDismissWarning = useCallback(() => {
     setDismissRefreshWarning(true)
