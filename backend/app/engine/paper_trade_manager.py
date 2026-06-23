@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from app.engine.filters import is_tradeable_bond
@@ -28,6 +29,18 @@ from app.adapters.broker_sim import SimBroker
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """计算 RSI（相对强弱指标）"""
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    avg_gain = gain.rolling(period, min_periods=period).mean()
+    avg_loss = loss.rolling(period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50.0)
 
 
 # ── 数据类 ──────────────────────────────────────────────
@@ -290,6 +303,23 @@ class PaperTradeManager:
         # 持久化状态
         self._update_account_running(account_id, True)
 
+        # 关键: 启动后立即用当前数据执行一次策略，确保首次立即建仓
+        if init_df is not None and len(init_df) > 0:
+            try:
+                from app.models.convertible import ConvertibleQuote
+                bonds = []
+                if self._market_engine is not None:
+                    raw_bonds = getattr(self._market_engine, 'latest_quotes', None) or []
+                    if raw_bonds:
+                        bonds = [b for b in raw_bonds if isinstance(b, ConvertibleQuote) and is_tradeable_bond(b)]
+                if bonds:
+                    asyncio.create_task(self._process_account(
+                        account, init_df, bonds, time_mod.monotonic(), str(datetime.now().date())
+                    ))
+                    logger.info(f"[PaperTrade] Triggered immediate first run for account {account_id}")
+            except Exception as e:
+                logger.warning(f"[PaperTrade] Immediate first run failed for {account_id}: {e}")
+
         logger.info(f"[PaperTrade] Started account {account_id} ({account.strategy_name})")
 
     def stop_account(self, account_id: str) -> None:
@@ -454,6 +484,72 @@ class PaperTradeManager:
                 if "close_price" in df.columns and "price" not in df.columns:
                     df = df.rename(columns={"close_price": "price"})
                 if not df.empty:
+                    # ── 从全量历史数据计算预计算因子列 ──
+                    # 策略 on_data 需要 momentum/hv/volatility 等由 on_init 预计算的列，
+                    # 但这些列在单日快照 df 中不存在。从 init_df（60天历史）计算后合并到 df。
+                    try:
+                        _hist = init_df.copy()
+                        _hist['code'] = _hist['code'].astype(str)
+                        _hist = _hist.sort_values(['code', 'date'])
+
+                        # 动量: price 各周期涨跌幅
+                        _hist['momentum'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.shift(5) / s.shift(60).replace(0, float('nan')) - 1
+                        )
+                        _hist['momentum_1m'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.pct_change(20)
+                        )
+                        _hist['momentum_3m'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.pct_change(60)
+                        )
+                        # 波动率: rolling(20) 日收益率标准差 * sqrt(252) → 年化 HV
+                        _hist['daily_ret'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.pct_change()
+                        )
+                        _hist['hv'] = _hist.groupby('code')['daily_ret'].transform(
+                            lambda s: s.rolling(20).std() * (252 ** 0.5) * 100
+                        )
+                        # 63日波动率（SectorRotation 需要）
+                        _hist['volatility_63d'] = _hist.groupby('code')['daily_ret'].transform(
+                            lambda s: s.rolling(63).std() * (252 ** 0.5) * 100
+                        )
+                        # 63日夏普比
+                        _hist['sharpe_63d'] = _hist.groupby('code')['daily_ret'].transform(
+                            lambda s: s.rolling(63).mean() / s.rolling(63).std().replace(0, float('nan'))
+                        )
+                        # RSI(14)
+                        _hist['rsi_14'] = _hist.groupby('code')['price'].transform(
+                            lambda s: _calc_rsi(s, 14)
+                        )
+                        # 最大回撤(63天)
+                        _hist['drawdown_63d'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.rolling(63).apply(
+                                lambda x: (x / x.cummax() - 1).min() if len(x) > 1 else 0.0,
+                                raw=False
+                            )
+                        )
+                        # 相对强度（63日收益 vs 市场）
+                        _hist['relative_strength'] = _hist.groupby('code')['price'].transform(
+                            lambda s: s.pct_change(63)
+                        )
+
+                        # 取最新一条的因子值合并到 df
+                        _latest_factors = _hist.groupby('code').last().reset_index()
+                        factor_cols = ['code', 'momentum', 'momentum_1m', 'momentum_3m',
+                                       'hv', 'volatility_63d', 'sharpe_63d', 'rsi_14',
+                                       'drawdown_63d', 'relative_strength']
+                        _latest_factors = _latest_factors[factor_cols]
+                        if 'code' in df.columns:
+                            df['code'] = df['code'].astype(str)
+                            df = df.merge(_latest_factors, on='code', how='left')
+
+                        logger.info(
+                            f"[PaperTrade] force_rebalance: computed momentum/hv/rsi "
+                            f"from {len(init_df)} rows"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[PaperTrade] force_rebalance: factor computation failed: {e}")
+
                     logger.info(
                         f"[PaperTrade] force_rebalance: loaded {len(df)} bonds "
                         f"from storage date={last_date}"
@@ -492,7 +588,11 @@ class PaperTradeManager:
         account._sim_idx = today_idx
 
         try:
-            result = strategy.on_data(df, today_idx)
+            try:
+                result = strategy.on_data(df, today_idx)
+            except Exception as e:
+                logger.warning(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
+                return {"status": "no_signals", "message": f"策略执行异常: {e}", "signals": []}
 
             if not result:
                 return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}
@@ -969,6 +1069,20 @@ class PaperTradeManager:
                                             cutoff = sorted(unique_dates)[-90]
                                             combined = combined[combined['date'] >= cutoff]
                                     account.strategy._data = combined
+                                # 关键: 同步清理 _date_data_map 中超过90天的旧数据，防止内存泄漏
+                                if hasattr(account.strategy, '_date_data_map') and len(strategy_dates) > 90:
+                                    try:
+                                        cutoff_date = sorted(strategy_dates)[-90]
+                                        dmap = dict(account.strategy._date_data_map)
+                                        old_keys = [k for k in dmap if k < cutoff_date]
+                                        for k in old_keys:
+                                            del dmap[k]
+                                        account.strategy._date_data_map = dmap
+                                        logger.debug(
+                                            f"[PaperTrade] Cleaned {len(old_keys)} old entries from _date_data_map"
+                                        )
+                                    except Exception as clean_e:
+                                        logger.debug(f"[PaperTrade] _date_data_map cleanup failed: {clean_e}")
                         except Exception as e:
                             logger.debug(
                                 f"[PaperTrade] Strategy date extension failed for {account.id}: {e}"
@@ -1022,9 +1136,13 @@ class PaperTradeManager:
 
             # 记录策略运行前的关键状态
             rebalance_days = account.strategy.get_param('rebalance_days') if hasattr(account.strategy, 'get_param') else None
+            is_rebalance_day = False
+            if rebalance_days and rebalance_days > 0:
+                is_rebalance_day = (idx % rebalance_days == 0)
             logger.info(
                 f"[PaperTrade] Running strategy {account.strategy_name} for account {account.id}, "
-                f"idx={idx}, rebalance_days={rebalance_days}, _dates_len={len(getattr(account.strategy, '_dates', []))}"
+                f"idx={idx}, rebalance_days={rebalance_days}, is_rebalance_day={is_rebalance_day}, "
+                f"_dates_len={len(getattr(account.strategy, '_dates', []))}"
             )
 
             # 运行策略（30 秒超时防止阻塞）

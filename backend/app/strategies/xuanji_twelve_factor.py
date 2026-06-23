@@ -35,7 +35,7 @@ class XuanjiTwelveFactorStrategy(Strategy):
         StrategyParam(name="buffer_size", label="缓冲带大小", type="int", default=3, min_val=0, max_val=10),
         StrategyParam(name="buffer_days", label="缓冲观察天数", type="int", default=3, min_val=1, max_val=7),
         StrategyParam(name="min_credit_score", label="最低信用评分", type="float", default=60, min_val=0, max_val=100),
-        StrategyParam(name="min_liquidity", label="最小成交额(万元)", type="float", default=500, min_val=0, max_val=5000),
+        StrategyParam(name="min_liquidity", label="最小成交额(亿元)", type="float", default=0.05, min_val=0, max_val=50),
     ]
 
     MARKET_WEIGHTS = {
@@ -117,12 +117,12 @@ class XuanjiTwelveFactorStrategy(Strategy):
             passed = False
             reasons.append(f"剩余期限{rem*12:.0f}月<6月")
 
-        # 5. 流动性
+        # 5. 流动性（volume 单位为亿元，min_liquidity 同样为亿元）
         min_liq = self.get_param('min_liquidity')
-        volume = row.get('volume', 0)  # 手数
+        volume = row.get('volume', 0)
         if volume < min_liq:
             passed = False
-            reasons.append(f"成交{volume:.0f}手<{min_liq}")
+            reasons.append(f"成交额{volume:.2f}亿<{min_liq}亿")
 
         # 6. 价格有效性
         price = row.get('price', 0)

@@ -146,6 +146,7 @@ async def _run_single_backtest(request: Request, strategy_key: str, start: date,
     # 构建数据
     full_data = await _build_data(request, start, end, strategy_name=strategy_key)
     data_source = getattr(full_data, "_backtest_data_source", "unknown")
+    data_warning = getattr(full_data, "_backtest_data_warning", None)
     total_rows = len(full_data)
     n_dates = full_data["date"].nunique() if "date" in full_data.columns and not full_data.empty else 0
 
@@ -246,6 +247,7 @@ async def _run_single_backtest(request: Request, strategy_key: str, start: date,
         "strategy_name": _STRATEGY_NAMES[strategy_key],
         "optimal_params": optimal_params,
         "data_source": data_source,
+        "data_warning": data_warning,
         "total_rows": total_rows,
         "n_dates": n_dates,
         "result": result_dict,

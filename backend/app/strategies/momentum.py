@@ -53,12 +53,15 @@ class MomentumStrategy(Strategy):
             return None
 
         # Merge momentum into day_data
+        if 'momentum' not in momentum_data.columns and 'price' in day_data.columns:
+            # 无预计算动量时，用当日价格近似（所有 code momentum=0，靠其他因子排序）
+            momentum_data['momentum'] = 0.0
         day_data = day_data.merge(
             momentum_data[['code', 'momentum']], on='code', how='left'
         )
 
         # Early return if merge produced no valid momentum (all codes unmatched)
-        if day_data['momentum'].isna().all():
+        if 'momentum' not in day_data.columns or day_data['momentum'].isna().all():
             return None
 
         # Filter

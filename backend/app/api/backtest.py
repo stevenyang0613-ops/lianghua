@@ -45,6 +45,69 @@ class BacktestRequest(BaseModel):
         return v
 
 
+def _is_data_sufficient(df: pd.DataFrame, start_date: date, end_date: date) -> tuple[bool, str | None]:
+    """检查回测数据是否充足，返回 (是否充足, 警告信息)
+
+    基准阈值:
+    - 总行数 > 100
+    - 交易日数 >= 5
+    - 债券数量 >= 30
+    - 每只债券平均数据天数 >= 20
+    - 数据覆盖回测区间比例 >= 30% (否则警告但不阻止)
+
+    Args:
+        df: 待检查的 DataFrame (必须含 date 和 code 列)
+        start_date: 回测开始日期
+        end_date: 回测结束日期
+
+    Returns:
+        (True, None) 数据充足
+        (True, warning) 数据基本充足但覆盖率低
+        (False, warning) 数据严重不足
+    """
+    if df is None or df.empty:
+        return False, "回测数据为空，请检查日期范围或数据源"
+
+    required_cols = ['date', 'code']
+    for col in required_cols:
+        if col not in df.columns:
+            return False, f"回测数据缺少 '{col}' 列"
+
+    total_rows = len(df)
+    n_dates = df['date'].nunique()
+    n_bonds = df['code'].nunique()
+    total_range_days = (end_date - start_date).days or 1
+
+    # 严重不足检查
+    if total_rows < 100:
+        return False, f"回测数据严重不足：仅 {total_rows} 行（需要至少 100 行）"
+    if n_dates < 5:
+        return False, f"交易日数严重不足：仅 {n_dates} 天（需要至少 5 天）"
+    if n_bonds < 30:
+        return False, f"可交易债券严重不足：仅 {n_bonds} 只（需要至少 30 只）"
+
+    # 数据密度检查
+    avg_days_per_bond = round(total_rows / max(n_bonds, 1), 1)
+    if avg_days_per_bond < 20:
+        return False, (
+            f"每只债券平均数据天数过低：{avg_days_per_bond} 天/只 "
+            f"(总行数 {total_rows} / {n_bonds} 只债券)。"
+            f"建议补充历史数据或缩短回测区间"
+        )
+
+    # 覆盖率检查（警告但不阻止）
+    data_date_range = (df['date'].max() - df['date'].min()).days
+    coverage_ratio = data_date_range / total_range_days
+    if coverage_ratio < 0.30:
+        return True, (
+            f"数据仅覆盖回测区间的 {coverage_ratio:.0%}"
+            f"（{data_date_range}天 / {total_range_days}天），"
+            f"回测结果可能不准确"
+        )
+
+    return True, None
+
+
 async def _build_data(request: Request, start_date: date, end_date: date, progress_cb=None, strategy_name: str = "") -> pd.DataFrame:
     """Build backtest data by composing all available data sources.
 
@@ -198,6 +261,14 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
             _progress(27, '补全缺失因子...')
             merged = await _fill_missing_factors(merged, request, current_bonds)
             merged._backtest_data_source = " + ".join(source_labels)
+            # 检查数据充足性并添加警告标记（不阻止回测）
+            sufficient, warning = _is_data_sufficient(merged, start_date, end_date)
+            if warning:
+                merged._backtest_data_warning = warning
+                if sufficient:
+                    logger.warning(f"[BacktestData] 数据覆盖率不足: {warning}")
+                else:
+                    logger.error(f"[BacktestData] 数据严重不足: {warning}")
             return merged
 
     # ---- Auto-seed: 仅当 DB 完全为空时才触发种子数据 ----
@@ -1661,11 +1732,12 @@ async def run_backtest(req: BacktestRequest, request: Request):
         strategy_cls = get_strategy(req.strategy)
 
         data_source = getattr(full_data, '_backtest_data_source', 'unknown')
+        data_warning = getattr(full_data, '_backtest_data_warning', None)
         if req.optimization.enabled and req.optimization.param_ranges:
             engine = BacktestEngine(config=req.config)
             opt_result = engine.run_optimization(strategy_cls, full_data, req.optimization)
             return JSONResponse(
-                content={"success": True, "type": "optimization", "data_source": data_source, "result": opt_result.model_dump(mode="json")},
+                content={"success": True, "type": "optimization", "data_source": data_source, "data_warning": data_warning, "result": opt_result.model_dump(mode="json")},
                 headers={"Deprecation": "true", "Link": "</api/v1/backtest/run-stream>; rel=\"successor-version\""},
             )
         else:
@@ -1673,7 +1745,7 @@ async def run_backtest(req: BacktestRequest, request: Request):
             engine = BacktestEngine(config=req.config)
             result = engine.run(strategy, full_data)
             return JSONResponse(
-                content={"success": True, "type": "backtest", "data_source": data_source, "result": result.model_dump(mode="json")},
+                content={"success": True, "type": "backtest", "data_source": data_source, "data_warning": data_warning, "result": result.model_dump(mode="json")},
                 headers={"Deprecation": "true", "Link": "</api/v1/backtest/run-stream>; rel=\"successor-version\""},
             )
     except HTTPException:
@@ -1748,8 +1820,9 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
             pending_tasks.remove(build_task)
 
             data_source = getattr(full_data, '_backtest_data_source', 'unknown')
+            data_warning = getattr(full_data, '_backtest_data_warning', None)
             total_rows = len(full_data)
-            yield f"data: {json.dumps({'phase': 'build_data', 'pct': 30, 'msg': f'数据就绪: {total_rows}行, 来源={data_source}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'phase': 'build_data', 'pct': 30, 'msg': f'数据就绪: {total_rows}行, 来源={data_source}', 'data_warning': data_warning}, ensure_ascii=False)}\n\n"
 
             strategy_cls = get_strategy(req.strategy)
 
@@ -1790,7 +1863,7 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
                     msg = '参数优化超时(>10分钟)' if isinstance(e, asyncio.TimeoutError) else str(e)
                     yield f"data: {json.dumps({'phase': 'error', 'pct': 0, 'msg': msg}, ensure_ascii=False)}\n\n"
                     return
-                yield f"data: {json.dumps({'phase': 'done', 'pct': 100, 'msg': '优化完成', 'type': 'optimization', 'data_source': data_source, 'result': opt_result.model_dump(mode='json')}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'phase': 'done', 'pct': 100, 'msg': '优化完成', 'type': 'optimization', 'data_source': data_source, 'data_warning': data_warning, 'result': opt_result.model_dump(mode='json')}, ensure_ascii=False)}\n\n"
             else:
                 yield f"data: {json.dumps({'phase': 'backtest', 'pct': 40, 'msg': '策略回测中...'}, ensure_ascii=False)}\n\n"
                 strategy = strategy_cls(**req.params)
@@ -1828,7 +1901,7 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
                     msg = '回测超时(>5分钟)' if isinstance(e, asyncio.TimeoutError) else str(e)
                     yield f"data: {json.dumps({'phase': 'error', 'pct': 0, 'msg': msg}, ensure_ascii=False)}\n\n"
                     return
-                yield f"data: {json.dumps({'phase': 'done', 'pct': 100, 'msg': '回测完成', 'type': 'backtest', 'data_source': data_source, 'result': result.model_dump(mode='json')}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'phase': 'done', 'pct': 100, 'msg': '回测完成', 'type': 'backtest', 'data_source': data_source, 'data_warning': data_warning, 'result': result.model_dump(mode='json')}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             for t in pending_tasks:
                 if not t.done():
@@ -1882,8 +1955,9 @@ async def optimize_params(req: BacktestRequest, request: Request):
 
         result = engine.run_optimization(strategy_cls, full_data, opt_config)
         data_source = getattr(full_data, '_backtest_data_source', 'unknown')
+        data_warning = getattr(full_data, '_backtest_data_warning', None)
         return JSONResponse(
-            content={"success": True, "data_source": data_source, "result": result.model_dump(mode="json")},
+            content={"success": True, "data_source": data_source, "data_warning": data_warning, "result": result.model_dump(mode="json")},
             headers={"Deprecation": "true", "Link": "</api/v1/backtest/run-stream>; rel=\"successor-version\""},
         )
     except Exception as e:

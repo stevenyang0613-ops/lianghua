@@ -16,7 +16,7 @@ interface StrategyInfo { id: string; name: string; description?: string }
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 interface ParamDef { name: string; label: string; type: string; default: any; min_val?: number; max_val?: number; options?: string[]; description?: string }
-interface PaperAccountData { id: string; strategy_id: string; strategy_name: string; is_running: boolean; initial_cash: number; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number; params: Record<string, any>; param_defs: ParamDef[]; created_at: string; trade_day_count: number; rebalance_days: number }
+interface PaperAccountData { id: string; strategy_id: string; strategy_name: string; is_running: boolean; initial_cash: number; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number; params: Record<string, any>; param_defs: ParamDef[]; created_at: string; trade_day_count: number; rebalance_days: number; next_rebalance_idx?: number }
 interface PositionData { code: string; name: string; volume: number; cost_price: number; current_price: number; market_value: number; profit_pct: number; profit_amount: number }
 interface OrderData { id: string; code: string; name: string; side: string; price: number; volume: number; filled_volume: number; status: string; created_at: string; reject_reason: string }
 interface EquityPoint { ts: string; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number }
@@ -306,7 +306,9 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
                 <span style={{ color: '#52c41a', fontSize: 12 }}>
                   {(() => {
                     const rd = account.rebalance_days || account.params?.rebalance_days || 7
-                    const d = (rd - ((account.trade_day_count || 0) % rd)) % rd
+                    const simIdx = account.trade_day_count || 0
+                    const nextRebalance = account.next_rebalance_idx ?? simIdx + (rd - simIdx % rd) % rd
+                    const d = nextRebalance - simIdx
                     return d <= 1 ? '⚡ 距离调仓还有 1 个交易日' : `⏳ 距离调仓还有 ${d} 个交易日`
                   })()}
                 </span>
@@ -315,7 +317,13 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
             {account.is_running && positions.length === 0 && orders.length === 0 && (
               <div style={{ marginTop: 6, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4, border: '1px solid #91d5ff' }}>
                 <span style={{ color: '#1890ff', fontSize: 12 }}>
-                  💡 策略采用周频调仓，启动后会自动对齐到最近的调仓日。首次调仓通常需要等待 1~{account.rebalance_days || account.params?.rebalance_days || 7} 个交易日
+                  💡 策略采用周频调仓，启动后会自动对齐到最近的调仓日。首次调仓通常需要等待 {(() => {
+                    const rd = account.rebalance_days || account.params?.rebalance_days || 7
+                    const simIdx = account.trade_day_count || 0
+                    const nextRebalance = account.next_rebalance_idx ?? simIdx + (rd - simIdx % rd) % rd
+                    const d = nextRebalance - simIdx
+                    return d <= 1 ? '1' : String(d)
+                  })()} 个交易日
                 </span>
               </div>
             )}

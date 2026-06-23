@@ -836,6 +836,9 @@ class MacroDataService:
             if ak is None:
                 return float('nan'), float('nan'), float('nan')
             any_source_success = False
+            current_balance = 0.0
+            prev_balance = 0.0
+            buy_amount = 0.0
             # Primary: SSE 汇总（单位：元）
             for offset in range(1, 5):
                 d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')

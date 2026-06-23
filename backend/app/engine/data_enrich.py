@@ -672,6 +672,9 @@ _METRICS_NAME_TO_MAP = {
 # 这些 map 的 key 是债券代码（而非正股代码），_with_metrics 统计 bond_count 时应使用 _bond_codes
 _BOND_CODE_MAPS = {"_bond_outstanding_map", "_call_status_map", "_bond_price_map", "_coupon_rate_map", "_event_map"}
 
+# 宏观数据 map（全局指标，非按 bond 统计，bond_count 应始终等于 bond_total）
+_MACRO_MAPS = {"_macro_cpi_map", "_macro_ppi_map", "_macro_m2_map", "_macro_lpr_map"}
+
 
 def get_cache_refresh_ts() -> dict[str, float]:
     """返回所有数据源的刷新时间戳（用于数据源健康检查页）"""
@@ -4027,6 +4030,8 @@ def _compute_field_coverage() -> dict[str, float]:
         "restricted_release_amount", "pledge_ratio", "holder_num_change",
         "eps_forecast", "revenue_yoy", "profit_yoy",
         "turnover_rate",  # 0% 是停牌/不活跃股票的合法值
+        "sentiment_score",  # 0 是中性情绪，算有效数据
+        "buyback_amount",  # 0 表示无回购，算有效数据
     }
     empty_string_valid = {"call_status", "concepts", "industry"}  # 空字符串/空列表也算缺失
     gpm_field = "gpm"  # -1 是银行标记，不算缺失
@@ -4293,6 +4298,8 @@ async def enrich_quotes(bonds: list) -> list:
         buyback = buyback_ref.get(stock_code)
         if buyback is not None:
             b.buyback_amount = buyback
+        elif buyback_ref:  # 缓存已加载但股票不在其中 = 无回购
+            b.buyback_amount = 0.0
 
         mgmt = mgmt_ref.get(stock_code)
         if mgmt is not None:
@@ -4757,6 +4764,10 @@ async def enrich_quotes(bonds: list) -> list:
                 b.forced_call_days = int(_m.group(1)) if _m else 999
             elif "进入" in cs or "已满足" in cs:
                 b.is_called = True
+                b.forced_call_days = 0
+            else:
+                # 默认状态"未触发"也算有效数据（明确标记为未触发）
+                b.is_called = False
                 b.forced_call_days = 0
 
     # 保存快照供自检使用（浅拷贝列表，bonds 对象本身是每次新创建的）
@@ -6512,175 +6523,8 @@ def _refresh_margin_cache():
         return 0
 
 
-@_with_metrics
-def _refresh_lhb_cache():
-    """主进程内刷新龙虎榜数据。
-
-    语义说明：ak.stock_lhb_stock_statistic_em 返回"近一月上榜次数"（累计值），
-    不是"当日上榜次数"。前端展示时应注明"近 1 月累计"。
-
-    增量更新：保留上一次的 lhb_count 作为 _prev_count，新值作为 lhb_count。
-    增量 _delta = lhb_count - _prev_count 表示本次刷新新增的上榜次数。
-    """
-    import traceback as _tb
-    _stack = _tb.extract_stack()[-3:-1]  # 跳过当前帧和装饰器
-    _caller = f"{_stack[0].filename.split('/')[-1]}:{_stack[0].lineno} {_stack[0].name}"
-    logger.info(f"[LHB_DEBUG] _refresh_lhb_cache called by {_caller}")
-    try:
-        # ak.stock_lhb_stock_statistic_em: 龙虎榜个股统计（近一月）
-        df = _run_with_timeout(
-            ak.stock_lhb_stock_statistic_em,
-            timeout=_TIMEOUT_SLOW, default=None, op_name="lhb_stock_statistic_em",
-        )
-        result = {}
-        if df is None or len(df) == 0:
-            logger.warning("[DataEnrich] LHB: empty result")
-            # 不提前 return，让零填充处理后续
-        else:
-            # 增量：保留旧的 lhb_count 作为 _prev_count
-            prev = _lhb_map if isinstance(_lhb_map, dict) else {}
-            for _, r in df.iterrows():
-                code = str(r.get("代码", "")).strip()
-                if not code or len(code) != 6 or not code.isdigit():
-                    continue
-                cnt = _sf(r.get("上榜次数"))
-                new_count = int(cnt) if cnt else 0
-                old_entry = prev.get(code, {})
-                old_count = old_entry.get("lhb_count", 0) if isinstance(old_entry, dict) else 0
-                result[code] = {
-                    "lhb_count": new_count,
-                    "_prev_count": old_count,
-                    "_delta": new_count - old_count,
-                    "_data_source": "lhb_stock_statistic_em",
-                }
-        # Source 2 fallback: stock_lhb_stock_detail_em
-        if len(result) < 100:
-            try:
-                df_detail = _run_with_timeout(
-                    ak.stock_lhb_stock_detail_em,
-                    timeout=60, default=None, op_name="lhb_stock_detail_em",
-                )
-                if df_detail is not None and len(df_detail) > 0:
-                    count_detail = 0
-                    for _, r in df_detail.iterrows():
-                        code = str(r.get("代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result:
-                            continue
-                        cnt = _sf(r.get("上榜次数"))
-                        new_count = int(cnt) if cnt else 0
-                        result[code] = {
-                            "lhb_count": new_count,
-                            "_prev_count": 0,
-                            "_delta": new_count,
-                            "_data_source": "lhb_stock_detail_em",
-                        }
-                        count_detail += 1
-                    logger.info(f"[DataEnrich] LHB: stock_lhb_stock_detail_em added {count_detail} stocks")
-            except Exception as e_detail:
-                logger.warning(f"[DataEnrich] LHB stock_lhb_stock_detail_em fallback failed: {e_detail}")
-
-        # Zero-fill: 未上榜的股票显式写入 lhb_count=None，区分"无上榜"与"数据缺失"
-        # 放在 fallback 之后，确保 fallback 有机会填充真实数据
-        for code in _get_bond_or_fallback_codes():
-            if code not in result:
-                result[code] = {
-                    "lhb_count": None,  # 零填充用 None，enrich_quotes 中处理为 None
-                    "_prev_count": 0,
-                    "_delta": 0,
-                    "_data_source": "zero_fill",
-                }
-
-        if result:
-            _set_global_map("_lhb_map", result, replace=True)
-            _save_cache(_LHB_CACHE, result)
-            logger.info(f"[DataEnrich] LHB: {len(result)} stocks refreshed (含 _delta 增量)")
-            return len(result)
-        return 0
-    except Exception as e:
-        logger.warning(f"[DataEnrich] LHB in-proc refresh failed: {e}")
-        return 0
 
 
-@_with_metrics
-def _refresh_block_trade_cache():
-    """主进程内刷新大宗交易数据
-
-    使用 ak.stock_dzjy_mrmx(symbol='A股', start_date, end_date) 获取 A 股大宗交易明细，
-    回退最近 5 个交易日（节假日无数据时向前查找）。
-    """
-    try:
-        # 保留已有缓存，API 临时不可用时不会立即丢数据
-        result = dict(_block_trade_map) if isinstance(_block_trade_map, dict) else {}
-        df = None
-        for days in range(5):
-            end_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=days + 2)).strftime("%Y%m%d")
-            df = _run_with_timeout(
-                lambda s=start_date, e=end_date: ak.stock_dzjy_mrmx(symbol="A股", start_date=s, end_date=e),
-                timeout=_TIMEOUT_MEDIUM, default=None,
-                op_name=f"dzjy_mrmx_{end_date}",
-                quiet_errors=True,  # East Money 大宗交易明细接口不稳定，降低日志噪音
-            )
-            if df is not None and len(df) > 0:
-                break
-        if df is None or len(df) == 0:
-            if result:
-                logger.warning("[DataEnrich] BlockTrade: stock_dzjy_mrmx unavailable, keeping existing cache")
-            else:
-                logger.warning("[DataEnrich] BlockTrade: empty result and no existing cache")
-            # 即使在 API 失败时也进行零填充
-        else:
-            for _, r in df.iterrows():
-                code = str(r.get("证券代码", "")).strip()
-                if not code or len(code) != 6:
-                    continue
-                amount = _sf(r.get("成交额"))
-                if amount and amount > 0:
-                    result[code] = {"block_trade_amount": amount}
-
-        # Source 2 fallback: stock_dzjy_mrtj
-        if len([k for k in result if not k.startswith("_")]) < 100:
-            try:
-                end_d = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-                start_d = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
-                df_mrtj = _run_with_timeout(
-                    lambda: ak.stock_dzjy_mrtj(start_date=start_d, end_date=end_d),
-                    timeout=60, default=None, op_name=f"dzjy_mrtj_{end_d}",
-                )
-                if df_mrtj is not None and len(df_mrtj) > 0:
-                    count_mrtj = 0
-                    for _, r in df_mrtj.iterrows():
-                        code = str(r.get("证券代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code[0] not in '036':
-                            continue
-                        if code in result:
-                            continue
-                        amt = _sf(r.get("成交总额"))
-                        if amt and amt > 0:
-                            result[code] = {"block_trade_amount": amt}
-                            count_mrtj += 1
-                    logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
-            except Exception as e_mrtj:
-                logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
-        # Zero-fill: 无大宗交易的股票显式写入 None，区分"无交易"与"数据缺失"
-        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
-        # 避免启动阶段 AKShare 信号量争用导致超时
-        for code in _get_bond_or_fallback_codes():
-            if code not in result:
-                result[code] = {"block_trade_amount": None}
-        if result:
-            _set_global_map("_block_trade_map", result, replace=True)
-            _save_cache(_BLOCK_TRADE_CACHE, result)
-            logger.info(f"[DataEnrich] BlockTrade: {len(result)} stocks refreshed")
-            return len(result)
-        return 0
-    except Exception as e:
-        logger.warning(f"[DataEnrich] BlockTrade in-proc refresh failed: {e}")
-        return 0
 
 
 @_with_metrics

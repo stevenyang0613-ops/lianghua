@@ -71,12 +71,14 @@ class MultiFactorStrategy(Strategy):
             return None
 
         # Merge factor data (momentum from precomputed, dual_low from day_data)
+        if 'momentum' not in factor_data.columns and 'price' in day_data.columns:
+            factor_data['momentum'] = 0.0
         day_data = day_data.merge(
             factor_data[['code', 'momentum']], on='code', how='left'
         )
 
         # Early return if merge produced no valid momentum (all codes unmatched)
-        if day_data['momentum'].isna().all():
+        if 'momentum' not in day_data.columns or day_data['momentum'].isna().all():
             return None
 
         # Filter

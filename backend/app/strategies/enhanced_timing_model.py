@@ -964,12 +964,24 @@ class EnhancedTimingModel:
             description=pledge_desc,
         ))
         
-        # 3.4 IPO/转债新发节奏（供给压力）— 原使用PE分位作为替代指标（与估值面[1.4]重复），改为NaN避免双重计数
+        # 3.4 IPO/转债新发节奏（供给压力）— 原使用PE分位作为替代指标（与估值面[1.4]共享权重，此处减半）
+        pe_pct = data.stock_pe_percentile
+        if math.isnan(pe_pct):
+            supply_score = 50.0
+        else:
+            if pe_pct <= 20:
+                supply_score = 75.0
+            elif pe_pct <= 50:
+                supply_score = 75 - (pe_pct - 20) / 30 * 25
+            elif pe_pct <= 80:
+                supply_score = 50 - (pe_pct - 50) / 30 * 25
+            else:
+                supply_score = 25.0
         sub_factors.append(FactorScore(
-            name="供给压力评估", score=float('nan'), weight=0.25,
+            name="供给压力评估", score=supply_score, weight=0.12,  # 半权重，估值面另有0.10
             category="chip", raw_value=data.stock_pe_percentile,
-            signal="neutral",
-            description="指标来源与估值面PE分位重复，此处避免双重计数",
+            signal="bullish" if supply_score > 55 else "bearish" if supply_score < 45 else "neutral",
+            description=f"基于PE分位{data.stock_pe_percentile:.0f}%评估供给压力",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
@@ -1554,12 +1566,22 @@ class EnhancedTimingModel:
             description=vix_desc,
         ))
         
-        # 6.6 融资买入占比（已在筹码面[3.2]重复，此处置NaN避免双重计数）
+        # 6.6 融资买入占比（与筹码面[3.2]共享，权重减半避免双重计数）
+        mb = data.margin_buy_ratio if not math.isnan(data.margin_buy_ratio) else float('nan')
+        mb_available = not math.isnan(mb)
+        if mb_available:
+            mb_score = sigmoid_score(mb, 3, steepness=0.3, invert=True)
+            mb_signal = "bearish" if mb > 8 else "bullish" if mb < 2 else "neutral"
+            mb_desc = f"融资买入占比{mb:.1f}%，{'过热' if mb>8 else '过冷' if mb<2 else '正常'}"
+        else:
+            mb_score = 50.0
+            mb_signal = "neutral"
+            mb_desc = "无融资买入数据"
         sub_factors.append(FactorScore(
-            name="融资买入占比", score=float('nan'), weight=0.10,
-            category="sentiment", raw_value=data.margin_buy_ratio,
-            signal="neutral",
-            description="已在筹码面评分中计入，此处避免重复",
+            name="融资买入占比", score=mb_score, weight=0.05,  # 半权重，筹码面另有0.20
+            category="sentiment", raw_value=mb,
+            signal=mb_signal,
+            description=mb_desc,
         ))
         
         # 6.7 新增开户数（情绪指标，区别于资金面的换手率）
@@ -1583,21 +1605,39 @@ class EnhancedTimingModel:
             confidence=1.0 if new_acc_available else 0.0,
         ))
         
-        # 6.8 转债恐慌指标（已在筹码面[3.3]重复，此处置NaN避免双重计数）
+        # 6.8 转债恐慌指标（与筹码面[3.3]共享，权重减半）
+        cb_below_ratio = data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0
+        if data.cb_count > 0:
+            cb_panic_score = linear_score(cb_below_ratio, 0, 15, invert=False)
+            cb_panic_signal = "bullish" if cb_below_ratio > 8 else "bearish" if cb_below_ratio < 2 else "neutral"
+            cb_panic_desc = f"{int(data.cb_below_par_count)}只转债低于面值({cb_below_ratio:.1f}%)，{'恐慌=机会' if cb_below_ratio>8 else '正常' if cb_below_ratio<2 else '警惕'}"
+        else:
+            cb_panic_score = 50.0
+            cb_panic_signal = "neutral"
+            cb_panic_desc = "无转债数据"
         sub_factors.append(FactorScore(
-            name="转债恐慌指标", score=float('nan'), weight=0.10,
-            category="sentiment",
-            raw_value=data.cb_below_par_count / max(data.cb_count, 1) * 100 if data.cb_count > 0 else 0,
-            signal="neutral",
-            description="已在筹码面评分中计入，此处避免重复",
+            name="转债恐慌指标", score=cb_panic_score, weight=0.05,  # 半权重，筹码面另有0.25
+            category="sentiment", raw_value=cb_below_ratio,
+            signal=cb_panic_signal,
+            description=cb_panic_desc,
         ))
         
-        # 6.9 北向资金情绪（已在资金面[4.3]重复，此处置NaN避免双重计数）
+        # 6.9 北向资金情绪（与资金面[4.3]共享，权重减半）
+        north = data.north_bound_net_flow
+        north_available = not math.isnan(north)
+        if north_available:
+            north_score = sigmoid_score(north, 0, steepness=0.03)
+            north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
+            north_desc = f"北向资金{north:+.1f}亿，{'持续流入' if north>30 else '持续流出' if north<-30 else '小幅波动'}"
+        else:
+            north_score = 50.0
+            north_signal = "neutral"
+            north_desc = "无北向数据"
         sub_factors.append(FactorScore(
-            name="北向资金情绪", score=float('nan'), weight=0.10,
-            category="sentiment", raw_value=data.north_bound_net_flow,
-            signal="neutral",
-            description="已在资金面评分中计入，此处避免重复",
+            name="北向资金情绪", score=north_score, weight=0.05,  # 半权重，资金面另有0.18
+            category="sentiment", raw_value=north,
+            signal=north_signal,
+            description=north_desc,
         ))
         
         # 过滤掉NaN项（缺失数据）后再加权
@@ -1608,6 +1648,14 @@ class EnhancedTimingModel:
             cat_score = total / w_sum
         else:
             cat_score = 50.0
+        
+        # 恐慌时均值回归加分：高恐慌=买入机会=情绪面加分
+        panic_boost = 0.0
+        for sf in sub_factors:
+            if sf.name == "转债恐慌指标" and sf.signal == "bullish":
+                panic_boost += 0.15
+        if panic_boost > 0:
+            cat_score = min(100, cat_score + panic_boost * 30)
         
         return CategoryScore(
             name="情绪面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['sentiment'],
@@ -2115,10 +2163,10 @@ class EnhancedTimingModel:
         
         # ═══════════════════════════════════════════════════════════════
         # 波动率目标仓位保护（P1-3）
-        # 当近20日年化波动率超过目标值时，线性压低仓位
-        # 公式: vol_cap = max(0, min(1, target_vol / realized_vol))
+        # 公式: adjusted_pos = position_ratio × min(1, target_vol / realized_vol)
+        # 目标年化波动率 22%（HS300 长期年化 ~17%，留余量应对波动率聚集）
         # ═══════════════════════════════════════════════════════════════
-        TARGET_ANNUAL_VOL = 0.18  # 目标年化波动率 18%
+        TARGET_ANNUAL_VOL = 0.22
         if not math.isnan(data.stock_index_change):
             self._daily_returns.append(data.stock_index_change)
         if len(self._daily_returns) >= 10:
@@ -2132,7 +2180,7 @@ class EnhancedTimingModel:
                         f"[VolTarget] 年化波动率{realized_ann_vol:.1%} > 目标{TARGET_ANNUAL_VOL:.0%}，"
                         f"仓位从{position_ratio*100:.0f}%降至{capped_position*100:.0f}%"
                     )
-                    position_ratio = max(0.05, capped_position)
+                    position_ratio = max(0.05, min(1.0, capped_position))
         self._last_position_ratio = position_ratio
         
         # 对冲推荐

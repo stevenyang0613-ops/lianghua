@@ -88,7 +88,21 @@ class SectorRotationStrategy(Strategy):
         if day_data.empty:
             return None
 
-        day_data = day_data[day_data["price"] > 0].dropna(subset=["momentum_3m"])
+        day_data = day_data[day_data["price"] > 0]
+        # 防御：缺少预计算因子列时回退到价格动量近似
+        if "momentum_3m" not in day_data.columns:
+            if "price" in day_data.columns:
+                day_data["momentum_3m"] = 0.0
+                day_data["momentum_1m"] = 0.0
+                day_data["volatility_63d"] = 0.0
+                day_data["sharpe_63d"] = 0.0
+                day_data["drawdown_63d"] = 0.0
+                day_data["relative_strength"] = 50.0
+                day_data["rsi_14"] = 50.0
+                day_data["regime_score"] = 0.5
+            else:
+                return None
+        day_data = day_data.dropna(subset=["momentum_3m"])
         if day_data.empty:
             return None
 

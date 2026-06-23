@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 
+from app.api.backtest import _is_data_sufficient
 from app.engine.backtest import BacktestEngine, Portfolio, _calculate_metrics
 from app.strategies.dual_low import DualLowStrategy
 from app.strategies.low_premium import LowPremiumStrategy
@@ -266,6 +267,70 @@ class TestCalculateMetrics:
         metrics = _calculate_metrics([1.0, 1.0, 1.0, 1.0])
         assert metrics.total_return_pct == 0.0
         assert metrics.sharpe_ratio == 0.0
+
+
+class TestDataSufficiency:
+    """验证 _is_data_sufficient 数据充足性检查逻辑"""
+
+    def _make_df(self, n_bonds=50, n_days=60, start=date(2024, 1, 1)):
+        """生成测试用的 DataFrame"""
+        records = []
+        for ci in range(n_bonds):
+            code = f"12{ci:04d}"
+            for di in range(n_days):
+                d = start + timedelta(days=di)
+                records.append({'code': code, 'date': d, 'price': 100.0})
+        return pd.DataFrame(records)
+
+    def test_sufficient_data_passes(self):
+        """50只债券×60天=3000行，应该通过检查"""
+        df = self._make_df(n_bonds=50, n_days=60)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 3, 1))
+        assert ok, f"期望通过，但收到警告: {warn}"
+        assert warn is None
+
+    def test_sparse_bonds_fails(self):
+        """只有5只债券，应失败"""
+        df = self._make_df(n_bonds=5, n_days=60)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 3, 1))
+        assert not ok
+        assert warn is not None
+        assert '5' in warn
+
+    def test_too_few_dates_fails(self):
+        """只有3个交易日，应失败"""
+        df = self._make_df(n_bonds=50, n_days=3)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 1, 3))
+        assert not ok
+
+    def test_empty_df_fails(self):
+        """空DataFrame应失败"""
+        df = pd.DataFrame(columns=['code', 'date', 'price'])
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 3, 1))
+        assert not ok
+
+    def test_avg_days_per_bond_too_low(self):
+        """50只债券但平均每只仅3天数据，应失败"""
+        df = self._make_df(n_bonds=50, n_days=3)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 1, 3))
+        assert not ok
+        # avg_days_per_bond ≈ 3 < 20
+
+    def test_date_range_ratio_warning(self):
+        """数据覆盖不足回测区间的30%，应警告但不失败"""
+        # 100天数据覆盖365天区间
+        df = self._make_df(n_bonds=50, n_days=100)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2025, 1, 1))
+        assert ok  # 足够密集，仍通过
+        assert warn is not None  # 但应警告覆盖率低
+        assert '覆盖' in warn or '30' in warn or '不足' in warn
+
+    def test_large_good_data_passes(self):
+        """200只×200天=40000行，完美通过"""
+        df = self._make_df(n_bonds=200, n_days=200)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 7, 1))
+        assert ok
+        assert warn is None
 
 
 class TestDayDataOptimization:
