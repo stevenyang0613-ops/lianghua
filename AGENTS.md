@@ -282,6 +282,14 @@ Every agent working on this project MUST follow these rules.
 - 即使所有测试通过，也要分析运行时的潜在风险
 - 该规则优先于所有其他规则
 
+### 0.1 全部输出必须使用中文（2026-06-23 固化）
+- **所有 prompt 的输出内容必须使用中文**（包括思考、解释、注释、错误信息、commit message、日志分析、TodoList 等）
+- 英文仅在以下情况允许：代码标识符（变量名、函数名、类名）、技术专有名词（API 名称、库名）、文件路径、URL、commit hash
+- 避免在中文文本中夹杂英文整句
+- commit message 必须用中文（参考 `feat(数据源): 添加 6 个新数据源` 而非 `feat(data-sources): add 6 new sources`）
+- 用户明确要求时除外（如用户主动写英文提问时）
+- 该规则优先于所有其他规则
+
 ### 45. Don't declare "no bugs" prematurely
 - The user complained about repeated cycles of "fixed everything" → new bug found.
 - Root cause: stopping at first successful log line, not running the actual user-facing flow.
