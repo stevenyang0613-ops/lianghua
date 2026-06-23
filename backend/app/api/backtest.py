@@ -259,6 +259,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
     # 需要足够行数 AND 足够日期数才算有效数据源（254行×1天无法回测）
     n_dates = 0
     n_bonds = 0
+    _backtest_data_warning: str | None = None
     if data_frames:
         first = data_frames[0]
         if isinstance(first, pd.DataFrame) and not first.empty:
@@ -272,19 +273,21 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
             _progress(27, '补全缺失因子...')
             merged = await _fill_missing_factors(merged, request, current_bonds)
             merged._backtest_data_source = " + ".join(source_labels)
-            # 检查数据充足性并添加警告标记（不阻止回测）
+            # 检查数据充足性
             sufficient, warning = _is_data_sufficient(merged, start_date, end_date)
-            if warning:
-                merged._backtest_data_warning = warning
-                if sufficient:
+            if sufficient:
+                # 数据充足，直接返回
+                if warning:
+                    # coverage 警告（数据覆盖区间 <30% 但不阻止）
+                    merged._backtest_data_warning = warning
                     logger.warning(f"[BacktestData] 数据覆盖率不足: {warning}")
-                else:
-                    logger.error(f"[BacktestData] 数据严重不足: {warning}")
-            return merged
+                return merged
+            # 数据不足：先尝试 auto-seed 补充，不立即返回
+            _backtest_data_warning = warning
+            logger.warning(f"[BacktestData] 数据不足，尝试 auto-seed 补充: {warning}")
 
-    # ---- Auto-seed: 仅当 DB 完全为空时才触发种子数据 ----
-    # 注意: seed_historical_data 从 today-days 开始加载, 不匹配历史回测范围
-    # 如果 DB 已有数据（即使不在请求范围内），跳过种子直接走模拟数据
+    # ---- Auto-seed: 当 DB 数据不足或覆盖不全时触发 ----
+    # 原逻辑仅当 db 完全无数据时触发；现扩展：合并数据不足时也触发
     _progress(25, '检查现有数据(日期范围)...')
     db_has_data = False
     if storage is not None:
@@ -303,7 +306,8 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
         except Exception as e:
             logger.warning(f"[BacktestData] Date check failed: {e}")
 
-    if (not db_has_data or total_rows < 100) and storage is not None and engine is not None:
+    # 当数据不足或 DB 未覆盖完整区间时，尝试 auto-seed 下载历史数据
+    if (_backtest_data_warning is not None or not db_has_data or total_rows < 100) and storage is not None and engine is not None:
         _progress(25, '自动种子数据(首次初始化)...')
         try:
             bonds = current_bonds or await engine.get_all_quotes()
@@ -342,7 +346,12 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                     }
                 from app.engine.historical import HistoricalDataLoader
                 loader = HistoricalDataLoader(storage)
-                days_span = min((end_date - start_date).days + 30, 365)
+                # 计算实际需要的历史天数，无上限（原365天限制导致always miss data）
+                days_span = (end_date - start_date).days + 60  # 多取60天buffer
+                if _backtest_data_warning:
+                    # 已合并的数据不足，额外多取60天确保覆盖
+                    days_span += 60
+                days_span = max(days_span, 30)
                 # 限制代码量避免AKShare segfault
                 seed_codes = codes[:100] if len(codes) > 100 else codes
                 _progress(26, f'正在下载{days_span}天历史数据({len(seed_codes)}只债券)...')
@@ -365,6 +374,11 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                         f"{snap_df['date'].nunique() if 'date' in snap_df.columns else 0} dates, "
                         f"{seed_result.get('bonds', 0)} bonds, factors_from_current_snapshot)"
                     )
+                    # Auto-seed 后的数据重新检查充足性
+                    _sufficient, _snap_warning = _is_data_sufficient(snap_df, start_date, end_date)
+                    if _snap_warning:
+                        snap_df._backtest_data_warning = _snap_warning
+                        logger.warning(f"[BacktestData] Auto-seed 后数据仍不足: {_snap_warning}")
                     return snap_df
 
                 # Auto-seed 失败时: 用当前快照数据构建回测数据集
@@ -402,6 +416,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
                         })
                     result = pd.DataFrame(rows)
                     result._backtest_data_source = "current_snapshot_fallback"
+                    result._backtest_data_warning = "无历史K线数据，仅基于当前行情快照。建议补充历史数据后重试"
                     return result
         except asyncio.TimeoutError:
             import logging
@@ -417,6 +432,11 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
         fallback_df = await _fetch_real_fallback_data(start_date, end_date)
         if not fallback_df.empty and fallback_df['date'].nunique() >= 2:
             fallback_df._backtest_data_source = getattr(fallback_df, '_backtest_data_source', 'real_fallback')
+            # 兜底数据检查充足性
+            _fb_sufficient, _fb_warning = _is_data_sufficient(fallback_df, start_date, end_date)
+            if _fb_warning:
+                fallback_df._backtest_data_warning = _fb_warning
+                logger.warning(f"[BacktestData] 兜底数据不足: {_fb_warning}")
             logger.info(f"[BacktestData] 兜底数据就绪: {len(fallback_df)}行, {fallback_df['date'].nunique()}个日期")
             return fallback_df
         else:
@@ -458,6 +478,7 @@ async def _build_data(request: Request, start_date: date, end_date: date, progre
             })
         result = pd.DataFrame(rows)
         result._backtest_data_source = "current_snapshot_fallback"
+        result._backtest_data_warning = "无任何历史数据，仅基于当前行情快照。建议补充历史数据后重试"
         return result
     raise RuntimeError(
         '无法获取行情数据, 请稍后重试'
