@@ -367,14 +367,14 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
         if not settings.MX_APIKEY:
             _mx_warn("[MX] PE/PB: MX_APIKEY 未配置, 跳过MX兜底")
             return {}
-        results = {}
-        for i in range(0, len(codes), _MX_PE_PB_BATCH_SIZE):
-            batch = codes[i:i + _MX_PE_PB_BATCH_SIZE]
+        async def _query_batch(batch: list[str], batch_idx: int) -> dict[str, dict]:
+            """查询单个批次"""
+            batch_result = {}
             query_text = " ".join(batch) + " 的市盈率 市净率"
             resp = await mx.query_natural(query_text, "financial")
             if not resp.get("success"):
-                logger.debug(f"[MX] 查询失败: {resp.get('error', 'unknown')}")
-                continue
+                logger.debug(f"[MX] 批次{batch_idx} 查询失败: {resp.get('error', 'unknown')}")
+                return {}
             for row in resp.get("data", []):
                 # 提取代码（多种字段名兼容）
                 code = None
@@ -407,8 +407,22 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                         except (ValueError, TypeError):
                             pass
                 if entry:
-                    results[code] = entry
-            logger.info(f"[MX] PE/PB 批次 {i // _MX_PE_PB_BATCH_SIZE + 1}: {len(results)} 只")
+                    batch_result[code] = entry
+            logger.info(f"[MX] PE/PB 批次 {batch_idx}: {len(batch_result)} 只")
+            return batch_result
+
+        # 并发查询: 最多 3 批次并行
+        _MX_CONCURRENCY = 3
+        results = {}
+        batches = [codes[i:i + _MX_PE_PB_BATCH_SIZE] for i in range(0, len(codes), _MX_PE_PB_BATCH_SIZE)]
+        for i in range(0, len(batches), _MX_CONCURRENCY):
+            chunk = batches[i:i + _MX_CONCURRENCY]
+            tasks = [asyncio.create_task(_query_batch(b, i + j + 1)) for j, b in enumerate(chunk)]
+            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for cr in chunk_results:
+                if isinstance(cr, dict):
+                    results.update(cr)
+            logger.info(f"[MX] PE/PB 并发进度: {min((i+_MX_CONCURRENCY)*_MX_PE_PB_BATCH_SIZE, len(codes))}/{len(codes)}, 累计{len(results)}只")
         return results
 
     try:

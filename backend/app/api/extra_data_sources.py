@@ -801,9 +801,11 @@ def fetch_stock_financial_ths_batch(stock_codes: list[str], max_workers: int = 8
     missing = [c for c in stock_codes if c not in result]
     mx_count = 0
     if missing:
-        logger.info(f"[THS Financial] MX 兜底: {len(missing)}只...")
+        # 动态调整兜底数量: 缺失少兜底多, 缺失多兜底上限
+        dynamic_batch = min(max(len(missing), 20), _MX_MAX_BATCH_SIZE)
+        logger.info(f"[THS Financial] MX 兜底: {len(missing)}只, 动态取{dynamic_batch}只...")
         t0 = _time.time()
-        mx_result = _fetch_financial_mx_batch(missing[:_MX_MAX_BATCH_SIZE])
+        mx_result = _fetch_financial_mx_batch(missing[:dynamic_batch])
         for code, entry in mx_result.items():
             if entry and code not in result:
                 result[code] = entry

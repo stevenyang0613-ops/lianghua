@@ -24,6 +24,22 @@ import re
 import logging
 import time
 
+# 妙想 MX 配置与工具
+_MX_WARN_COOLDOWN_SEC = 60    # 降级日志冷却时间(秒)
+_MX_WARN_LAST_TS = 0.0        # 上次降级日志时间戳
+
+
+def _mx_warn(msg: str):
+    """妙想 MX 降级日志节流 — 60 秒内只 warn 一次"""
+    global _MX_WARN_LAST_TS
+    now = time.time()
+    if now - _MX_WARN_LAST_TS >= _MX_WARN_COOLDOWN_SEC:
+        logger.warning(msg)
+        _MX_WARN_LAST_TS = now
+    else:
+        logger.debug(msg)
+
+
 try:
     import akshare as ak
 except ImportError:
@@ -335,9 +351,9 @@ class EventDataSource:
                 mx = MXAdapter(DataSourceConfig(name="mx"))
                 await mx.connect()
                 if getattr(mx, '_degraded_mode', False):
-                    logger.warning("[EventSource] MX 降级模式(无API Key), 资讯搜索可能不可用")
+                    _mx_warn("[EventSource] MX 降级模式(无API Key), 资讯搜索可能不可用")
                 if not settings.MX_APIKEY:
-                    logger.warning("[EventSource] MX_APIKEY 未配置, 跳过MX兜底")
+                    _mx_warn("[EventSource] MX_APIKEY 未配置, 跳过MX兜底")
                     return
                 keywords = " ".join(self._config.keywords[:5])
                 resp = await mx.query_natural(f"可转债 {keywords} 公告", "news")
@@ -349,15 +365,24 @@ class EventDataSource:
                         code = str(item.get("code", ""))
                         if not code or code == "None":
                             import re
-                            m = re.search(r'(\d{6})', title)
+                            # 优先匹配 "(123456)" 或 "123456.SZ" 等格式
+                            m = re.search(r'\((\d{6})\)', title)
+                            if not m:
+                                m = re.search(r'(\d{6})\.[SsZzHh]', title)
+                            if not m:
+                                # 避免匹配到日期（2023xx/2024xx/2025xx）和价格（100.50）
+                                m = re.search(r'(?<![\d.])(\d{6})(?![\d.])', title)
                             if m:
                                 code = m.group(1)
+                                # 日期过滤：排除 2023xx/2024xx/2025xx 开头的数字
+                                if code[:4] in ('2023', '2024', '2025', '2026'):
+                                    code = ""
                         name = str(item.get("name", ""))
                         publish_time = str(item.get("date", ""))
                         if not any(kw in title for kw in self._config.keywords):
                             continue
                         # 转债代码以 1/5 开头，正股以 0/3/6/9 开头
-                        if not (code.startswith('1') or code.startswith('5') or 
+                        if not code or not (code.startswith('1') or code.startswith('5') or 
                                 code.startswith('0') or code.startswith('3') or 
                                 code.startswith('6') or code.startswith('9')):
                             continue

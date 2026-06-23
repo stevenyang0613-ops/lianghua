@@ -150,6 +150,10 @@ class MacroDataService:
         self._cache: Optional[MacroData] = None
         self._cache_time: Optional[datetime] = None
         self._cache_ttl = cache_ttl
+        # 数据源健康监控（AGENTS.md #67）
+        # 记录近期失败次数；连续失败超过阈值时跳过该源，避免 backtest 挂死
+        self._source_failures: Dict[str, int] = {}  # {source_name: consecutive_fail_count}
+        self._source_cooldown: Dict[str, datetime] = {}  # {source_name: cooldown_until}
 
     def _is_cache_valid(self) -> bool:
         if not self._cache_time or not self._cache:

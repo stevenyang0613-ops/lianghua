@@ -23,6 +23,7 @@ import {
 import ReactEChartsCore from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { getApiBase } from '../utils/config'
+import { DataSourcePanel } from '../components/DataSourceBadge'
 import {
   fetchStrategies, runBacktestStream,
   fetchXuanjiRanking, fetchXuanjiSingle, fetchXuanjiDeltaCandidates,
@@ -131,6 +132,7 @@ export default function XuanjiIndex() {
   const [rankingLoading, setRankingLoading] = useState(false)
   const [rankingData, setRankingData] = useState<XuanjiItem[]>([])
   const [rankingInfo, setRankingInfo] = useState<any>(null)
+  const [rankingDataSource, setRankingDataSource] = useState<string>('real')
   const [rankParams, setRankParams] = useState<any>(null)
   const [topN, setTopN] = useState(savedConfig.topN)
   const [marketState, setMarketState] = useState(savedConfig.marketState)
@@ -223,6 +225,7 @@ export default function XuanjiIndex() {
         maxPremium, minPrice, maxPrice, volAdjust
       )
       setRankingData(result.items || [])
+      setRankingDataSource((result as any).data_source || 'real')
       setRankingInfo({
         total: result.total,
         totalUnfiltered: result.total_unfiltered ?? 0,
@@ -763,6 +766,7 @@ export default function XuanjiIndex() {
                   </Col>
                 </Row>
 
+                <DataSourcePanel source={rankingDataSource} count={rankingData.length} />
                 <Spin spinning={rankingLoadingCombined}>
                   {rankingData.length > 0 ? (
                     <Table dataSource={rankingData} columns={rankingColumns} rowKey="code" size="small"

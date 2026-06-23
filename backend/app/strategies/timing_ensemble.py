@@ -1,14 +1,26 @@
 """
-多模型集成模块：V3 (TimingEngine) + V4 (EnhancedTimingModel) 集成
+⚠️ DEPRECATED: 多模型集成模块：V3 (TimingEngine) + V4 (EnhancedTimingModel) 集成
 
-设计目的：V3 和 V4 在因子选择和权重分配上存在差异：
+【状态】已弃用 - 不推荐使用 V3+V4 集成
+
+【原因】2026-06-23 实测验证：
+- V3-V4 仓位一致率仅 12%（88% 时间方向相反）
+- V3 集成（V3:0.3 + V4:0.7）总收益 +11.38%，跑输 V4-only (+13.02%)
+- 集成甚至跑输 BuyHold (+11.94%)
+- 集成仅能降低最大回撤 (-19.23% vs -21.19%)，但同时降低收益
+
+【结论】V3 是 V4 的反向指标（不同时代开发，逻辑相反）。
+真正的多模型集成需用**正交**模型：
+- 趋势模型（动量/突破）+ 均值回归（V4）
+- 跨市场对冲（VIX 期货 / 黄金 / 美股）
+
+【保留原因】文档化"集成不可用"的发现，供未来参考。AGENTS.md #64 已记录。
+
+【设计目的（已失效）】V3 和 V4 在因子选择和权重分配上存在差异：
 - V3 侧重转债市场（cb_median_premium 30% + cb_avg_amount 25%）+ 流动性
 - V4 侧重多因子综合（9 大类因子），但 70% 权重在估值/资金/技术/情绪
 
-理论上两者有**部分独立性**（V3 关注转债市场微观结构，V4 关注全市场宏观）。
-通过加权集成可以降低单模型偏差。
-
-集成方法：
+【集成方法（已失效）】
 1. 简单加权：position = w_v3 * pos_v3 + w_v4 * pos_v4
 2. 置信度加权：当两模型方向一致时增加权重
 3. 动态权重：基于近期准确率调整（需要验证有效）
@@ -20,6 +32,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# DEPRECATED 模块加载时发出警告
+logger.warning(
+    "⚠️ timing_ensemble 模块已弃用 - V3+V4 集成验证为反向指标 (一致率 12%)。"
+    "详见 AGENTS.md #64 和模块 docstring。"
+)
 
 
 @dataclass

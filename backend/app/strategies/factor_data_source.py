@@ -23,6 +23,42 @@ import threading
 import time
 from app.engine.data_enrich_utils import safe_float, safe_int
 
+# 妙想 MX 配置与工具
+_MX_WARN_COOLDOWN_SEC = 60    # 降级日志冷却时间(秒)
+_MX_WARN_LAST_TS = 0.0        # 上次降级日志时间戳
+
+
+def _mx_warn(msg: str):
+    """妙想 MX 降级日志节流 — 60 秒内只 warn 一次"""
+    global _MX_WARN_LAST_TS
+    now = time.time()
+    if now - _MX_WARN_LAST_TS >= _MX_WARN_COOLDOWN_SEC:
+        logger.warning(msg)
+        _MX_WARN_LAST_TS = now
+    else:
+        logger.debug(msg)
+
+
+def _mx_validate_value(v: float, name: str) -> bool:
+    """MX 返回数值合理性校验"""
+    if np.isnan(v) or np.isinf(v):
+        return False
+    if name == "asset_liability_ratio":
+        return 0.0 < v < 100.0
+    if name == "current_ratio":
+        return 0.0 < v < 20.0
+    if name == "quick_ratio":
+        return 0.0 < v < 20.0
+    if name == "roe":
+        return -50.0 < v < 50.0
+    if name == "gross_margin":
+        return -10.0 < v < 100.0
+    if name == "net_profit_growth":
+        return -500.0 < v < 1000.0
+    if name == "operating_cashflow":
+        return -1e6 < v < 1e6
+    return True
+
 try:
     import akshare as ak
 except ImportError:
@@ -334,10 +370,10 @@ class FactorDataSource:
                 mx = MXAdapter(DataSourceConfig(name="mx"))
                 await mx.connect()
                 if getattr(mx, '_degraded_mode', False):
-                    logger.warning(f"[FactorDS-MX] {code}: 降级模式(无API Key)")
+                    _mx_warn(f"[FactorDS-MX] {code}: 降级模式(无API Key)")
                     return {}
                 if not settings.MX_APIKEY:
-                    logger.warning(f"[FactorDS-MX] {code}: MX_APIKEY 未配置")
+                    _mx_warn(f"[FactorDS-MX] {code}: MX_APIKEY 未配置")
                     return {}
                 query_text = f"{code} 资产负债率 流动比率 速动比率 净资产收益率 毛利率 净利润增长率"
                 resp = await mx.query_natural(query_text, "financial")
@@ -362,7 +398,7 @@ class FactorDataSource:
                         if k in row and row[k] is not None:
                             try:
                                 v = float(row[k])
-                                if not (np.isnan(v) or np.isinf(v)):
+                                if _mx_validate_value(v, dst):
                                     result[dst] = v
                                     break
                             except (ValueError, TypeError):

@@ -447,3 +447,28 @@ Every agent working on this project MUST follow these rules.
 - 单元测试中无法直接调用 `_build_data`，应测试其调用的辅助函数（如 `_is_data_sufficient`）。
 - 使用 MagicMock 快速模拟 storage/engine：`request.app.state.storage = DataStorage(...)`。
 - 运行时 DB 锁定问题：复制文件到 `/tmp/` 绕过。
+
+### 64. V3 (TimingEngine) 与 V4 (EnhancedTimingModel) 高度负相关（一致性 12%）
+- 实测 V3+V4 集成（权重 0.3/0.7）总收益 +11.38%（vs V4-only +13.02%），跑输 BuyHold (+11.94%)。
+- V3 是 V4 的"反向指标"：88% 时间给出相反仓位，集成等于"做空 V3 + 持有 V4"。
+- V3 集成仅能降低最大回撤 (-19.23% vs -21.19%)，但同时降低收益，不推荐使用。
+- 真正的多模型集成需用**正交**模型：趋势模型（动量/突破）+ 均值回归（V4）。
+
+### 65. 样本外验证关键发现（2026-06-23）
+- Train (2022-06~2023-06): -7.04% 策略 vs -12.57% BH → +5.53% 超额
+- Validation (2023-07~2024-06): -5.96% 策略 vs -9.91% BH → +3.95% 超额
+- **Test (2024-07~2026-06): +33.13% 策略 vs +42.11% BH → -8.98% 超额** ⚠️
+- Full: +16.38% 策略 vs +11.94% BH → +4.45% 超额
+- **结论**: 策略是**结构性防御型**，熊市跑赢 BH，牛市跑输 BH。Test 期间 37.5% 月份跑赢 BH。
+- 不是过拟合（Test 期间正收益 +33.13%），而是策略风格使然。
+
+### 66. AKShare `ak.fx_spot_quote()` 仅返回当前快照
+- 该接口**无历史序列**，无法计算 USDCNY 趋势因子。
+- USDCNY 真正独立因子实现需 Wind/iFinD/通联数据/外管局爬取等带历史的源。
+- 当前 USDCNY 因子模块（`app/strategies/independent_factor.py`）为 Stub 状态。
+
+### 67. 数据源 SSL 失败时 backtest 可能挂死
+- jin10 / datacenter-api.jin10.com 经常 SSL EOF 失败。
+- 当前 retry + fallback 链处理单次调用失败，但**未设置整体超时** → 一个 fetch 任务可能挂 60+ 秒。
+- 修复：所有 akshare 调用用 `_run_with_timeout()` 包装（已有部分），全局添加 30s 超时上限。
+- 发现挂死迹象（CPU time 不变、状态 S）时 `kill -9 PID`。
