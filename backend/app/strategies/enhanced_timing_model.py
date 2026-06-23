@@ -1669,7 +1669,7 @@ class EnhancedTimingModel:
             description=self._category_desc(cat_score, ["极度恐慌", "偏悲观", "中性", "偏乐观", "极度亢奋"]),
         )
     
-    # ========== 8. 消息面 (7%) ==========
+    # ========== 8. 消息面 (6%) ==========
     
     def _score_news(self, data: EnhancedMarketData) -> CategoryScore:
         """消息面评分：政策信号 + 事件冲击 + 产业链景气
@@ -1723,7 +1723,7 @@ class EnhancedTimingModel:
                                              ["重大利空", "偏空", "中性", "偏多", "重大利好"]),
         )
     
-    # ========== 9. 宏观面 (14%) ==========
+    # ========== 9. 宏观面 (10%) ==========
     
     def _score_macro(self, data: EnhancedMarketData) -> CategoryScore:
         """宏观面评分：PMI + CPI/PPI + 出口 + GDP"""
