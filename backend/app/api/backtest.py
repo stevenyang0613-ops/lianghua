@@ -1022,7 +1022,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
         # 尝试通过引擎拿转债列表
         if not bond_info:
             logger.error("[BacktestData] 所有数据源均无法获取转债列表")
-            return pd.DataFrame(_empty_backtest_row(start_date), index=[0])
+            _raise_empty_backtest_error(start_date)
 
     for _, r in df_ths.iterrows():
         code = str(r.get("债券代码", "")).strip()
@@ -1039,7 +1039,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
     logger.info(f"[BacktestData] THS加载了{len(bond_codes)}只转债")
     if not bond_codes:
         logger.error("[BacktestData] 转债列表为空, 无法回测")
-        return pd.DataFrame(_empty_backtest_row(start_date), index=[0])
+        _raise_empty_backtest_error(start_date)
 
     # ==================== 第2步: Sina实时行情 ====================
     spot_prices = {}
@@ -1376,7 +1376,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
 
     if not all_records:
         logger.error("[BacktestData] 腾讯/腾讯/BaoStock均无法获取K线数据")
-        return pd.DataFrame(_empty_backtest_row(start_date), index=[0])
+        _raise_empty_backtest_error(start_date)
 
     # ==================== 第7步: 构建DataFrame ====================
     df_kline = pd.DataFrame(all_records)
@@ -1606,17 +1606,20 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
     return df_kline
 
 
-def _empty_backtest_row(start_date: date) -> dict:
-    """返回一个空回测行, 让调用方不会完全崩溃"""
-    import math
-    return {
-        'code': '000000', 'name': '', 'date': start_date,
-        'close_price': 100.0, 'open_price': 100.0, 'high_price': 100.0, 'low_price': 100.0,
-        'price': 100.0, 'volume': 0,
-        'premium_ratio': 15.0, 'conversion_price': 0, 'stock_code': '',
-        'remaining_years': 3.0, 'ytm': 1.0, 'change_pct': 0.0,
-        'pe': float('nan'), 'pb': float('nan'), 'iv': 20.0,
-    }
+def _raise_empty_backtest_error(start_date: date) -> None:
+    """当所有数据源均无法获取回测数据时抛出明确错误
+
+    历史此处曾返回一条硬编码的假数据行（code='000000', price=100.0 等），
+    导致回测在假数据上运行。改为直接抛出 HTTP 异常，禁止任何基于占位数据的回测。
+    """
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"无法获取 {start_date} 起始的回测数据：所有数据源（daily_snapshots、"
+            "quotes_history、THS、Tencent、Sina、Baidu）均不可用。"
+            "请先运行数据下载脚本或检查网络连接。"
+        ),
+    )
 
 
 def _save_fallback_to_duckdb(df: pd.DataFrame, start_date: date, end_date: date):

@@ -124,46 +124,8 @@ export function getAlerts(): PriceAlert[] {
   let saved: string | null = null
   try { saved = localStorage.getItem(ALERTS_KEY) } catch { /* localStorage unavailable */ }
   const alerts = safeJsonParse<PriceAlert[]>(saved, [])
-  if (alerts.length === 0) {
-    // Seed default alerts on first use so the UI is never empty
-    const defaults: PriceAlert[] = [
-      {
-        id: 'alert_default_1',
-        code: '110052',
-        name: '隆基转债',
-        type: 'price_above',
-        target: 120,
-        current: 0,
-        triggered: false,
-        triggeredAt: null,
-        createdAt: Date.now(),
-        expiresAt: null,
-        repeat: false,
-        sound: true,
-        notify: true,
-        message: '价格高于 120 元时预警',
-      },
-      {
-        id: 'alert_default_2',
-        code: '113052',
-        name: '兴业转债',
-        type: 'change_above',
-        target: 5,
-        current: 0,
-        triggered: false,
-        triggeredAt: null,
-        createdAt: Date.now(),
-        expiresAt: null,
-        repeat: false,
-        sound: true,
-        notify: true,
-        message: '涨幅大于 5% 时预警',
-      },
-    ]
-    _pendingAlerts = defaults
-    _scheduleFlush()
-    return defaults.slice()
-  }
+  // 不再预置任何默认预警：所有 code/name/target 必须是用户真实添加或从后端拉取的数据，
+  // 避免硬编码真实证券代码（如 110052 隆基转债、113052 兴业转债）误导用户。
   return alerts
 }
 

@@ -617,3 +617,16 @@ class TestWalkForwardValidation:
 
         # 数据不足应返回空结果
         assert result.total_windows == 0
+
+
+def test_empty_backtest_data_raises_503():
+    """当所有数据源均不可用时必须抛异常，禁止返回硬编码假数据"""
+    from fastapi import HTTPException
+    from app.api.backtest import _raise_empty_backtest_error
+
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_empty_backtest_error(date(2024, 1, 1))
+
+    assert exc_info.value.status_code == 503
+    assert "无法获取" in exc_info.value.detail
+    assert "000000" not in exc_info.value.detail
