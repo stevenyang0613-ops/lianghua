@@ -520,16 +520,28 @@ class RegimeDetectionService:
 
         self._history: List[RegimeResult] = []
 
+        # 用于计算真实收益率和平均成交量的历史数据
+        self._prev_index_value: Optional[float] = None
+        self._volume_history: deque = deque(maxlen=20)
+
     def process_snapshot(self, snapshot: MarketSnapshot) -> RegimeResult:
         """处理市场快照"""
         # 更新各模块
         self.bull_bear_detector.update(snapshot.index_value, snapshot.timestamp)
 
-        # 假设有历史价格计算收益率
-        returns = 0.001  # 简化
+        # 计算真实收益率（修复：使用历史 index_value 而非硬编码 0.001）
+        if self._prev_index_value is not None and self._prev_index_value > 0:
+            returns = (snapshot.index_value - self._prev_index_value) / self._prev_index_value
+        else:
+            returns = 0.0
+        self._prev_index_value = snapshot.index_value
         self.volatility_detector.update(returns)
 
         self.trend_analyzer.update(snapshot.index_value)
+
+        # 计算真实平均成交量（修复：使用历史均值而非 current*0.9）
+        self._volume_history.append(snapshot.volume)
+        avg_volume = float(np.mean(self._volume_history)) if len(self._volume_history) > 1 else snapshot.volume
 
         self.sentiment_analyzer.update(
             advance_count=snapshot.advance_count,
@@ -537,7 +549,7 @@ class RegimeDetectionService:
             new_high=snapshot.new_high_count,
             new_low=snapshot.new_low_count,
             volume=snapshot.volume,
-            avg_volume=snapshot.volume * 0.9,
+            avg_volume=avg_volume,
         )
 
         # 识别各状态

@@ -2124,9 +2124,6 @@ class EnhancedTimingModel:
         # 计算原始建议仓位（未经平滑）
         raw_position = self._get_position_ratio(total_score, trend_boost)
         
-        # P1-3 DEBUG: trace raw_position before/after vol target
-        _debug_raw_before = raw_position
-        
         # ═══════════════════════════════════════════════════════════════
         # 波动率目标仓位保护（P1-3）— 在 raw_position 层面截断
         # 设计要点：在仓位平滑/确认之前应用，这样：
@@ -2134,36 +2131,23 @@ class EnhancedTimingModel:
         # 2. 波动率恢复正常后，raw_position 自然回到正常值
         # 3. 平滑机制自然处理过渡，无需额外恢复逻辑
         # 目标 28%（HS300 长期 ~17%，仅在极端波动时触发 < 5% 的时间）
+        # 注意：stock_index_change 是百分比值（如 1.5 = 1.5%），std 需 /100 转小数
         # ═══════════════════════════════════════════════════════════════
         TARGET_ANNUAL_VOL = 0.28
-        vol_cap_applied = False
         if not math.isnan(data.stock_index_change):
             self._daily_returns.append(data.stock_index_change)
         if len(self._daily_returns) >= 10:
-            realized_daily_vol = pd.Series(list(self._daily_returns)).std()
+            realized_daily_vol = pd.Series(list(self._daily_returns)).std() / 100.0
             realized_ann_vol = realized_daily_vol * math.sqrt(252)
             if realized_ann_vol > TARGET_ANNUAL_VOL:
                 vol_cap = TARGET_ANNUAL_VOL / realized_ann_vol
                 capped_raw = raw_position * vol_cap
-                vol_cap_applied = True
                 if capped_raw < raw_position:
                     logger.debug(
                         f"[VolTarget] vol={realized_ann_vol:.1%} target={TARGET_ANNUAL_VOL:.0%} "
-                        f"cap={vol_cap:.3f} raw={raw_position:.3f}→{capped_raw:.3f}"
+                        f"raw={raw_position:.3f}→{capped_raw:.3f}"
                     )
                     raw_position = max(0.05, min(1.0, capped_raw))
-                else:
-                    logger.debug(
-                        f"[VolTarget] vol={realized_ann_vol:.1%} > target but cap={vol_cap:.3f} "
-                        f"capped={capped_raw:.3f} >= raw={raw_position:.3f}, no change"
-                    )
-        if not vol_cap_applied and len(self._daily_returns) >= 10:
-            realized_daily_vol = pd.Series(list(self._daily_returns)).std()
-            realized_ann_vol = realized_daily_vol * math.sqrt(252)
-            logger.debug(
-                f"[VolTargetSkip] vol={realized_ann_vol:.1%} <= target={TARGET_ANNUAL_VOL:.0%}, "
-                f"daily_std={realized_daily_vol:.4f} deque_len={len(self._daily_returns)}"
-            )
         
         # 信号平滑：基于仓位档位的连续2日确认机制
         # 核心问题：得分在45-55之间波动，导致仓位在50%和70%之间频繁切换
@@ -2201,15 +2185,6 @@ class EnhancedTimingModel:
                                    self._last_position_ratio - max_change)
         else:
             position_ratio = base_position
-        
-        # P1-3 DEBUG: if position drops below 0.10, log why
-        if position_ratio < 0.10 and len(self._history) % 10 == 0:
-            logger.info(
-                f"[DEBUG-POS] date={data.date} score={total_score:.1f} raw_before={_debug_raw_before:.3f} "
-                f"raw_after={raw_position:.3f} conf={self._confirmed_position:.3f} "
-                f"last={self._last_position_ratio:.3f} pending_days={self._pending_days} "
-                f"regime_confirm={self._regime_confirm_count} final_pos={position_ratio:.3f}"
-            )
         
         self._last_position_ratio = position_ratio
         

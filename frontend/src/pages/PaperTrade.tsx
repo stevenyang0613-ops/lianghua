@@ -437,6 +437,15 @@ export default function PaperTrade() {
         }
       }
     } catch { /* ignore */ }
+    // 卸载时清理当前标签页的 key（避免关闭标签页后残留 5 分钟）
+    return () => {
+      try {
+        const prefix = tabIdRef.current
+        localStorage.removeItem(`${prefix}_load_fail_ts`)
+        localStorage.removeItem(`${prefix}_load_fail_count`)
+        localStorage.removeItem(`${prefix}_dismiss_refresh_warning`)
+      } catch { /* ignore */ }
+    }
   }, [])
 
   // setState 函数是稳定引用，无需列入 useCallback 依赖

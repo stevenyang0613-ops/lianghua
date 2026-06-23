@@ -6112,10 +6112,13 @@ def _refresh_lhb_cache():
                 new_count = int(cnt) if cnt else 0
                 old_entry = prev.get(code, {})
                 old_count = (old_entry.get("lhb_count") or 0) if isinstance(old_entry, dict) else 0
+                # 若旧数据是 zero-fill，_delta 取 new_count（作为首次真实观测），避免 0→new_count 的高估
+                is_zero_fill = isinstance(old_entry, dict) and old_entry.get("_data_source") == "zero_fill"
+                _delta = new_count if is_zero_fill else (new_count - old_count)
                 result[code] = {
                     "lhb_count": new_count,
                     "_prev_count": old_count,
-                    "_delta": new_count - old_count,
+                    "_delta": _delta,
                     "_data_source": "lhb_stock_statistic_em",
                 }
         # Source 2 fallback: stock_lhb_stock_detail_em
@@ -6215,7 +6218,8 @@ def _refresh_block_trade_cache():
                     timeout=60, default=None, op_name=f"dzjy_mrtj_{end_d}",
                 )
                 if df_mrtj is not None and len(df_mrtj) > 0:
-                    count_mrtj = 0
+                    count_mrtj_added = 0
+                    count_mrtj_overwritten = 0
                     for _, r in df_mrtj.iterrows():
                         code = str(r.get("证券代码", "")).strip()
                         if not code or len(code) != 6 or not code.isdigit():
@@ -6226,11 +6230,17 @@ def _refresh_block_trade_cache():
                             existing = result[code]
                             if isinstance(existing, dict) and existing.get("_data_source") not in (None, "zero_fill"):
                                 continue
+                            is_overwrite = isinstance(existing, dict) and existing.get("_data_source") == "zero_fill"
+                        else:
+                            is_overwrite = False
                         amt = _sf(r.get("成交总额"))
                         if amt is not None and amt >= 0:
                             result[code] = {"block_trade_amount": amt, "_data_source": "dzjy_mrtj"}
-                            count_mrtj += 1
-                    logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj} stocks")
+                            if is_overwrite:
+                                count_mrtj_overwritten += 1
+                            else:
+                                count_mrtj_added += 1
+                    logger.info(f"[DataEnrich] BlockTrade: stock_dzjy_mrtj added {count_mrtj_added}, overwritten {count_mrtj_overwritten} stocks")
             except Exception as e_mrtj:
                 logger.warning(f"[DataEnrich] BlockTrade stock_dzjy_mrtj fallback failed: {e_mrtj}")
         # Zero-fill: 无大宗交易的股票显式写入 None，区分"无交易"与"数据缺失"
@@ -6242,8 +6252,9 @@ def _refresh_block_trade_cache():
         if result:
             _set_global_map("_block_trade_map", result, replace=True)
             _save_cache(_BLOCK_TRADE_CACHE, result)
-            logger.info(f"[DataEnrich] BlockTrade: {len(result)} stocks refreshed")
-            return len(result)
+            real_count = len([k for k in result if not k.startswith("_") and isinstance(result[k], dict) and result[k].get("_data_source") != "zero_fill"])
+            logger.info(f"[DataEnrich] BlockTrade: {real_count} real stocks refreshed (total {len(result)} with zero_fill)")
+            return real_count
         return 0
     except Exception as e:
         logger.warning(f"[DataEnrich] BlockTrade in-proc refresh failed: {e}")
