@@ -44,6 +44,7 @@ export default function DetailPanel() {
   }
 
   const gpmRender = useMemo(() => {
+    if (!bond) return null
     const gpm = Number(bond.gpm)
     const isBankNoGPM = Math.abs(gpm - BANK_GPM_SENTINEL) < 0.05
     if (isBankNoGPM) return null
@@ -54,7 +55,7 @@ export default function DetailPanel() {
         {gpmVal > 0 ? `${fmt(gpmVal)}%` : gpmVal === 0 ? '0%' : gpmVal < 0 ? '数据异常' : '银行(无毛利率)'}
       </Descriptions.Item>
     )
-  }, [bond.gpm])
+  }, [bond?.gpm])
 
   const priceColor = (bond.change_pct ?? 0) > 0 ? '#cf1322' : (bond.change_pct ?? 0) < 0 ? '#389e0d' : undefined
   const premiumColor = (bond.premium_ratio ?? 0) < 0 ? '#52c41a' : (bond.premium_ratio ?? 0) > 50 ? '#faad14' : undefined

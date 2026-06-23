@@ -400,7 +400,7 @@ export default function PaperTrade() {
       return id
     } catch { return 'tab_default' }
   })())
-  const storageKey = (suffix: string) => `${tabIdRef.current}_${suffix}`
+  const storageKey = useCallback((suffix: string) => `${tabIdRef.current}_${suffix}`, [])
   // 不能加入 useCallback deps（否则无限循环），用 ref 避免 stale closure
   const warningShownRef = useRef(warningShownAt)
   warningShownRef.current = warningShownAt
