@@ -173,7 +173,7 @@ export default React.memo(function SignalStrategyTab() {
       setExecutedPositions(r.positions)
       setExecutedTotal(r.total)
       setExecutedPage(p)
-    } catch {}
+    } catch (e) { console.error('[SignalStrategyTab] 加载已执行持仓失败:', e) }
   }, [executedPage])
 
   const handleVerifyStrategy = useCallback(async () => {

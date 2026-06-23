@@ -2913,3 +2913,50 @@ export async function deletePaperAccount(accountId: string): Promise<any> {
   return deleteJSON(`${getBase()}/paper-trade/accounts/${accountId}`)
 }
 
+
+// -- Multi-source data source APIs (/data-sources-v2 and /extra)
+
+export async function fetchStockValuations(stockCodes: string[], stockPrices?: Record<string, number>): Promise<Record<string, { pe?: number; pb?: number }>> {
+  return postJSON(`${getBase()}/data-sources-v2/valuations`, { stock_codes: stockCodes, stock_prices: stockPrices || {} })
+}
+
+export async function fetchStockHistPrices(stockCode: string, startDate: string, endDate: string): Promise<{ date: string; close: number; open?: number; high?: number; low?: number; volume?: number }[]> {
+  return postJSON(`${getBase()}/data-sources-v2/hist-prices`, { stock_code: stockCode, start_date: startDate, end_date: endDate })
+}
+
+export async function fetchCbDailyTushare(params?: { trade_date?: string; start_date?: string; end_date?: string }): Promise<any[]> {
+  const qs = new URLSearchParams(params || {})
+  return fetchJSON(`${getBase()}/data-sources-v2/cb-daily-tushare?${qs.toString()}`)
+}
+
+export async function fetchCbBasicTushare(): Promise<Record<string, any>> {
+  return fetchJSON(`${getBase()}/data-sources-v2/cb-basic-tushare`)
+}
+
+export async function fetchValueAnalysis(bondCodes: string[], maxWorkers: number = 10): Promise<any[]> {
+  return postJSON(`${getBase()}/extra/value-analysis`, { bond_codes: bondCodes, max_workers: maxWorkers })
+}
+
+export async function fetchBondDailyEM(bondCodes: string[], startDate: string, endDate: string, maxWorkers: number = 10): Promise<any[]> {
+  return postJSON(`${getBase()}/extra/bond-daily-em`, { bond_codes: bondCodes, start_date: startDate, end_date: endDate, max_workers: maxWorkers })
+}
+
+export async function fetchIndustryBatch(stockCodes: string[], maxWorkers: number = 8): Promise<Record<string, string>> {
+  return postJSON(`${getBase()}/extra/industry`, { stock_codes: stockCodes, max_workers: maxWorkers })
+}
+
+export async function fetchBondMiscData(): Promise<any> {
+  return fetchJSON(`${getBase()}/extra/bond-misc`)
+}
+
+export async function fetchCSIIndex(startDate: string, endDate: string): Promise<any[]> {
+  return postJSON(`${getBase()}/extra/csi-index`, { start_date: startDate, end_date: endDate })
+}
+
+export async function fetchFinancialTHS(stockCodes: string[], maxWorkers: number = 8): Promise<Record<string, any>> {
+  return postJSON(`${getBase()}/extra/financial-ths`, { stock_codes: stockCodes, max_workers: maxWorkers })
+}
+
+export async function fetchBondKlineEM(bondCodes: string[], startDate: string, endDate: string, maxWorkers: number = 10): Promise<any[]> {
+  return postJSON(`${getBase()}/extra/bond-kline-em`, { bond_codes: bondCodes, start_date: startDate, end_date: endDate, max_workers: maxWorkers })
+}

@@ -996,8 +996,11 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
     stock_price_map = {}
     for code, info in bond_info.items():
         sc = info["stock_code"]
+        # 优先用正股代码查找，若无则尝试转债代码兜底
         if sc in spot_prices:
             stock_price_map[sc] = spot_prices[sc]["price"]
+        elif code in spot_prices:
+            stock_price_map[sc] = spot_prices[code]["price"]
     
     # 多层兜底获取 (带45s超时保护, get_stock_valuations内部已有45s硬限)
     _val_t0 = _time.time()
