@@ -117,7 +117,11 @@ class SignalEngine:
         """生成参数签名字符串，用于检测参数变更"""
         if not params:
             return ""
-        return f"{strat_id}:{sorted(params.items())}"
+        # 仅对 key 排序，value 用 json.dumps(default=str) 序列化，避免混合类型不可比较
+        try:
+            return f"{strat_id}:{json.dumps(params, sort_keys=True, default=str, ensure_ascii=False)}"
+        except Exception:
+            return f"{strat_id}:{sorted(params.keys())}"
 
     def set_storage(self, storage: DataStorage) -> None:
         self._storage = storage
@@ -370,7 +374,10 @@ class SignalEngine:
             if s.action == 'sell' and s.confidence >= threshold and not s.executed:
                 try:
                     pos = next((p for p in trade_engine.positions if p.code == s.code), None)
-                    volume = pos.volume if pos else 10
+                    if not pos or pos.volume <= 0:
+                        # 无持仓时跳过，避免建立空头
+                        continue
+                    volume = pos.volume
                     trade_engine.sell(code=s.code, name=s.name, price=s.price, volume=volume)
                     s.executed = True
                     self._executed_positions.append(ExecutedPosition(
@@ -384,15 +391,18 @@ class SignalEngine:
 
         # 2. Pre-compute buy candidates
         buy_candidates = [s for s in signals if s.action == 'buy' and s.confidence >= threshold and not s.executed]
-        remaining = len(buy_candidates)
+        remaining_cash = trade_engine.account.cash
 
-        # 3. Process buys with dynamic volume based on remaining count
+        # 3. Process buys with dynamic volume based on remaining cash
         for s in buy_candidates:
             try:
-                alloc = trade_engine.account.cash / max(remaining, 1)
+                alloc = remaining_cash / max(len(buy_candidates), 1)
                 volume = max(1, int(alloc / s.price))
+                if volume <= 0:
+                    continue
                 trade_engine.buy(code=s.code, name=s.name, price=s.price, volume=volume)
                 s.executed = True
+                remaining_cash -= volume * s.price
                 self._executed_positions.append(ExecutedPosition(
                     code=s.code, name=s.name, side='buy',
                     price=s.price, volume=volume, ts=datetime.now(),
@@ -401,8 +411,6 @@ class SignalEngine:
                 logger.info(f'[Signal] Auto-executed BUY {s.code} ({s.strategy}) at {s.price}')
             except Exception as e:
                 logger.warning(f'[Signal] Auto-execute buy failed {s.code}: {e}')
-            finally:
-                remaining -= 1
 
         # 4. Batch save
         if self._storage and batch_positions:

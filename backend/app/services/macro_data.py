@@ -284,15 +284,21 @@ class MacroDataService:
 
         # 使用线程池并行执行独立任务（I/O 密集，GIL 不阻塞网络）
         # 最大并发 8，避免触发 AKShare / 代理频率限制
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        # 使用 wait(timeout=80) 收集已完成任务，避免超时后丢失部分结果
+        from concurrent.futures import ThreadPoolExecutor, wait
         with ThreadPoolExecutor(max_workers=8, thread_name_prefix="macro_fetch") as pool:
             futures = {pool.submit(t): t.__name__ for t in tasks}
-            for fut in as_completed(futures, timeout=80):
+            done, not_done = wait(futures.keys(), timeout=80)
+            for fut in done:
                 task_name = futures[fut]
                 try:
                     fut.result()
                 except Exception as e:
                     logger.warning(f"[MacroData] {task_name} failed: {type(e).__name__}: {e}")
+            if not_done:
+                logger.warning(f"[MacroData] {len(not_done)} tasks timed out after 80s")
+                for fut in not_done:
+                    fut.cancel()
 
         # 以下任务依赖前面的原始数据，必须串行执行
         self._compute_technical_indicators(data)

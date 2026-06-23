@@ -3,12 +3,29 @@ import gzip
 import hmac
 import json
 import logging
+import math
 import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
+from starlette.websockets import WebSocketState
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_json_value(obj):
+    """递归将 float NaN/Inf 替换为 None，保证 JSON 序列化合法。"""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_json_value(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_value(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_json_value(v) for v in obj)
+    return obj
 
 router = APIRouter()
 
@@ -230,6 +247,10 @@ _COMPRESS_THRESHOLD = 1024  # 超过1KB时压缩
 
 async def _send_compressed(ws: WebSocket, msg: dict, stats_key: str = "market") -> int:
     """发送消息，大消息使用 gzip 压缩。返回发送字节数。"""
+    if ws.client_state != WebSocketState.CONNECTED:
+        return 0
+    # 将 NaN/Inf 替换为 None，避免 json.dumps 输出非法 JSON
+    msg = _sanitize_json_value(msg)
     raw = json.dumps(msg).encode("utf-8")
     if len(raw) > _COMPRESS_THRESHOLD:
         compressed = gzip.compress(raw)
@@ -245,6 +266,8 @@ async def _send_compressed(ws: WebSocket, msg: dict, stats_key: str = "market") 
 async def market_websocket(websocket: WebSocket):
     global active_market_connections
 
+    await websocket.accept()
+
     engine = getattr(websocket.app.state, "engine", None)
     if not engine:
         _ws_stats["disconnect_reasons"]["engine_unavailable"] += 1
@@ -254,7 +277,6 @@ async def market_websocket(websocket: WebSocket):
     if not await verify_ws_auth(websocket):
         return
 
-    await websocket.accept()
     async with _ws_conn_lock:
         active_market_connections += 1
     if active_market_connections > 10:
@@ -317,7 +339,8 @@ async def market_websocket(websocket: WebSocket):
             _ws_stats["market_messages_sent"] += 1
             _ws_stats["market_bytes_sent"] += sent_bytes
             _ws_stats["market_full_messages"] += 1
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
 
     heartbeat_task = None
@@ -326,6 +349,8 @@ async def market_websocket(websocket: WebSocket):
         while True:
             try:
                 await asyncio.sleep(settings.ws_ping_interval)
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    break
                 await websocket.send_json({"type": "ping"})
             except asyncio.CancelledError:
                 break
@@ -356,13 +381,16 @@ async def market_websocket(websocket: WebSocket):
         try:
             async with _ws_conn_lock:
                 active_market_connections -= 1
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
 
 @router.websocket("/signals")
 async def signals_websocket(websocket: WebSocket):
     global active_signal_connections
+
+    await websocket.accept()
 
     signal_engine = getattr(websocket.app.state, "signal_engine", None)
     if not signal_engine:
@@ -373,7 +401,6 @@ async def signals_websocket(websocket: WebSocket):
     if not await verify_ws_auth(websocket):
         return
 
-    await websocket.accept()
     async with _ws_conn_lock:
         active_signal_connections += 1
     if active_signal_connections > 10:
@@ -399,6 +426,8 @@ async def signals_websocket(websocket: WebSocket):
         while True:
             try:
                 await asyncio.sleep(settings.ws_ping_interval)
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    break
                 await websocket.send_json({"type": "ping"})
             except asyncio.CancelledError:
                 break
@@ -429,5 +458,6 @@ async def signals_websocket(websocket: WebSocket):
         try:
             async with _ws_conn_lock:
                 active_signal_connections -= 1
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass

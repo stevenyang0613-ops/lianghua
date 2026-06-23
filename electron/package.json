@@ -28,6 +28,7 @@
     },
     "asar": true,
     "asarUnpack": [
+      "node_modules/ws/**",
       "node_modules/electron-updater/**"
     ],
     "extraResources": [
@@ -44,13 +45,7 @@
         "from": "../backend",
         "to": "backend",
         "filter": [
-          "app/**/*.py",
-          "run_app.py",
-          "!.venv/**",
           "!dist/**",
-          "dist/lianghua-backend/**",
-          "!dist/lianghua-backend/**/__pycache__/**",
-          "!dist/lianghua-backend/**/*.pyc",
           "!**/__pycache__/**",
           "!**/*.pyc",
           "!.git/**",

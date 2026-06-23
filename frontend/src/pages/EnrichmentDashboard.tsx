@@ -20,7 +20,7 @@ const getBase = (): string => {
 }
 
 async function fetchJSON<T>(url: string): Promise<T> {
-  const token = localStorage.getItem('auth_token') || ''
+  const token = localStorage.getItem('ws_auth_token') || ''
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   })

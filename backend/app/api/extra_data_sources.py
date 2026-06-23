@@ -9,15 +9,147 @@
 import asyncio
 import logging
 import time as _time
+logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
 from app.engine.data_enrich_utils import safe_float, safe_int
 
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+router = APIRouter()
+
+
+class ValueAnalysisRequest(BaseModel):
+    bond_codes: list[str]
+    max_workers: int = 10
+
+
+class IndustryRequest(BaseModel):
+    stock_codes: list[str]
+    max_workers: int = 8
+
+
+class BondDailyEMRequest(BaseModel):
+    bond_codes: list[str]
+    start_date: str
+    end_date: str
+    max_workers: int = 10
+
+
+class CSIIndexRequest(BaseModel):
+    start_date: str
+    end_date: str
+
+
+class FinancialTHSRequest(BaseModel):
+    stock_codes: list[str]
+    max_workers: int = 8
+
+
+class BondKlineEMRequest(BaseModel):
+    bond_codes: list[str]
+    start_date: str
+    end_date: str
+    max_workers: int = 10
+
+
+@router.post("/value-analysis")
+async def api_value_analysis(req: ValueAnalysisRequest):
+    """批量获取转债纯债价值/转股价值/溢价率历史"""
+    try:
+        df = fetch_value_analysis_batch(req.bond_codes, max_workers=req.max_workers)
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[Extra] value-analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bond-daily-em")
+async def api_bond_daily_em(req: BondDailyEMRequest):
+    """批量获取转债日行情"""
+    try:
+        from datetime import date as _date
+        df = fetch_bond_daily_em_batch(
+            req.bond_codes,
+            _date.fromisoformat(req.start_date),
+            _date.fromisoformat(req.end_date),
+            max_workers=req.max_workers,
+        )
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[Extra] bond-daily-em error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/industry")
+async def api_industry(req: IndustryRequest):
+    """批量获取正股行业归属"""
+    try:
+        result = fetch_industry_batch(req.stock_codes, max_workers=req.max_workers)
+        return {"status": "ok", "count": len(result), "data": result}
+    except Exception as e:
+        logger.error(f"[Extra] industry error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/bond-misc")
+async def api_bond_misc():
+    """获取转债市场杂项数据"""
+    try:
+        return {"status": "ok", "data": fetch_bond_misc_data()}
+    except Exception as e:
+        logger.error(f"[Extra] bond-misc error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/csi-index")
+async def api_csi_index(req: CSIIndexRequest):
+    """获取中证转债指数历史"""
+    try:
+        from datetime import date as _date
+        df = fetch_csi_index(
+            _date.fromisoformat(req.start_date),
+            _date.fromisoformat(req.end_date),
+        )
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[Extra] csi-index error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/financial-ths")
+async def api_financial_ths(req: FinancialTHSRequest):
+    """批量获取 THS 财务摘要"""
+    try:
+        result = fetch_stock_financial_ths_batch(req.stock_codes, max_workers=req.max_workers)
+        return {"status": "ok", "count": len(result), "data": result}
+    except Exception as e:
+        logger.error(f"[Extra] financial-ths error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bond-kline-em")
+async def api_bond_kline_em(req: BondKlineEMRequest):
+    """批量获取转债 K 线"""
+    try:
+        from datetime import date as _date
+        df = fetch_bond_kline_em_dc_batch(
+            req.bond_codes,
+            _date.fromisoformat(req.start_date),
+            _date.fromisoformat(req.end_date),
+            max_workers=req.max_workers,
+        )
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[Extra] bond-kline-em error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================

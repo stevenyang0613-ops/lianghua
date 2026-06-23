@@ -20,16 +20,104 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import akshare as ak
 import pandas as pd
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Body
+from pydantic import BaseModel
+
+from app.data import get_data_source_manager
+
+data_source_manager = get_data_source_manager()
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# ============================================================
-# 第1层: Baidu估值 — 逐股PE/PB (稳定可用, 主力)
-# ============================================================
+class ValuationRequest(BaseModel):
+    stock_codes: list[str]
+    stock_prices: dict[str, float] = {}
+    max_workers: int = 15
+
+
+class HistPriceRequest(BaseModel):
+    stock_code: str
+    start_date: str
+    end_date: str
+
+
+class TushareBondDailyRequest(BaseModel):
+    trade_date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@router.post("/valuations")
+async def api_valuations(req: ValuationRequest):
+    """批量获取股票估值 (PE/PB), 优先 Baidu, 兜底 THS"""
+    try:
+        result = get_stock_valuations(req.stock_codes, req.stock_prices)
+        return {"status": "ok", "count": len(result), "data": result}
+    except Exception as e:
+        logger.error(f"[DataSources] valuations error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/hist-prices")
+async def api_hist_prices(req: HistPriceRequest):
+    """获取正股历史日线 (Tencent K 线兜底)"""
+    try:
+        df = get_stock_hist_prices(req.stock_code, req.start_date, req.end_date)
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[DataSources] hist-prices error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cb-daily-tushare")
+async def api_cb_daily_tushare(
+    trade_date: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
+    """获取 Tushare 可转债日线"""
+    try:
+        df = fetch_cb_daily_tushare(trade_date, start_date, end_date)
+        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+    except Exception as e:
+        logger.error(f"[DataSources] cb-daily-tushare error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cb-basic-tushare")
+async def api_cb_basic_tushare():
+    """获取 Tushare 可转债基本信息"""
+    try:
+        result = fetch_cb_basic_tushare()
+        return {"status": "ok", "count": len(result), "data": result}
+    except Exception as e:
+        logger.error(f"[DataSources] cb-basic-tushare error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/connect")
+async def connect_data_sources():
+    """连接所有已配置的数据源"""
+    try:
+        results = await data_source_manager.connect_all()
+        return {"status": "ok", "results": results}
+    except Exception as e:
+        logger.warning(f"[DataSources] connect failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/disconnect")
+async def disconnect_data_sources():
+    """断开所有已连接的数据源"""
+    try:
+        await data_source_manager.disconnect_all()
+        return {"status": "ok", "results": {}}
+    except Exception as e:
+        logger.warning(f"[DataSources] disconnect failed: {e}")
+        return {"status": "error", "message": str(e)}
 def fetch_pe_pb_baidu_both(code: str) -> dict:
     """
     Baidu 同时获取 PE + PB (单只股票, 2次API调用)
@@ -47,7 +135,8 @@ def fetch_pe_pb_baidu_both(code: str) -> dict:
             v = df_pe['value'].iloc[-1]
             if v is not None and v != 0:
                 result['pe'] = float(v)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     
     _time.sleep(0.05)  # 避免请求过快
@@ -58,7 +147,8 @@ def fetch_pe_pb_baidu_both(code: str) -> dict:
             v = df_pb['value'].iloc[-1]
             if v is not None and v != 0:
                 result['pb'] = float(v)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     
     return result
@@ -183,7 +273,8 @@ def get_stock_valuations(stock_codes: list[str], stock_prices: dict[str, float] 
                     for k, v in val.items():
                         if k not in result[code]:
                             result[code][k] = v
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             done_count[0] += 1
             if done_count[0] % 50 == 0:
@@ -224,7 +315,8 @@ def get_stock_valuations(stock_codes: list[str], stock_prices: dict[str, float] 
                             for k, v in val.items():
                                 if k not in result[code]:
                                     result[code][k] = v
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
             t1 = _time.time()
             logger.info(f"[MultiSource] THS完成 ({t1-t0:.1f}s)")
@@ -286,7 +378,7 @@ def _get_tushare():
             from app.config import settings
             token = settings.TUSHARE_TOKEN
         except Exception:
-            token = os.environ.get('LH_TUSHARE_TOKEN', '')
+            token = None
         if not token:
             _TUSHARE_INITIALIZED = True
             _TUSHARE_PRO = None
@@ -382,32 +474,3 @@ def fetch_cb_basic_tushare() -> dict:
     except Exception as e:
         logger.debug(f"[Tushare] cb_basic error: {e}")
     return {}
-
-
-# ============================================================
-# 数据源连接/断开 API 端点
-# ============================================================
-from app.data import get_data_source_manager
-
-data_source_manager = get_data_source_manager()
-
-@router.post("/connect")
-async def connect_data_sources():
-    """连接所有已配置的数据源"""
-    try:
-        results = await data_source_manager.connect_all()
-        return {"status": "ok", "results": results}
-    except Exception as e:
-        logger.warning(f"[DataSources] connect failed: {e}")
-        return {"status": "error", "message": str(e)}
-
-@router.post("/disconnect")
-async def disconnect_data_sources():
-    """断开所有已连接的数据源"""
-    try:
-        await data_source_manager.disconnect_all()
-        return {"status": "ok", "results": {}}
-    except Exception as e:
-        logger.warning(f"[DataSources] disconnect failed: {e}")
-        return {"status": "error", "message": str(e)}
-

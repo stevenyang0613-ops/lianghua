@@ -80,6 +80,7 @@ vi.mock('../utils/dataCache', () => ({
   onNetworkChange: vi.fn(() => vi.fn()),
   checkNetworkStatus: vi.fn(() => ({ online: true })),
   isOfflineMode: vi.fn(() => false),
+  clearStatusCacheOnStartup: vi.fn(() => Promise.resolve()),
 }))
 // Mock indexedDB for test environment
 vi.mock('../utils/healthCheck', () => ({

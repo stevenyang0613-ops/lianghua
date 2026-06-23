@@ -6,7 +6,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { healthCheck } from '../services/api'
 import { refreshWsToken } from '../utils/wsInstances'
-import { getApiBase, setWsAuthToken, setBackendPort, setBrowserBackendUrl, probeDirectBackend } from '../utils/config'
+import { getApiBase, setWsAuthToken, setBackendPort, setBrowserBackendUrl, probeDirectBackend, BACKEND_PORT } from '../utils/config'
 import { useAppStore } from '../stores/useAppStore'
 import {
   enableOfflineMode,
@@ -100,7 +100,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
 
     const cleanup = window.electronAPI?.onBackendReady?.((data: any) => {
       if (!isMountedRef.current) return // 组件已卸载，忽略异步回调
-      const port = typeof data === 'object' ? data.port : data
+      const port = typeof data === 'object' ? (data.port ?? BACKEND_PORT) : (data || BACKEND_PORT)
       const token = typeof data === 'object' ? data.ws_auth_token : undefined
       console.log('[StartupLoading] Received backend-ready event, port:', port, 'hasToken:', !!token)
       setBackendPort(port)
@@ -169,7 +169,7 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
     async function check() {
       // 仅在 Electron 环境中等待 window.electronAPI 注入
       // 非 Electron 环境（浏览器开发模式）跳过，避免浪费 5 秒
-      if (typeof window !== 'undefined' && !window.electronAPI) {
+      if (typeof window !== 'undefined' && navigator.userAgent.includes('Electron') && !window.electronAPI) {
         for (let i = 0; i < 50; i++) {
           if (window.electronAPI) break
           await new Promise((r) => setTimeout(r, 100))

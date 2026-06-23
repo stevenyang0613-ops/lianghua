@@ -208,7 +208,8 @@ _TRY_TDX_IMPORTED = False
 try:
     from app.adapters.tdx_adapter import get_tdx_adapter
     _TRY_TDX_IMPORTED = True
-except Exception:
+except Exception as e:
+    logger.debug(f"[Runner] operation suppressed: {e}")
     pass
 
 
@@ -332,37 +333,64 @@ def _build_industry_cache():
 
     result = {}
 
-    # Primary: cninfo
-    try:
-        import akshare as ak
-        df = ak.stock_industry_category_cninfo()
-        for _, r in df.iterrows():
-            code = str(r.get("代码", "")).strip()
-            industry = str(r.get("行业", "")).strip()
-            if code and industry and len(code) == 6 and code.isdigit():
-                result[code] = industry
-        logger.info(f"[Industry] cninfo: {len(result)} stocks")
-    except Exception as e:
-        logger.warning(f"[Industry] cninfo failed: {e}")
+    # Primary: cninfo (skip on macOS sandbox due to py_mini_racer segfault)
+    _try_cninfo = os.environ.get('LH_MGMT_TRY_CNINFO') == '1'
+    if sys.platform == 'darwin' and not _try_cninfo:
+        logger.debug("[Industry] cninfo skipped (macOS sandbox, set LH_MGMT_TRY_CNINFO=1 to enable)")
+    else:
+        try:
+            import akshare as ak
+            df = ak.stock_industry_category_cninfo()
+            for _, r in df.iterrows():
+                code = str(r.get("代码", "")).strip()
+                industry = str(r.get("行业", "")).strip()
+                if code and industry and len(code) == 6 and code.isdigit():
+                    result[code] = industry
+            logger.info(f"[Industry] cninfo: {len(result)} stocks")
+        except Exception as e:
+            logger.warning(f"[Industry] cninfo failed: {e}")
 
-    # Fallback: try EM industry boards for any remaining stocks
+    # Fallback: try EM industry boards for any remaining stocks (HTTP API, no segfault risk)
     if len(result) < 5000:
         try:
-            import akshare as ak2
-            # Try stock_zh_a_spot_em for industry (it has an industry column)
-            spot_df = ak2.stock_zh_a_spot_em()
-            if spot_df is not None and not spot_df.empty:
-                industry_cols = [c for c in spot_df.columns if '行业' in c]
-                if industry_cols:
-                    icol = industry_cols[0]
-                    for _, r in spot_df.iterrows():
-                        code = str(r.get("代码", "")).strip()
-                        industry = str(r.get(icol, "")).strip()
-                        if code and industry and code not in result and len(code) == 6 and code.isdigit():
-                            result[code] = industry
-                    logger.info(f"[Industry] spot_em fallback: {len(result)} stocks")
+            import requests as _req
+            url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f12&fs=m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f20,f21,f43,f44,f45,f46,f47,f48,f49,f50,f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65,f66,f67,f68,f69,f70,f71,f72,f73,f74,f75,f76,f77,f78,f79,f80,f81,f82,f83,f84,f85,f86,f87,f88,f89,f90,f91,f92,f93,f94,f95,f96,f97,f98,f99,f100"
+            resp = _req.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            data = resp.json()
+            items = data.get("data", {}).get("diff", [])
+            # Validate field semantics: f20 should be Chinese industry names
+            sample_industries = [str(item.get("f20", "")).strip() for item in items[:50] if item.get("f20")]
+            chinese_ratio = sum(1 for s in sample_industries if any('\u4e00' <= c <= '\u9fff' for c in s)) / max(len(sample_industries), 1)
+            if chinese_ratio < 0.5:
+                logger.warning(f"[Industry] EM HTTP f20 validation failed: {chinese_ratio*100:.0f}% Chinese, skipping EM fallback")
+            else:
+                count_em = 0
+                for item in items:
+                    code = str(item.get("f12", "")).strip()
+                    industry = str(item.get("f20", "")).strip()  # f20=行业
+                    if code and industry and code not in result and len(code) == 6 and code.isdigit():
+                        result[code] = industry
+                        count_em += 1
+                logger.info(f"[Industry] EM HTTP fallback: {count_em} stocks (f20 validation {chinese_ratio*100:.0f}% Chinese)")
         except Exception as e2:
-            logger.warning(f"[Industry] spot_em fallback failed: {e2}")
+            logger.warning(f"[Industry] EM HTTP fallback failed: {e2}")
+
+    # Fallback 2: THS industry boards
+    if len(result) < 5000:
+        try:
+            import akshare as ak3
+            ths_df = ak3.stock_board_industry_name_ths()
+            if ths_df is not None and not ths_df.empty:
+                count_ths = 0
+                for _, r in ths_df.iterrows():
+                    code = str(r.get("代码", "")).strip()
+                    industry = str(r.get("行业", "")).strip()
+                    if code and industry and code not in result and len(code) == 6 and code.isdigit():
+                        result[code] = industry
+                        count_ths += 1
+                logger.info(f"[Industry] THS fallback: {count_ths} stocks")
+        except Exception as e3:
+            logger.warning(f"[Industry] THS fallback failed: {e3}")
 
     # Final filter: only valid 6-digit numeric codes with non-nan values
     result = {
@@ -433,7 +461,8 @@ def _refresh_spot_cache():
                     if code and len(code) == 6:
                         all_codes.append(code)
                 logger.info(f"[Spot] Got {len(all_codes)} bond stock codes (fallback)")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
 
         if not all_codes:
@@ -471,6 +500,14 @@ def _refresh_spot_cache():
                             continue
                     tencent_volume = _safe_float(fields[6])  # 成交量 (shares)
                     tencent_amount = _safe_float(fields[37]) if len(fields) > 37 else None  # 成交额 (yuan)
+                    # 腾讯 API: fields[6]=成交量(股数), fields[37]=成交额(元)
+                    # 当成交额缺失时，用 成交量*价格 估算，但要求价格>0且估算值合理
+                    volume_val = tencent_amount
+                    if volume_val is None and tencent_volume is not None and price and price > 0:
+                        estimated = tencent_volume * price
+                        # 校验: 估算成交额应大于 1e6 元（排除微量成交）
+                        if estimated > 1e6:
+                            volume_val = round(estimated, 2)
                     out[code] = {
                         "price": price,
                         "open": _safe_float(fields[5]),
@@ -481,8 +518,8 @@ def _refresh_spot_cache():
                         # Main process (data_enrich.py) stores 成交额 from Sina under "volume".
                         # Subprocess must match this schema, otherwise consumers
                         # (market.py, seed_duckdb.py) get share counts instead of yuan.
-                        "volume": tencent_amount if tencent_amount is not None else tencent_volume,
-                        "amount": tencent_amount if tencent_amount is not None else tencent_volume,
+                        "volume": volume_val,
+                        "amount": tencent_amount if tencent_amount is not None else volume_val,
                         "pe": pe if pe and 0 < pe < 1000 else None,
                         "pb": None,  # Tencent API does not provide PB; will be filled by EM ulist
                         "turnover_rate": None,  # Tencent API does not provide turnover_rate
@@ -505,7 +542,8 @@ def _refresh_spot_cache():
                 try:
                     batch_out = fut.result(timeout=20)
                     result.update(batch_out)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[Runner] operation suppressed: {e}")
                     pass
                 done_count += 1
                 if done_count % 50 == 0:
@@ -587,7 +625,8 @@ def _refresh_spot_cache():
                                 if circ_mv_v and circ_mv_v > 0:
                                     if result[code].get('circ_mv') is None:
                                         result[code]['circ_mv'] = round(circ_mv_v / 10000, 2)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     em_done += 1
                     if em_done % 20 == 0:
@@ -654,7 +693,8 @@ def _refresh_fin_cache():
         df_old = None
         try:
             df_old = ak.stock_yjbb_em(date=cagr_date)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] akshare API suppressed: {e}")
             pass
 
         old_rev = {}
@@ -843,7 +883,8 @@ def _refresh_fund_flow_cache():
             try:
                 df_bond = ak.bond_zh_cov()
                 ff_codes = [str(r.get("正股代码", "")).strip() for _, r in df_bond.iterrows() if str(r.get("正股代码", "")).strip().isdigit() and len(str(r.get("正股代码", "")).strip()) == 6]
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] row processing suppressed: {e}")
                 pass
         if ff_codes:
             logger.info(f"[FundFlow] Trying stock_fund_flow_individual fallback for {len(ff_codes)} stocks...")
@@ -863,7 +904,8 @@ def _refresh_fund_flow_cache():
                             entry["net_big"] = _safe_float(latest.get("大单净流入-净额"))
                         if entry.get("net_main") is not None:
                             result2[code] = entry
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[Runner] operation suppressed: {e}")
                     pass
             if result2:
                 merged = {**cached, **result2}
@@ -917,7 +959,8 @@ def _refresh_volatility_cache():
                     code = str(r.get("正股代码", "")).strip()
                     if code and len(code) == 6 and code.isdigit():
                         stock_codes.add(code)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
 
         if not stock_codes:
@@ -937,7 +980,7 @@ def _refresh_volatility_cache():
                 continue
             try:
                 prefix = "sh" if code.startswith("6") else "sz"
-                df_hist = ak.stock_zh_a_hist_tx(symbol=f"{prefix}{code}", adjust="hfwd")
+                df_hist = ak.stock_zh_a_hist_tx(symbol=f"{prefix}{code}", adjust="hfq")
                 if df_hist is None or df_hist.empty:
                     continue
                 closes = df_hist["close"].values.astype(float)
@@ -1015,16 +1058,20 @@ def _refresh_buyback_cache():
         # Source 2: THS fallback
         if len(result) < 100:
             try:
-                df_ths = ak.stock_repurchase_ths()
+                df_ths = getattr(ak, "stock_repurchase_ths", lambda: pd.DataFrame())()
                 if df_ths is not None and len(df_ths) > 0:
                     for _, r in df_ths.iterrows():
                         code = str(r.get("股票代码", "")).strip()
                         if not code:
                             continue
-                        done = _safe_float(r.get("已回购金额")) or _safe_float(r.get("回购金额"))
-                        plan = _safe_float(r.get("计划回购金额区间-上限")) or _safe_float(r.get("计划回购金额"))
-                        amount = done if done and done > 0 else plan
-                        if amount and amount > 0 and code not in result:
+                        done = _safe_float(r.get("已回购金额"))
+                        if done is None:
+                            done = _safe_float(r.get("回购金额"))
+                        plan = _safe_float(r.get("计划回购金额区间-上限"))
+                        if plan is None:
+                            plan = _safe_float(r.get("计划回购金额"))
+                        amount = done if done is not None and done >= 0 else plan
+                        if amount is not None and amount >= 0 and code not in result:
                             result[code] = amount
                     logger.info(f"[Buyback] THS: {len(result)} stocks total")
             except Exception as e_ths:
@@ -1421,7 +1468,8 @@ def _refresh_bond_price_cache():
                             filled += 1
                     if filled:
                         logger.info(f"[BondPrice] TDX: filled {filled} bond prices")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
 
         # ── Fetch coupon rates from EM bond detail ──
@@ -1443,7 +1491,8 @@ def _refresh_bond_price_cache():
                                 result[code]["coupon_rate"] = cr
                                 coupon_map[code] = cr
                                 coupon_count += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     _bp_time.sleep(0.2)  # rate limit
                 if coupon_count:
@@ -1501,7 +1550,7 @@ def _refresh_pledge_cache():
         # Source 2: THS fallback
         if len(result) < 100:
             try:
-                df_ths = ak.stock_pledge_info_ths()
+                df_ths = getattr(ak, "stock_pledge_info_ths", lambda: pd.DataFrame())()
                 if df_ths is not None and len(df_ths) > 0:
                     for _, r in df_ths.iterrows():
                         code = str(r.get("股票代码", "")).strip()
@@ -1550,7 +1599,8 @@ def _refresh_momentum_cache():
                 code = str(r.get("正股代码", "")).strip()
                 if code and len(code) == 6 and code.isdigit():
                     bond_codes.add(code)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
 
         # 从name_map获取全市场股票(5534只)
@@ -1560,7 +1610,8 @@ def _refresh_momentum_cache():
             try:
                 names = _json.loads(stock_names_path.read_text())
                 name_codes = {k for k in names if not k.startswith("_") and len(k) == 6 and k.isdigit()}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] row processing suppressed: {e}")
                 pass
 
         all_codes = list(bond_codes | name_codes)
@@ -1618,7 +1669,8 @@ def _refresh_momentum_cache():
                         if mom:
                             result[code] = mom
                             tdx_found += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     if (i + 1) % 200 == 0:
                         _save_cache(cache_path, result)
@@ -1686,7 +1738,8 @@ def _refresh_momentum_cache():
                         if mom and code not in result:
                             result[code] = mom
                             sina_found += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     if (i + 1) % 100 == 0:
                         _save_cache(cache_path, result)
@@ -1749,7 +1802,8 @@ def _refresh_event_cache():
                     else:
                         score = 0.4
                         title = f"正常 (剩余{days}天)"
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[Runner] operation suppressed: {e}")
                     pass
             result[bc] = {
                 "score": score,
@@ -1798,7 +1852,8 @@ def _refresh_stock_name_cache():
                     sn = str(r.get("正股简称", "")).strip()
                     if sc and sn and sc not in result:
                         result[sc] = sn
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
         # TDX fallback: 补充缺失的股票名称
         if _TRY_TDX_IMPORTED:
@@ -1813,7 +1868,8 @@ def _refresh_stock_name_cache():
                         added += 1
                 if added:
                     logger.info(f"[StockNames] TDX: added {added} names")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
         if result:
             _save_cache(cache_path, result)
@@ -1850,7 +1906,7 @@ def _refresh_main_biz_cache():
         if len(result) < 50:
             try:
                 logger.info("[MainBiz] Industry too small, trying THS industry detail...")
-                df = ak.stock_industry_detail_ths()
+                df = getattr(ak, "stock_industry_detail_ths", lambda: pd.DataFrame())()
                 if df is not None and not df.empty:
                     cols = set(df.columns.astype(str))
                     expected_cols = {"代码", "主营业务", "行业", "板块名称"}
@@ -1932,7 +1988,8 @@ def _load_tdx_concept_boards() -> dict[str, list[str]]:
                     _TDX_CONCEPT_CACHE = data
                     logger.info(f"[TDX] Loaded {len(data)} concept boards from cache")
                     return data
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
 
     if not _TRY_TDX_IMPORTED:
@@ -2113,11 +2170,13 @@ def _build_concept_cache():
                                     _seen_names.add(name)
                                     boards.append((code, name))
                             break
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     _t.sleep(1 + _rnd.random())
                 _t.sleep(0.3 + _rnd.random() * 0.5)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
         return boards
 
@@ -2263,7 +2322,8 @@ def _build_concept_cache():
                 scode = str(c.get("代码", "")).strip()
                 if scode:
                     cons.append(scode.zfill(6))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
 
         if matched_ths_name:
@@ -2375,7 +2435,8 @@ def _build_concept_cache():
                 names_data.pop("_ts", None)
                 all_stocks = {k: (v if isinstance(v, str) else "") for k, v in names_data.items() if k != "_ts" and len(k) == 6 and k.isdigit()}
                 all_stocks = {k: v for k, v in all_stocks.items() if v}
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] row processing suppressed: {e}")
                 pass
 
         if not all_stocks and _TRY_TDX_IMPORTED:
@@ -2383,7 +2444,8 @@ def _build_concept_cache():
                 from app.adapters.tdx_adapter import get_tdx_adapter
                 tdx_securities = get_tdx_adapter().fetch_all_securities(stock_only=True)
                 all_stocks.update(tdx_securities)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
 
         if all_stocks:
@@ -2878,7 +2940,8 @@ def _refresh_north_cache():
                             individual_count = sum(1 for k in result if not k.startswith("summary_"))
                             logger.info(f"[North] NorthSTA: +{individual_count - n_before} new (total {individual_count}, date={_trade_date})")
                             break
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[Runner] operation suppressed: {e}")
                     pass
                 _trade_date = (datetime.strptime(_trade_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
         except Exception as e:
@@ -2896,7 +2959,8 @@ def _refresh_north_cache():
                         continue
                     if len(code) == 6 and code.isdigit():
                         all_a_codes.append(code)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] operation suppressed: {e}")
             pass
         if not all_a_codes:
             try:
@@ -2905,7 +2969,8 @@ def _refresh_north_cache():
                     c = str(r.get("code", "")).strip()
                     if len(c) == 6 and c.isdigit():
                         all_a_codes.append(c)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
         missing_codes = [c for c in all_a_codes if c not in result]
         MAX_PER_RUN = int(os.environ.get("LH_NORTH_MAX_PER_RUN", "500"))
@@ -2933,7 +2998,7 @@ def _refresh_north_cache():
                                     "hold_date": str(last.get("持股日期", "") or last.get("日期", "")).strip(),
                                     "hold_shares": _safe_float(last.get("持股数量", None)),
                                     "hold_market_cap": _safe_float(last.get("持股市值", None)),
-                                    "hold_ratio": _safe_float(last.get("持股占流通股比例", None) or last.get("持股比例", None)),
+                                    "hold_ratio": _safe_float(last.get("持股占流通股比例", None) if last.get("持股占流通股比例", None) is not None else last.get("持股比例", None)),
                                     "close": _safe_float(last.get("收盘价", None)),
                                     "change_pct": _safe_float(last.get("涨跌幅", None)),
                                     "industry": "",
@@ -2962,7 +3027,8 @@ def _refresh_north_cache():
                                 code, data = r
                                 _merge_individual(code, data)
                                 added += 1
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"[Runner] operation suppressed: {e}")
                             pass
                         if done_count % 100 == 0:
                             n_now = sum(1 for k in result if not k.startswith("summary_"))
@@ -3020,7 +3086,8 @@ def _refresh_north_cache():
                                 n = sum(1 for k in result if not k.startswith("summary_"))
                                 logger.info(f"[North] HOLDRANKS: +{n - n_before} new (total {n}, date={trade_date})")
                                 break
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     trade_date = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
             except Exception as e:
@@ -3081,16 +3148,24 @@ def _refresh_north_cache():
                         if code in result and not result[code].get("_summary"):
                             continue
                         entry = {"code": code, "name": str(r.get("名称", "")).strip(), "type": "北向"}
-                        hold_shares = _safe_float(r.get("持股数量")) or _safe_float(r.get("当日持股数量"))
+                        hold_shares = _safe_float(r.get("持股数量"))
+                        if hold_shares is None:
+                            hold_shares = _safe_float(r.get("当日持股数量"))
                         if hold_shares is not None:
                             entry["hold_shares"] = hold_shares
-                        hold_market_cap = _safe_float(r.get("持股市值")) or _safe_float(r.get("当日持股市值"))
+                        hold_market_cap = _safe_float(r.get("持股市值"))
+                        if hold_market_cap is None:
+                            hold_market_cap = _safe_float(r.get("当日持股市值"))
                         if hold_market_cap is not None:
                             entry["hold_market_cap"] = hold_market_cap
-                        hold_ratio = _safe_float(r.get("持股占流通股比例")) or _safe_float(r.get("持股比例"))
+                        hold_ratio = _safe_float(r.get("持股占流通股比例"))
+                        if hold_ratio is None:
+                            hold_ratio = _safe_float(r.get("持股比例"))
                         if hold_ratio is not None:
                             entry["hold_ratio"] = hold_ratio
-                        add_shares = _safe_float(r.get("增持数量")) or _safe_float(r.get("增减持股数量"))
+                        add_shares = _safe_float(r.get("增持数量"))
+                        if add_shares is None:
+                            add_shares = _safe_float(r.get("增减持股数量"))
                         if add_shares is not None:
                             entry["add_shares"] = add_shares
                         if len(entry) > 3:
@@ -3354,7 +3429,7 @@ def _refresh_margin_cache():
         if _with_rzye < 500:
             try:
                 import akshare as ak
-                df_underlying = ak.stock_margin_underlying_em()
+                df_underlying = getattr(ak, "stock_margin_underlying_em", lambda: pd.DataFrame())()
                 if df_underlying is not None and len(df_underlying) > 0:
                     count_underlying = 0
                     for _, r in df_underlying.iterrows():
@@ -3363,7 +3438,9 @@ def _refresh_margin_cache():
                             continue
                         if code in result and isinstance(result.get(code), dict) and result[code].get("rzye") is not None:
                             continue
-                        balance = _safe_float(r.get("融资余额")) or _safe_float(r.get("融资融券余额"))
+                        balance = _safe_float(r.get("融资余额"))
+                        if balance is None:
+                            balance = _safe_float(r.get("融资融券余额"))
                         if balance is not None:
                             result[code] = {
                                 "code": code,
@@ -3601,7 +3678,7 @@ def _refresh_block_trade_cache():
 
         # 2. 补充: stock_dzjy_mrmx (逐笔数据 - 仅补充 mrtj 未覆盖的 A 股)
         try:
-            df2 = ak.stock_dzjy_mrmx(start_date=start_d, end_date=end_d)
+            df2 = ak.stock_dzjy_mrmx(symbol="A股", start_date=start_d, end_date=end_d)
             added = 0
             for _, r in df2.iterrows():
                 code = str(r.get("证券代码", "")).strip()
@@ -3867,7 +3944,8 @@ def _refresh_holder_num_cache():
                 ind = json.loads(industry_path.read_text())
                 ind.pop("_ts", None)
                 all_codes = [c for c in ind.keys() if c and len(c) == 6 and c.isdigit()]
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] row processing suppressed: {e}")
                 pass
         if not all_codes:
             all_codes = list(cached.keys()) if cached else []
@@ -3878,7 +3956,8 @@ def _refresh_holder_num_cache():
             df_b = ak.bond_zh_cov()
             bond_stocks = set(str(r.get("正股代码", "")).strip() for _, r in df_b.iterrows())
             bond_stocks = {c for c in bond_stocks if len(c) == 6 and c.isdigit()}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Runner] row processing suppressed: {e}")
             pass
         # 如果 bond_zh_cov 失败, 从 bond_outstanding 缓存获取正股代码
         if not bond_stocks:
@@ -3892,7 +3971,8 @@ def _refresh_holder_num_cache():
                             sc = val.get("stock_code", "")
                             if sc and len(sc) == 6 and sc.isdigit():
                                 bond_stocks.add(sc)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
         # 也从 spot 缓存中的 bond_price 提取正股代码
         if not bond_stocks:
@@ -3903,7 +3983,8 @@ def _refresh_holder_num_cache():
                     bp_data.pop("_ts", None)
                     # bond_price 键是债券代码,需要另一种方式获取正股代码
                     # 跳过,无法从债券代码推导正股代码
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
 
         # 优先可转债正股，但不再硬性截断到1500只，而是使用全A股列表
@@ -3979,7 +4060,8 @@ def _refresh_holder_num_cache():
                             "stat_date": str(last.get("统计截止日期", str(last.get("日期", "")))).strip()[:10],
                             "change_pct": _safe_float(last.get("较上期变化", last.get("股东人数变化", None))),
                         }
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
             return None
 
@@ -4004,7 +4086,8 @@ def _refresh_holder_num_cache():
                         v = fut.result(timeout=20)
                         if v and v.get("holder_num"):
                             result[v["code"]] = v
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     done += 1
                     if done % 50 == 0:
@@ -4032,7 +4115,8 @@ def _refresh_holder_num_cache():
                         v = fut.result(timeout=20)
                         if v and v.get("holder_num"):
                             result[v["code"]] = v
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     done += 1
                     if done % 25 == 0:
@@ -4056,7 +4140,8 @@ def _refresh_holder_num_cache():
                         v = f.result(timeout=20)
                         if v and v.get("holder_num"):
                             result[v["code"]] = v
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                     _t.sleep(0.2 + random.random() * 0.5)
 
@@ -4067,7 +4152,7 @@ def _refresh_holder_num_cache():
         if len(result) < 100:
             try:
                 import akshare as ak
-                df_hn = ak.stock_hold_num_em()
+                df_hn = getattr(ak, "stock_hold_num_em", lambda: pd.DataFrame())()
                 if df_hn is not None and len(df_hn) > 0:
                     count_hn = 0
                     for _, r in df_hn.iterrows():
@@ -4076,8 +4161,12 @@ def _refresh_holder_num_cache():
                             continue
                         if code in result:
                             continue
-                        holders = _safe_float(r.get("股东户数")) or _safe_float(r.get("股东人数")) or _safe_float(r.get("股东总数"))
-                        if holders and holders > 0:
+                        holders = _safe_float(r.get("股东户数"))
+                        if holders is None:
+                            holders = _safe_float(r.get("股东人数"))
+                        if holders is None:
+                            holders = _safe_float(r.get("股东总数"))
+                        if holders is not None and holders >= 0:
                             result[code] = {
                                 "code": code,
                                 "name": str(r.get("股票简称", "")).strip(),
@@ -4102,8 +4191,12 @@ def _refresh_holder_num_cache():
                         df_gdhs = ak.stock_zh_a_gdhs(stock=code)
                         if df_gdhs is not None and len(df_gdhs) > 0:
                             last = df_gdhs.iloc[-1]
-                            hn = _safe_float(last.get("股东人数")) or _safe_float(last.get("股东户数")) or _safe_float(last.get("股东总数"))
-                            if hn and hn > 0:
+                            hn = _safe_float(last.get("股东人数"))
+                            if hn is None:
+                                hn = _safe_float(last.get("股东户数"))
+                            if hn is None:
+                                hn = _safe_float(last.get("股东总数"))
+                            if hn is not None and hn >= 0:
                                 result[code] = {
                                     "code": code,
                                     "name": str(last.get("股票简称", "")).strip(),
@@ -4113,7 +4206,8 @@ def _refresh_holder_num_cache():
                                     "_data_source": "stock_zh_a_gdhs",
                                 }
                                 count_gdhs += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
                 logger.info(f"[HolderNum] stock_zh_a_gdhs: {count_gdhs} stocks added")
             except Exception as e_gdhs:
@@ -4211,7 +4305,7 @@ def _refresh_earnings_forecast_cache():
                             ths_periods.append(p)
                 for period in ths_periods:
                     try:
-                        df_ths = ak.stock_yjyg_ths(date=period)
+                        df_ths = getattr(ak, "stock_yjyg_ths", lambda date: pd.DataFrame())(date=period)
                         if df_ths is not None and len(df_ths) > 0:
                             count = 0
                             for _, r in df_ths.iterrows():
@@ -4433,10 +4527,10 @@ def _refresh_restricted_release_cache():
                     "actual_shares": _safe_float(r.get("实际解禁数量", None)),
                     "actual_market_cap": actual_mc,
                     "amount": amount,
-                    "ratio_total": _safe_float(r.get("占总股本比例", None) or r.get("占总市值比例", None)),
+                    "ratio_total": _safe_float(r.get("占总股本比例", None) if r.get("占总股本比例", None) is not None else r.get("占总市值比例", None)),
                     "ratio_circulate": _safe_float(r.get("占流通市值比例", None)),
                     "lock_type": str(r.get("限售股类型", "")).strip(),
-                    "shareholder_count": _safe_int(r.get("股东人数", None) or r.get("解禁股东数", None)),
+                    "shareholder_count": _safe_int(r.get("股东人数", None) if r.get("股东人数", None) is not None else r.get("解禁股东数", None)),
                     "announce_date": str(r.get("公告日期", "")).strip(),
                     "_per_stock": True,
                 }
@@ -4503,6 +4597,13 @@ def _refresh_restricted_release_cache():
         return len(cached or {})
 
 
+def _spot_then_vol():
+    """先刷新 spot 缓存，再刷新波动率缓存，确保 vol 读取 spot 数据时不为空。"""
+    spot_count = _refresh_spot_cache()
+    vol_count = _refresh_volatility_cache()
+    return spot_count, vol_count
+
+
 def main():
     parser = argparse.ArgumentParser(description="Data Enrichment Runner")
     parser.add_argument("--industry", action="store_true", help="Run industry cache")
@@ -4548,7 +4649,11 @@ def main():
     if args.all or args.debt:
         tasks.append(("Debt", _refresh_debt_cache))
     if args.all or args.vol:
-        tasks.append(("Vol", _refresh_volatility_cache))
+        if args.all:
+            # In --all mode, chain spot+vol to avoid race condition (AGENTS.md #34)
+            tasks.append(("Spot+Vol", _spot_then_vol))
+        else:
+            tasks.append(("Vol", _refresh_volatility_cache))
     if args.all or args.buyback:
         tasks.append(("Buyback", _refresh_buyback_cache))
     if args.all or args.mgmt:

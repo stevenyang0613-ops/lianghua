@@ -311,6 +311,8 @@ def percentile_score(value: float, lower: float, upper: float) -> float:
         return float('nan')
     if math.isnan(value):
         return float('nan')
+    if upper == lower:
+        return 50.0
     if value <= lower:
         return 100.0
     if value >= upper:

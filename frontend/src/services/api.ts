@@ -1,11 +1,11 @@
 import type { ConvertibleQuote } from '../types'
-import { saveToCache, getFromCache, getCacheExpiryStatus, getCacheEntry, migrateLocalStorageCache } from '../utils/dataCache'
+import { saveToCache, getFromCache, getCacheExpiryStatus, getCacheEntry } from '../utils/dataCache'
 import { getApiBase, setWsAuthToken } from '../utils/config'
 import { recordApiPerformance } from '../utils/performanceMonitor'
 import { withRetry } from '../utils/retryStrategy'
 import { logApiError } from '../utils/errorLogger'
 
-const BASE = getApiBase() + '/api/v1'
+const getBase = () => getApiBase() + "/api/v1"
 
 // 重试配置
 const RETRY_CONFIG = {
@@ -150,10 +150,16 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
   if (isOfflineMode() && cacheKey) {
     const startTime = Date.now()
     const cached = await getFromCache<T>(cacheKey)
-    if (cached) {
-      console.log(`[API] Offline mode: using cached data for ${cacheKey}`)
-      recordApiPerformance(`cached_${apiName}`, Date.now() - startTime)
-      return cached
+    if (cached && typeof cached === 'object') {
+      const c = cached as any
+      // 离线模式也不返回错误状态的缓存数据
+      if (c.success !== false && !c.error && c.status !== 'error') {
+        console.log(`[API] Offline mode: using cached data for ${cacheKey}`)
+        recordApiPerformance(`cached_${apiName}`, Date.now() - startTime)
+        return cached
+      } else {
+        console.log(`[API] Offline mode: cached data is error state, skipping ${cacheKey}`)
+      }
     }
   }
 
@@ -166,8 +172,22 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
       recordApiPerformance(apiName, duration)
 
       // 缓存数据（仅使用 IndexedDB，避免 localStorage 5MB 限制）
+      // 不缓存包含错误状态的数据，避免错误状态被长期缓存
       if (cacheKey) {
-        saveToCache(cacheKey, data, cacheTtl)
+        const isErrorState = (data: any) => {
+          if (!data || typeof data !== 'object') return false
+          if (data.success === false) return true
+          if (data.error) return true
+          if (data.status === 'error') return true
+          return false
+        }
+        if (!isErrorState(data) && cacheTtl > 0) {
+          saveToCache(cacheKey, data, cacheTtl)
+        } else if (isErrorState(data)) {
+          console.log(`[API] Error state returned, skipping cache for ${cacheKey}`)
+        } else {
+          console.log(`[API] TTL=0, skipping cache for ${cacheKey}`)
+        }
       }
 
       return data
@@ -179,12 +199,17 @@ async function fetchJSON<T>(url: string, cacheKey?: string, cacheTtl: number = 6
     // 记录 API 错误
     logApiError(apiName, error as Error)
 
-    // 网络错误时尝试使用缓存
+    // 网络错误时尝试使用缓存（但跳过错误状态缓存）
     if (cacheKey) {
       const cached = await getFromCache<T>(cacheKey)
-      if (cached) {
-        console.log(`[API] Network error: using cached data for ${cacheKey}`)
-        return cached
+      if (cached && typeof cached === 'object') {
+        const c = cached as any
+        if (c.success !== false && !c.error && c.status !== 'error') {
+          console.log(`[API] Network error: using cached data for ${cacheKey}`)
+          return cached
+        } else {
+          console.log(`[API] Network error: cached data is error state, skipping ${cacheKey}`)
+        }
       }
     }
     throw error
@@ -202,18 +227,32 @@ export async function fetchAllQuotes(): Promise<{ total: number; bonds: Converti
       }
     } catch { /* fallback to HTTP */ }
   }
-  return fetchJSON(`${BASE}/market/quotes`, 'market_quotes', 5 * 60 * 1000) // 5分钟缓存
+  return fetchJSON(`${getBase()}/market/quotes`, 'market_quotes', 5 * 60 * 1000) // 5分钟缓存
 }
 
 export async function fetchExchangeableBonds(): Promise<{ total: number; bonds: ConvertibleQuote[]; updated_at: string }> {
-  return fetchJSON(`${BASE}/market/exchangeable`, 'exchangeable_bonds', 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/market/exchangeable`, 'exchangeable_bonds', 5 * 60 * 1000)
 }
 
 export async function fetchQuote(code: string): Promise<ConvertibleQuote> {
-  return fetchJSON(`${BASE}/market/quotes/${code}`)
+  return fetchJSON(`${getBase()}/market/quotes/${code}`)
 }
 
-export async function healthCheck(): Promise<{ status: string; app: string; market_running: boolean; db_ok: boolean; ws_auth_token?: string }> {
+export async function healthCheck(): Promise<{
+  status: string
+  app: string
+  market_running: boolean
+  db_ok: boolean
+  ws_auth_token?: string
+  data_sources?: {
+    mx: { configured: boolean }
+    tavily: { configured: boolean }
+    minimax: { configured: boolean }
+    deepseek: { configured: boolean }
+    github: { configured: boolean }
+    akshare_proxy: { enabled: boolean }
+  }
+}> {
   return fetchJSON(getApiBase() + '/health')
 }
 
@@ -318,16 +357,16 @@ export interface StrategyInfo {
 }
 
 export async function fetchStrategies(): Promise<StrategyInfo[]> {
-  const resp = await fetchJSON<{ strategies: StrategyInfo[] }>(BASE + '/backtest/strategies')
+  const resp = await fetchJSON<{ strategies: StrategyInfo[] }>(getBase() + '/backtest/strategies')
   return resp.strategies
 }
 
 export async function runBacktest(req: BacktestRequest): Promise<{ type: string; result: BacktestResult | OptimizationResult }> {
-  return postJSON<{ type: string; result: BacktestResult | OptimizationResult }>(BASE + '/backtest/run', req)
+  return postJSON<{ type: string; result: BacktestResult | OptimizationResult }>(getBase() + '/backtest/run', req)
 }
 
 export async function runOptimization(req: BacktestRequest): Promise<{ success: boolean; data_source?: string; result: OptimizationResult }> {
-  return postJSON<{ success: boolean; data_source?: string; result: OptimizationResult }>(BASE + '/backtest/optimize', req)
+  return postJSON<{ success: boolean; data_source?: string; result: OptimizationResult }>(getBase() + '/backtest/optimize', req)
 }
 
 export interface BacktestProgressEvent {
@@ -380,7 +419,7 @@ export function runBacktestStream(
        sseHeaders['Authorization'] = `Bearer ${wsToken}`
      }
 
-     const sseUrl = BASE + '/backtest/run-stream'
+     const sseUrl = getBase() + '/backtest/run-stream'
 
      fetch(sseUrl, {
       method: 'POST',
@@ -514,31 +553,31 @@ export interface FundPoint {
 }
 
 export async function fetchAccount(): Promise<Account> {
-  return fetchJSON(`${BASE}/trade/account`)
+  return fetchJSON(`${getBase()}/trade/account`)
 }
 
 export async function fetchPositions(): Promise<{ positions: Position[] }> {
-  return fetchJSON(`${BASE}/trade/positions`)
+  return fetchJSON(`${getBase()}/trade/positions`)
 }
 
 export async function fetchOrders(): Promise<{ orders: TradeOrder[] }> {
-  return fetchJSON(`${BASE}/trade/orders`)
+  return fetchJSON(`${getBase()}/trade/orders`)
 }
 
 export async function placeOrder(req: PlaceOrderRequest): Promise<TradeOrder> {
-  return postJSON<TradeOrder>(`${BASE}/trade/order`, req)
+  return postJSON<TradeOrder>(`${getBase()}/trade/order`, req)
 }
 
 export async function cancelOrder(orderId: string): Promise<{ status: string }> {
-  return postJSON<{ status: string }>(`${BASE}/trade/orders/${orderId}/cancel`, {})
+  return postJSON<{ status: string }>(`${getBase()}/trade/orders/${orderId}/cancel`, {})
 }
 
 export async function resetAccount(): Promise<{ status: string }> {
-  return postJSON<{ status: string }>(`${BASE}/trade/reset`, {})
+  return postJSON<{ status: string }>(`${getBase()}/trade/reset`, {})
 }
 
 export async function fetchFundCurve(): Promise<{ points: FundPoint[] }> {
-  return fetchJSON(`${BASE}/trade/fund-curve`)
+  return fetchJSON(`${getBase()}/trade/fund-curve`)
 }
 
 // ── 分析工具 API ──
@@ -637,27 +676,27 @@ function _buildParams(opts?: AnalysisQueryOpts): string {
 }
 
 export async function fetchForcedRedemption(opts?: AnalysisQueryOpts): Promise<{ total: number; high_risk_count: number; items: ForcedRedemptionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/forced-redemption${_buildParams(opts)}`, 'analysis_forced_redemption')
+  return fetchJSON(`${getBase()}/analysis/forced-redemption${_buildParams(opts)}`, 'analysis_forced_redemption')
 }
 
 export async function fetchDualLowRanking(opts?: AnalysisQueryOpts): Promise<{ total: number; items: DualLowItem[] }> {
-  return fetchJSON(`${BASE}/analysis/dual-low-ranking${_buildParams(opts)}`, 'analysis_dual_low_ranking')
+  return fetchJSON(`${getBase()}/analysis/dual-low-ranking${_buildParams(opts)}`, 'analysis_dual_low_ranking')
 }
 
 export async function fetchPulseScan(opts?: AnalysisQueryOpts): Promise<{ total: number; high_severity_count: number; items: PulseItem[] }> {
-  return fetchJSON(`${BASE}/analysis/pulse-scan${_buildParams(opts)}`, 'analysis_pulse_scan')
+  return fetchJSON(`${getBase()}/analysis/pulse-scan${_buildParams(opts)}`, 'analysis_pulse_scan')
 }
 
 export async function fetchRevisionProbability(opts?: AnalysisQueryOpts): Promise<{ total: number; high_probability_count: number; items: RevisionItem[] }> {
-  return fetchJSON(`${BASE}/analysis/revision-probability${_buildParams(opts)}`, 'analysis_revision_probability')
+  return fetchJSON(`${getBase()}/analysis/revision-probability${_buildParams(opts)}`, 'analysis_revision_probability')
 }
 
 export async function fetchStockCorrelation(opts?: AnalysisQueryOpts): Promise<{ total: number; strong_correlation_count: number; items: StockCorrelationItem[] }> {
-  return fetchJSON(`${BASE}/analysis/stock-correlation${_buildParams(opts)}`, 'analysis_stock_correlation')
+  return fetchJSON(`${getBase()}/analysis/stock-correlation${_buildParams(opts)}`, 'analysis_stock_correlation')
 }
 
 export function getAnalysisExportUrl(tabKey: string, opts?: AnalysisQueryOpts): string {
-  return `${BASE}/analysis/${tabKey}/export${_buildParams(opts)}`
+  return `${getBase()}/analysis/${tabKey}/export${_buildParams(opts)}`
 }
 
 // ── 信号 API ──
@@ -689,23 +728,23 @@ export interface StrategyInfoItem {
 }
 
 export async function fetchSignals(): Promise<SignalResponse> {
-  return fetchJSON(`${BASE}/signals`)
+  return fetchJSON(`${getBase()}/signals`)
 }
 
 export async function fetchAvailableSignalsStrategies(): Promise<{ strategies: StrategyInfoItem[] }> {
-  return fetchJSON(`${BASE}/signals/available-strategies`)
+  return fetchJSON(`${getBase()}/signals/available-strategies`)
 }
 
 export async function setActiveStrategies(strategies: string[]): Promise<{ active_strategies: string[] }> {
-  return postJSON<{ active_strategies: string[] }>(`${BASE}/signals/strategies`, { strategies })
+  return postJSON<{ active_strategies: string[] }>(`${getBase()}/signals/strategies`, { strategies })
 }
 
 export async function executeSignal(code: string): Promise<{ executed: number; orders: TradeOrder[] }> {
-  return postJSON<{ executed: number; orders: TradeOrder[] }>(`${BASE}/signals/${code}/execute`, {})
+  return postJSON<{ executed: number; orders: TradeOrder[] }>(`${getBase()}/signals/${code}/execute`, {})
 }
 
 export async function batchExecuteSignals(): Promise<{ executed: number; orders: TradeOrder[]; message?: string }> {
-  return postJSON<{ executed: number; orders: TradeOrder[]; message?: string }>(`${BASE}/signals/batch-execute`, {})
+  return postJSON<{ executed: number; orders: TradeOrder[]; message?: string }>(`${getBase()}/signals/batch-execute`, {})
 }
 
 export interface ExecutedPosition {
@@ -718,7 +757,7 @@ export interface ExecutedPosition {
 }
 
 export async function fetchExecutedPositions(limit = 20, offset = 0): Promise<{ positions: ExecutedPosition[]; total: number }> {
-  return fetchJSON<{ positions: ExecutedPosition[]; total: number }>(`${BASE}/signals/executed-positions?limit=${limit}&offset=${offset}`)
+  return fetchJSON<{ positions: ExecutedPosition[]; total: number }>(`${getBase()}/signals/executed-positions?limit=${limit}&offset=${offset}`)
 }
 
 export interface SignalHistoryItem {
@@ -747,15 +786,15 @@ export async function fetchSignalHistory(strategy?: string, code?: string, limit
   if (limit) params.set('limit', String(limit))
   if (offset) params.set('offset', String(offset))
   const qs = params.toString()
-  return fetchJSON(`${BASE}/signals/history${qs ? '?' + qs : ''}`)
+  return fetchJSON(`${getBase()}/signals/history${qs ? '?' + qs : ''}`)
 }
 
 export async function fetchSignalStats(): Promise<SignalStats> {
-  return fetchJSON(`${BASE}/signals/stats`)
+  return fetchJSON(`${getBase()}/signals/stats`)
 }
 
 export async function setAutoExecuteConfig(minConfidence: number): Promise<{ auto_execute_min_confidence: number }> {
-  return postJSON<{ auto_execute_min_confidence: number }>(`${BASE}/signals/auto-execute`, { min_confidence: minConfidence })
+  return postJSON<{ auto_execute_min_confidence: number }>(`${getBase()}/signals/auto-execute`, { min_confidence: minConfidence })
 }
 
 export interface StrategyVerifyResult {
@@ -781,19 +820,19 @@ export interface StrategyVerifyResult {
 }
 
 export async function verifyStrategy(strategy: string, startDate?: string, endDate?: string): Promise<StrategyVerifyResult> {
-  return postJSON<StrategyVerifyResult>(`${BASE}/signals/verify-strategy`, { strategy, start_date: startDate || '', end_date: endDate || '' })
+  return postJSON<StrategyVerifyResult>(`${getBase()}/signals/verify-strategy`, { strategy, start_date: startDate || '', end_date: endDate || '' })
 }
 
 export async function cleanupSignalHistory(keepDays: number = 30): Promise<{ status: string; keep_days: number }> {
-  return postJSON<{ status: string; keep_days: number }>(`${BASE}/signals/cleanup?keep_days=${keepDays}`, {})
+  return postJSON<{ status: string; keep_days: number }>(`${getBase()}/signals/cleanup?keep_days=${keepDays}`, {})
 }
 
 export async function setStrategyParams(strategy: string, params: Record<string, unknown>): Promise<{ strategy: string; params: Record<string, unknown> }> {
-  return putJSON<{ strategy: string; params: Record<string, unknown> }>(`${BASE}/signals/strategy-params`, { strategy, params })
+  return putJSON<{ strategy: string; params: Record<string, unknown> }>(`${getBase()}/signals/strategy-params`, { strategy, params })
 }
 
 export async function invalidateSignalCache(strategy?: string): Promise<{ status: string; invalidated: string }> {
-  return postJSON<{ status: string; invalidated: string }>(`${BASE}/signals/invalidate-cache`, strategy ? { strategy } : {})
+  return postJSON<{ status: string; invalidated: string }>(`${getBase()}/signals/invalidate-cache`, strategy ? { strategy } : {})
 }
 
 export function getSignalExportCsvUrl(strategy?: string, code?: string, limit?: number): string {
@@ -802,7 +841,7 @@ export function getSignalExportCsvUrl(strategy?: string, code?: string, limit?: 
   if (code) params.set('code', code)
   if (limit) params.set('limit', String(limit))
   const qs = params.toString()
-  return `${BASE}/signals/export-csv${qs ? '?' + qs : ''}`
+  return `${getBase()}/signals/export-csv${qs ? '?' + qs : ''}`
 }
 
 export interface DedupConfig {
@@ -811,11 +850,11 @@ export interface DedupConfig {
 }
 
 export async function fetchDedupConfig(): Promise<DedupConfig> {
-  return fetchJSON(`${BASE}/signals/dedup-config`)
+  return fetchJSON(`${getBase()}/signals/dedup-config`)
 }
 
 export async function setDedupConfig(config: Partial<DedupConfig>): Promise<DedupConfig> {
-  return putJSON<DedupConfig>(`${BASE}/signals/dedup-config`, config)
+  return putJSON<DedupConfig>(`${getBase()}/signals/dedup-config`, config)
 }
 
 export interface DedupPreset {
@@ -825,7 +864,7 @@ export interface DedupPreset {
 }
 
 export async function fetchDedupPresets(): Promise<Record<string, DedupPreset>> {
-  const data = await fetchJSON<{ presets: Record<string, DedupPreset> }>(`${BASE}/signals/dedup-presets`)
+  const data = await fetchJSON<{ presets: Record<string, DedupPreset> }>(`${getBase()}/signals/dedup-presets`)
   return data.presets
 }
 
@@ -892,11 +931,11 @@ export async function fetchScoreRanking(params: ScoreRankingParams = {}): Promis
   if (params.weight_price) searchParams.set('weight_price', String(params.weight_price))
 
   const qs = searchParams.toString()
-  return fetchJSON(`${BASE}/analysis/score-ranking${qs ? '?' + qs : ''}`, 'score_ranking', 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking${qs ? '?' + qs : ''}`, 'score_ranking', 5 * 60 * 1000)
 }
 
 export async function fetchFullScoreRanking(): Promise<{ total: number; items: ScoreRankingItem[] }> {
-  return fetchJSON(`${BASE}/analysis/score-ranking/full`, 'full_score_ranking', 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking/full`, 'full_score_ranking', 5 * 60 * 1000)
 }
 
 // ── 评分历史 API ──
@@ -918,23 +957,23 @@ export interface ScoreHistoryItem {
 }
 
 export async function fetchScoreHistory(code: string, days: number = 30): Promise<{ code: string; days: number; items: ScoreHistoryItem[] }> {
-  return fetchJSON(`${BASE}/analysis/score-ranking/history/${code}?days=${days}`, `score_history_${code}`, 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking/history/${code}?days=${days}`, `score_history_${code}`, 5 * 60 * 1000)
 }
 
 export async function fetchScoreHistoryBatch(codes: string[], days: number = 30): Promise<{ codes: string[]; days: number; data: Record<string, ScoreHistoryItem[]> }> {
-  return fetchJSON(`${BASE}/analysis/score-ranking/history-batch?codes=${codes.join(',')}&days=${days}`, 'score_history_batch', 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking/history-batch?codes=${codes.join(',')}&days=${days}`, 'score_history_batch', 5 * 60 * 1000)
 }
 
 export async function fetchScoreDates(limit: number = 30): Promise<{ dates: string[] }> {
-  return fetchJSON(`${BASE}/analysis/score-ranking/dates?limit=${limit}`, 'score_dates', 60 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking/dates?limit=${limit}`, 'score_dates', 60 * 60 * 1000)
 }
 
 export async function fetchDailyScoreRanking(date: string, topN: number = 60): Promise<{ date: string; top_n: number; items: ScoreHistoryItem[] }> {
-  return fetchJSON(`${BASE}/analysis/score-ranking/daily/${date}?top_n=${topN}`, `daily_score_${date}`, 60 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-ranking/daily/${date}?top_n=${topN}`, `daily_score_${date}`, 60 * 60 * 1000)
 }
 
 export async function saveScoreSnapshot(): Promise<{ status: string; saved: number }> {
-  return postJSON<{ status: string; saved: number }>(`${BASE}/analysis/score-ranking/save-snapshot`, {})
+  return postJSON<{ status: string; saved: number }>(`${getBase()}/analysis/score-ranking/save-snapshot`, {})
 }
 
 // ── 评分预警 API ──
@@ -961,19 +1000,19 @@ export interface ScoreAlertRequest {
 }
 
 export async function addScoreAlert(alert: ScoreAlertRequest): Promise<{ status: string; id: number }> {
-  return postJSON<{ status: string; id: number }>(`${BASE}/analysis/score-alerts`, alert)
+  return postJSON<{ status: string; id: number }>(`${getBase()}/analysis/score-alerts`, alert)
 }
 
 export async function fetchScoreAlerts(enabledOnly: boolean = false): Promise<{ alerts: ScoreAlert[] }> {
-  return fetchJSON(`${BASE}/analysis/score-alerts?enabled_only=${enabledOnly}`, 'score_alerts', 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/score-alerts?enabled_only=${enabledOnly}`) // 实时告警不缓存
 }
 
 export async function removeScoreAlert(alertId: number): Promise<{ status: string }> {
-  return deleteJSON<{ status: string }>(`${BASE}/analysis/score-alerts/${alertId}`)
+  return deleteJSON<{ status: string }>(`${getBase()}/analysis/score-alerts/${alertId}`)
 }
 
 export async function checkScoreAlerts(): Promise<{ triggered: Array<{ alert: ScoreAlert; current_value: number; triggered_at: string }>; total_alerts: number }> {
-  return postJSON<{ triggered: Array<{ alert: ScoreAlert; current_value: number; triggered_at: string }>; total_alerts: number }>(`${BASE}/analysis/score-alerts/check`, {})
+  return postJSON<{ triggered: Array<{ alert: ScoreAlert; current_value: number; triggered_at: string }>; total_alerts: number }>(`${getBase()}/analysis/score-alerts/check`, {})
 }
 
 // ── 评分回测 API ──
@@ -1040,7 +1079,7 @@ export async function fetchScoreBacktestAccuracy(
   holdDays: number = 5
 ): Promise<ScoreBacktestAccuracy> {
   return fetchJSON(
-    `${BASE}/analysis/score-backtest/accuracy?start_date=${startDate}&end_date=${endDate}&top_n=${topN}&hold_days=${holdDays}`,
+    `${getBase()}/analysis/score-backtest/accuracy?start_date=${startDate}&end_date=${endDate}&top_n=${topN}&hold_days=${holdDays}`,
     'score_backtest_accuracy',
     5 * 60 * 1000
   )
@@ -1052,7 +1091,7 @@ export async function fetchTopPerformers(
   holdDays: number = 5
 ): Promise<TopPerformersResult> {
   return fetchJSON(
-    `${BASE}/analysis/score-backtest/top-performers?snapshot_date=${snapshotDate}&top_n=${topN}&hold_days=${holdDays}`,
+    `${getBase()}/analysis/score-backtest/top-performers?snapshot_date=${snapshotDate}&top_n=${topN}&hold_days=${holdDays}`,
     `top_performers_${snapshotDate}`,
     5 * 60 * 1000
   )
@@ -1064,7 +1103,7 @@ export async function fetchRankingComparison(
   topN: number = 30
 ): Promise<{ date1: string; date2: string; top_n: number; comparison: RankingComparison[] }> {
   return fetchJSON(
-    `${BASE}/analysis/score-backtest/ranking-comparison?date1=${date1}&date2=${date2}&top_n=${topN}`,
+    `${getBase()}/analysis/score-backtest/ranking-comparison?date1=${date1}&date2=${date2}&top_n=${topN}`,
     `ranking_comparison_${date1}_${date2}`,
     5 * 60 * 1000
   )
@@ -1097,19 +1136,19 @@ export interface BacktestHistoryDetail {
 }
 
 export async function fetchBacktestHistory(limit: number = 20, offset: number = 0): Promise<{ results: BacktestHistoryItem[]; total: number }> {
-  return fetchJSON(`${BASE}/analysis/backtest-history?limit=${limit}&offset=${offset}`, `backtest_history_${offset}`, 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/backtest-history?limit=${limit}&offset=${offset}`, `backtest_history_${offset}`, 60 * 1000)
 }
 
 export async function fetchBacktestDetail(backtestId: number): Promise<{ summary: BacktestHistoryItem; details: BacktestHistoryDetail[] }> {
-  return fetchJSON(`${BASE}/analysis/backtest-history/${backtestId}`, `backtest_detail_${backtestId}`, 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/backtest-history/${backtestId}`, `backtest_detail_${backtestId}`, 5 * 60 * 1000)
 }
 
 export async function deleteBacktestResult(backtestId: number): Promise<{ deleted: boolean; backtest_id: number }> {
-  return deleteJSON<{ deleted: boolean; backtest_id: number }>(`${BASE}/analysis/backtest-history/${backtestId}`)
+  return deleteJSON<{ deleted: boolean; backtest_id: number }>(`${getBase()}/analysis/backtest-history/${backtestId}`)
 }
 
 export async function cleanupBacktestHistory(keepDays: number = 90): Promise<{ deleted_count: number; keep_days: number }> {
-  return postJSON<{ deleted_count: number; keep_days: number }>(`${BASE}/analysis/backtest-history/cleanup?keep_days=${keepDays}`, {})
+  return postJSON<{ deleted_count: number; keep_days: number }>(`${getBase()}/analysis/backtest-history/cleanup?keep_days=${keepDays}`, {})
 }
 
 
@@ -1239,7 +1278,7 @@ export async function fetchXibuRanking(
   marketEnv: 'bull' | 'bear' | 'neutral' = 'neutral'
 ): Promise<XibuRankingResponse> {
   return fetchJSON(
-    `${BASE}/analysis/xibu-ranking?top_n=${topN}&aum_level=${aumLevel}&market_env=${marketEnv}`,
+    `${getBase()}/analysis/xibu-ranking?top_n=${topN}&aum_level=${aumLevel}&market_env=${marketEnv}`,
     `xibu_ranking_v2_${topN}_${aumLevel}_${marketEnv}`,
     5 * 60 * 1000
   )
@@ -1250,7 +1289,7 @@ export async function fetchXibuSingleScore(
   aumLevel: 'small' | 'medium' | 'large' = 'small'
 ): Promise<XibuSingleScore> {
   return fetchJSON(
-    `${BASE}/analysis/xibu-ranking/${code}?aum_level=${aumLevel}`,
+    `${getBase()}/analysis/xibu-ranking/${code}?aum_level=${aumLevel}`,
     `xibu_single_${code}`,
     5 * 60 * 1000
   )
@@ -1258,14 +1297,14 @@ export async function fetchXibuSingleScore(
 
 export async function fetchXibuVetoCheck(code: string): Promise<XibuVetoCheck> {
   return fetchJSON(
-    `${BASE}/analysis/xibu-ranking/veto/${code}`,
+    `${getBase()}/analysis/xibu-ranking/veto/${code}`,
     `xibu_veto_${code}`,
     5 * 60 * 1000
   )
 }
 
 export async function saveXibuSnapshot(): Promise<{ status: string; saved: number }> {
-  return postJSON<{ status: string; saved: number }>(`${BASE}/analysis/xibu-ranking/save-snapshot`, {})
+  return postJSON<{ status: string; saved: number }>(`${getBase()}/analysis/xibu-ranking/save-snapshot`, {})
 }
 
 export interface SevenDimHistoryItem {
@@ -1293,7 +1332,7 @@ export interface SevenDimHistoryItem {
 
 export async function fetchXibuHistory(code: string, days: number = 30): Promise<{ code: string; days: number; items: SevenDimHistoryItem[] }> {
   return fetchJSON(
-    `${BASE}/analysis/xibu-ranking/history/${code}?days=${days}`,
+    `${getBase()}/analysis/xibu-ranking/history/${code}?days=${days}`,
     `xibu_history_${code}_${days}`,
     60 * 1000
   )
@@ -1309,7 +1348,7 @@ export function streamXibuRanking(
   onError: (err: string) => void,
   timeout = 30000,
 ): EventSource {
-  const url = `${BASE}/analysis/xibu-ranking/stream?top_n=${params.topN}&aum_level=${params.aumLevel}&market_env=${params.marketEnv}`
+  const url = `${getBase()}/analysis/xibu-ranking/stream?top_n=${params.topN}&aum_level=${params.aumLevel}&market_env=${params.marketEnv}`
   const es = new EventSource(url)
   let settled = false
   let timer = setTimeout(() => {
@@ -1398,7 +1437,7 @@ export interface AlertHistoryItem {
 
 export async function fetchComboAlerts(enabledOnly: boolean = false): Promise<{ alerts: ComboAlert[] }> {
   return fetchJSON(
-    `${BASE}/analysis/combo-alerts?enabled_only=${enabledOnly}`,
+    `${getBase()}/analysis/combo-alerts?enabled_only=${enabledOnly}`,
     'combo_alerts',
     60 * 1000
   )
@@ -1411,31 +1450,31 @@ export async function addComboAlert(alert: {
   logic?: 'AND' | 'OR'
   enabled?: boolean
 }): Promise<{ status: string; id: number }> {
-  return postJSON<{ status: string; id: number }>(`${BASE}/analysis/combo-alerts`, alert)
+  return postJSON<{ status: string; id: number }>(`${getBase()}/analysis/combo-alerts`, alert)
 }
 
 export async function removeComboAlert(alertId: number): Promise<{ status: string }> {
-  return deleteJSON<{ status: string }>(`${BASE}/analysis/combo-alerts/${alertId}`)
+  return deleteJSON<{ status: string }>(`${getBase()}/analysis/combo-alerts/${alertId}`)
 }
 
 export async function checkComboAlerts(): Promise<{ triggered: any[]; total_alerts: number }> {
-  return postJSON<{ triggered: any[]; total_alerts: number }>(`${BASE}/analysis/combo-alerts/check`, {})
+  return postJSON<{ triggered: any[]; total_alerts: number }>(`${getBase()}/analysis/combo-alerts/check`, {})
 }
 
 export async function fetchAlertHistory(
   days: number = 30,
   code: string = ''
 ): Promise<{ history: AlertHistoryItem[]; total: number }> {
-  const url = `${BASE}/analysis/alert-history?days=${days}${code ? `&code=${code}` : ''}`
+  const url = `${getBase()}/analysis/alert-history?days=${days}${code ? `&code=${code}` : ''}`
   return fetchJSON(url, `alert_history_${days}`, 60 * 1000)
 }
 
 export async function acknowledgeAlertHistory(historyId: number): Promise<{ status: string }> {
-  return postJSON<{ status: string }>(`${BASE}/analysis/alert-history/${historyId}/acknowledge`, {})
+  return postJSON<{ status: string }>(`${getBase()}/analysis/alert-history/${historyId}/acknowledge`, {})
 }
 
 export async function cleanupData(keepDays: number = 90): Promise<{ status: string; results: Record<string, number> }> {
-  return postJSON<{ status: string; results: Record<string, number> }>(`${BASE}/analysis/cleanup?keep_days=${keepDays}`, {})
+  return postJSON<{ status: string; results: Record<string, number> }>(`${getBase()}/analysis/cleanup?keep_days=${keepDays}`, {})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1451,11 +1490,11 @@ export interface CacheStats {
 }
 
 export async function fetchCacheStats(): Promise<CacheStats> {
-  return fetchJSON(`${BASE}/analysis/cache-stats`, 'cache_stats', 10 * 1000)
+  return fetchJSON(`${getBase()}/analysis/cache-stats`) // 状态信息不缓存
 }
 
 export async function clearCache(): Promise<{ status: string; cleared_entries: number }> {
-  return postJSON<{ status: string; cleared_entries: number }>(`${BASE}/analysis/cache/clear`, {})
+  return postJSON<{ status: string; cleared_entries: number }>(`${getBase()}/analysis/cache/clear`, {})
 }
 
 
@@ -1537,7 +1576,7 @@ export async function compareStrategies(
   topN: number = 20,
   holdDays: number = 5
 ): Promise<{ strategies: StrategyResult[]; period: Record<string, any> }> {
-  return postJSON<{ strategies: StrategyResult[]; period: Record<string, any> }>(`${BASE}/analysis/strategy-compare`, {
+  return postJSON<{ strategies: StrategyResult[]; period: Record<string, any> }>(`${getBase()}/analysis/strategy-compare`, {
     strategies,
     start_date: startDate,
     end_date: endDate,
@@ -1553,7 +1592,7 @@ export async function fetchRiskMetrics(
   holdDays: number = 5
 ): Promise<RiskMetrics> {
   return fetchJSON(
-    `${BASE}/analysis/risk-metrics?start_date=${startDate}&end_date=${endDate}&top_n=${topN}&hold_days=${holdDays}`,
+    `${getBase()}/analysis/risk-metrics?start_date=${startDate}&end_date=${endDate}&top_n=${topN}&hold_days=${holdDays}`,
     'risk_metrics',
     5 * 60 * 1000
   )
@@ -1561,14 +1600,14 @@ export async function fetchRiskMetrics(
 
 export async function fetchScorePrediction(code: string, days: number = 30): Promise<ScorePrediction> {
   return fetchJSON(
-    `${BASE}/analysis/score-prediction/${code}?days=${days}`,
+    `${getBase()}/analysis/score-prediction/${code}?days=${days}`,
     `score_prediction_${code}`,
     60 * 1000
   )
 }
 
 export async function fetchNotificationChannels(): Promise<{ channels: NotificationChannel[] }> {
-  return fetchJSON(`${BASE}/analysis/notification-channels`, 'notification_channels', 60 * 1000)
+  return fetchJSON(`${getBase()}/analysis/notification-channels`) // 配置信息不缓存
 }
 
 export async function addNotificationChannel(channel: {
@@ -1577,11 +1616,11 @@ export async function addNotificationChannel(channel: {
   config: Record<string, any>
   enabled?: boolean
 }): Promise<{ status: string; id: number }> {
-  return postJSON<{ status: string; id: number }>(`${BASE}/analysis/notification-channels`, channel)
+  return postJSON<{ status: string; id: number }>(`${getBase()}/analysis/notification-channels`, channel)
 }
 
 export async function removeNotificationChannel(channelId: number): Promise<{ status: string }> {
-  return deleteJSON<{ status: string }>(`${BASE}/analysis/notification-channels/${channelId}`)
+  return deleteJSON<{ status: string }>(`${getBase()}/analysis/notification-channels/${channelId}`)
 }
 
 
@@ -1650,11 +1689,11 @@ export interface TimingSignal {
 }
 
 export async function fetchTimingSignal(): Promise<TimingSignal> {
-  return fetchJSON(`${BASE}/xb-strategy/timing-signal`, 'timing_signal', 60 * 1000)
+  return fetchJSON(`${getBase()}/xb-strategy/timing-signal`, 'timing_signal', 60 * 1000)
 }
 
 export async function fetchEnhancedTimingSignal(): Promise<TimingSignal> {
-  return fetchJSON(`${BASE}/xb-strategy/timing-signal/enhanced`, 'enhanced_timing_signal', 60 * 1000)
+  return fetchJSON(`${getBase()}/xb-strategy/timing-signal/enhanced`, 'enhanced_timing_signal', 60 * 1000)
 }
 
 export interface TimingHistoryItem {
@@ -1665,7 +1704,7 @@ export interface TimingHistoryItem {
 }
 
 export async function fetchTimingHistory(days: number = 30): Promise<{ items: TimingHistoryItem[] }> {
-  return fetchJSON(`${BASE}/xb-strategy/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
+  return fetchJSON(`${getBase()}/xb-strategy/timing-signal/history?days=${days}`, 'timing_history', 60 * 60 * 1000)
 }
 
 export interface WsStats {
@@ -1684,7 +1723,7 @@ export interface WsStats {
 }
 
 export async function fetchWsStats(): Promise<WsStats> {
-  return fetchJSON(`${BASE}/ws/stats`)
+  return fetchJSON(`${getBase()}/ws/stats`)
 }
 
 export interface SignalsHealth {
@@ -1701,7 +1740,7 @@ export interface SignalsHealth {
 }
 
 export async function fetchSignalsHealth(): Promise<SignalsHealth> {
-  return fetchJSON(`${BASE}/signals/health`)
+  return fetchJSON(`${getBase()}/signals/health`)
 }
 
 // ── 璇玑十二因子 API ──
@@ -1877,7 +1916,7 @@ export async function fetchXuanjiRanking(
     max_price: String(maxPrice),
     vol_adjust: String(volAdjust),
   })
-  return fetchJSON<XuanjiRankingResponse>(`${BASE}/xuanji/ranking?${params.toString()}`, `xuanji_ranking_${params.toString().slice(0, 40)}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiRankingResponse>(`${getBase()}/xuanji/ranking?${params.toString()}`, `xuanji_ranking_${params.toString().slice(0, 40)}`, 3 * 60 * 1000)
 }
 
 export async function fetchXuanjiSingle(code: string, marketState: string = 'mild_bull', maxPremium: number = 80, minPrice: number = 80, maxPrice: number = 180, volAdjust: number = 0.85): Promise<XuanjiSingleResponse> {
@@ -1888,7 +1927,7 @@ export async function fetchXuanjiSingle(code: string, marketState: string = 'mil
     max_price: String(maxPrice),
     vol_adjust: String(volAdjust),
   })
-  return fetchJSON<XuanjiSingleResponse>(`${BASE}/xuanji/single/${code}?${params.toString()}`, `xuanji_single_${code}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiSingleResponse>(`${getBase()}/xuanji/single/${code}?${params.toString()}`, `xuanji_single_${code}`, 3 * 60 * 1000)
 }
 
 export async function fetchXuanjiDeltaCandidates(
@@ -1903,19 +1942,19 @@ export async function fetchXuanjiDeltaCandidates(
     premium_high: String(premiumHigh),
     top_n: String(topN),
   })
-  return fetchJSON<XuanjiDeltaResponse>(`${BASE}/xuanji/delta-candidates?${params.toString()}`, 'xuanji_delta_candidates', 3 * 60 * 1000)
+  return fetchJSON<XuanjiDeltaResponse>(`${getBase()}/xuanji/delta-candidates?${params.toString()}`, 'xuanji_delta_candidates', 3 * 60 * 1000)
 }
 
 export async function fetchXuanjiGreeks(): Promise<XuanjiGreeksSummary> {
-  return fetchJSON<XuanjiGreeksSummary>(`${BASE}/xuanji/greeks`, 'xuanji_greeks', 10 * 60 * 1000)
+  return fetchJSON<XuanjiGreeksSummary>(`${getBase()}/xuanji/greeks`, 'xuanji_greeks', 10 * 60 * 1000)
 }
 
 export async function fetchXuanjiMarketWeights(): Promise<XuanjiMarketWeightsResponse> {
-  return fetchJSON<XuanjiMarketWeightsResponse>(`${BASE}/xuanji/market-weights`, 'xuanji_market_weights', 10 * 60 * 1000)
+  return fetchJSON<XuanjiMarketWeightsResponse>(`${getBase()}/xuanji/market-weights`, 'xuanji_market_weights', 10 * 60 * 1000)
 }
 
 export async function fetchXuanjiAlphaSources(): Promise<XuanjiAlphaResponse> {
-  return fetchJSON<XuanjiAlphaResponse>(`${BASE}/xuanji/alpha-sources`, 'xuanji_alpha_sources', 10 * 60 * 1000)
+  return fetchJSON<XuanjiAlphaResponse>(`${getBase()}/xuanji/alpha-sources`, 'xuanji_alpha_sources', 10 * 60 * 1000)
 }
 
 export interface XuanjiStressScenario {
@@ -1941,7 +1980,7 @@ export interface XuanjiStressResponse {
 }
 
 export async function fetchXuanjiStressTest(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiStressResponse> {
-  return fetchJSON<XuanjiStressResponse>(`${BASE}/xuanji/stress-test?top_n=${topN}&market_state=${marketState}`, `xuanji_stress_${marketState}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiStressResponse>(`${getBase()}/xuanji/stress-test?top_n=${topN}&market_state=${marketState}`, `xuanji_stress_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiFactorContribution {
@@ -1969,7 +2008,7 @@ export interface XuanjiFactorContributionResponse {
 }
 
 export async function fetchXuanjiFactorContribution(topN: number = 20, marketState: string = 'mild_bull'): Promise<XuanjiFactorContributionResponse> {
-  return fetchJSON<XuanjiFactorContributionResponse>(`${BASE}/xuanji/factor-contribution?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_contrib_${marketState}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiFactorContributionResponse>(`${getBase()}/xuanji/factor-contribution?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_contrib_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiFactorCorrelation {
@@ -1990,7 +2029,7 @@ export interface XuanjiFactorCorrelationResponse {
 }
 
 export async function fetchXuanjiFactorCorrelation(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiFactorCorrelationResponse> {
-  return fetchJSON<XuanjiFactorCorrelationResponse>(`${BASE}/xuanji/factor-correlation?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_corr_${marketState}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiFactorCorrelationResponse>(`${getBase()}/xuanji/factor-correlation?top_n=${topN}&market_state=${marketState}`, `xuanji_factor_corr_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiStrategyCompare {
@@ -2014,7 +2053,7 @@ export interface XuanjiComparisonResponse {
 }
 
 export async function fetchXuanjiComparison(topN: number = 50, marketState: string = 'mild_bull'): Promise<XuanjiComparisonResponse> {
-  return fetchJSON<XuanjiComparisonResponse>(`${BASE}/xuanji/comparison?top_n=${topN}&market_state=${marketState}`, `xuanji_comparison_${marketState}`, 3 * 60 * 1000)
+  return fetchJSON<XuanjiComparisonResponse>(`${getBase()}/xuanji/comparison?top_n=${topN}&market_state=${marketState}`, `xuanji_comparison_${marketState}`, 3 * 60 * 1000)
 }
 
 export interface XuanjiSummary {
@@ -2025,19 +2064,19 @@ export interface XuanjiSummary {
 }
 
 export async function fetchXuanjiSummary(): Promise<XuanjiSummary> {
-  return fetchJSON<XuanjiSummary>(`${BASE}/xuanji/summary`, 'xuanji_summary', 10 * 60 * 1000)
+  return fetchJSON<XuanjiSummary>(`${getBase()}/xuanji/summary`, 'xuanji_summary', 10 * 60 * 1000)
 }
 
 export async function fetchXuanjiHealth(): Promise<{ status: string; strategy: string; version: string }> {
-  return fetchJSON(`${BASE}/xuanji/health`)
+  return fetchJSON(`${getBase()}/xuanji/health`)
 }
 
 export async function fetchXuanjiDataSourceHealth(): Promise<any> {
-  return fetchJSON(`${BASE}/xuanji/data-source-health`, 'xuanji_ds_health', 10 * 60 * 1000)
+  return fetchJSON(`${getBase()}/xuanji/data-source-health`) // 数据源健康状态不缓存
 }
 
 export async function fetchXuanjiIcirHistory(): Promise<any> {
-  return fetchJSON(`${BASE}/xuanji/icir-history`, 'xuanji_icir', 5 * 60 * 1000)
+  return fetchJSON(`${getBase()}/xuanji/icir-history`, 'xuanji_icir', 5 * 60 * 1000)
 }
 
 export async function postXuanjiCustomRanking(params: {
@@ -2048,7 +2087,7 @@ export async function postXuanjiCustomRanking(params: {
   min_price?: number
   max_price?: number
 }): Promise<any> {
-  return postJSON(`${BASE}/xuanji/custom-ranking`, params)
+  return postJSON(`${getBase()}/xuanji/custom-ranking`, params)
 }
 
 // ── Industry / Sector rotation ─────────────────────────────────────
@@ -2090,7 +2129,7 @@ export interface IndustriesResponse {
 }
 
 export async function fetchIndustries(): Promise<IndustriesResponse> {
-  return fetchJSON<IndustriesResponse>(`${BASE}/market/industries`, 'industries', 30000)
+  return fetchJSON<IndustriesResponse>(`${getBase()}/market/industries`, 'industries', 30000)
 }
 
 // ── Concept distribution ──────────────────────────────────────────
@@ -2134,7 +2173,7 @@ export interface ConceptsResponse {
 }
 
 export async function fetchConcepts(): Promise<ConceptsResponse> {
-  return fetchJSON<ConceptsResponse>(`${BASE}/market/concepts`, 'concepts', 30000)
+  return fetchJSON<ConceptsResponse>(`${getBase()}/market/concepts`, 'concepts', 30000)
 }
 
 // ── ETF / Sector mapping ───────────────────────────────────────────
@@ -2257,7 +2296,7 @@ export interface IndustryRecommendations {
 
 export async function fetchStockIndustries(): Promise<StockIndustriesResponse> {
   // 资金流向数据实时性要求高, 加 _t 参数绕过浏览器 HTTP 缓存
-  return fetchJSON<StockIndustriesResponse>(`${BASE}/market/stock-industries?_t=${Date.now()}`, 'stock-industries', 30000)
+  return fetchJSON<StockIndustriesResponse>(`${getBase()}/market/stock-industries?_t=${Date.now()}`, 'stock_industries', 30000)
 }
 
 // 按周期懒加载行业推荐 (可选, 主数据已内嵌 recommendations)
@@ -2266,14 +2305,14 @@ export async function fetchIndustryRecommendations(
   topK = 5,
   weightsJson = ''
 ): Promise<{ horizon: string } & Partial<IndustryRecommendations>> {
-  let url = `${BASE}/market/industry-recommendations?horizon=${horizon}&top_k=${topK}`
+  let url = `${getBase()}/market/industry-recommendations?horizon=${horizon}&top_k=${topK}`
   if (weightsJson) {
     url += `&weights_json=${encodeURIComponent(weightsJson)}`
   }
   // Custom weights should not be cached (bypass cache key)
   return weightsJson
-    ? fetchJSON(url, `industry-recs-custom-${Date.now()}`, 0)
-    : fetchJSON(url, `industry-recs-${horizon}`, 60000)
+    ? fetchJSON(url, `industry_recs_custom_${Date.now()}`, 0)
+    : fetchJSON(url, `industry_recs_${horizon}`, 60000)
 }
 
 // AI 行业解读 (POST, 不缓存)
@@ -2283,8 +2322,8 @@ export async function fetchAIInsight(params: {
   question: string
   language: string
 }): Promise<{ summary: string; insights: string[]; recommendations: string[] }> {
-  if (!BASE) throw new Error('API base URL not configured')
-  return requestAPI('POST', `${BASE}/ai/analyze`, params)
+  if (!getBase()) throw new Error('API base URL not configured')
+  return requestAPI('POST', `${getBase()}/ai/analyze`, params)
 }
 
 // 推荐历史 (GET, 缓存5分钟)
@@ -2302,7 +2341,7 @@ export interface RecHistoryResponse {
 }
 
 export async function fetchRecHistory(days = 30): Promise<RecHistoryResponse> {
-  return fetchJSON<RecHistoryResponse>(`${BASE}/market/industry-recommendations/history?days=${days}`, 'rec-history', 300000)
+  return fetchJSON<RecHistoryResponse>(`${getBase()}/market/industry-recommendations/history?days=${days}`, 'rec_history', 300000)
 }
 
 // Recommendation accuracy backtest
@@ -2329,7 +2368,7 @@ export interface RecAccuracyResponse {
   days_analyzed: number
 }
 export async function fetchRecAccuracy(days = 30): Promise<RecAccuracyResponse> {
-  return fetchJSON<RecAccuracyResponse>(`${BASE}/market/industry-recommendations/accuracy?days=${days}`, 'rec-accuracy', 300000)
+  return fetchJSON<RecAccuracyResponse>(`${getBase()}/market/industry-recommendations/accuracy?days=${days}`, 'rec_accuracy', 300000)
 }
 
 // ── Extended data sources (北向/融资融券/龙虎榜/大宗/股东/业绩/解禁) ────────
@@ -2362,7 +2401,7 @@ export interface NorthResponse {
 }
 
 export async function fetchNorthCapital(): Promise<NorthResponse> {
-  return fetchJSON<NorthResponse>(`${BASE}/market/north-capital`, 'north', 60000)
+  return fetchJSON<NorthResponse>(`${getBase()}/market/north-capital`, 'north', 60000)
 }
 
 export interface MarginStock {
@@ -2381,7 +2420,7 @@ export interface MarginResponse {
 }
 
 export async function fetchMarginStocks(): Promise<MarginResponse> {
-  return fetchJSON<MarginResponse>(`${BASE}/market/margin-stocks`, 'margin', 60000)
+  return fetchJSON<MarginResponse>(`${getBase()}/market/margin-stocks`, 'margin', 60000)
 }
 
 export interface LhbStock {
@@ -2399,7 +2438,7 @@ export interface LhbResponse {
 }
 
 export async function fetchLhb(): Promise<LhbResponse> {
-  return fetchJSON<LhbResponse>(`${BASE}/market/lhb`, 'lhb', 60000)
+  return fetchJSON<LhbResponse>(`${getBase()}/market/lhb`, 'lhb', 60000)
 }
 
 export interface BlockTradeStock {
@@ -2418,7 +2457,7 @@ export interface BlockTradeResponse {
 }
 
 export async function fetchBlockTrade(): Promise<BlockTradeResponse> {
-  return fetchJSON<BlockTradeResponse>(`${BASE}/market/block-trade`, 'block_trade', 60000)
+  return fetchJSON<BlockTradeResponse>(`${getBase()}/market/block-trade`, 'block_trade', 60000)
 }
 
 export interface HolderNumStock {
@@ -2436,7 +2475,7 @@ export interface HolderNumResponse {
 }
 
 export async function fetchHolderNum(): Promise<HolderNumResponse> {
-  return fetchJSON<HolderNumResponse>(`${BASE}/market/holder-num`, 'holder_num', 60000)
+  return fetchJSON<HolderNumResponse>(`${getBase()}/market/holder-num`, 'holder_num', 60000)
 }
 
 export interface EarningsForecastStock {
@@ -2456,7 +2495,7 @@ export interface EarningsForecastResponse {
 }
 
 export async function fetchEarningsForecast(): Promise<EarningsForecastResponse> {
-  return fetchJSON<EarningsForecastResponse>(`${BASE}/market/earnings-forecast`, 'earnings_forecast', 60000)
+  return fetchJSON<EarningsForecastResponse>(`${getBase()}/market/earnings-forecast`, 'earnings_forecast', 60000)
 }
 
 export interface EarningsExpressStock {
@@ -2478,7 +2517,7 @@ export interface EarningsExpressResponse {
 }
 
 export async function fetchEarningsExpress(): Promise<EarningsExpressResponse> {
-  return fetchJSON<EarningsExpressResponse>(`${BASE}/market/earnings-express`, 'earnings_express', 60000)
+  return fetchJSON<EarningsExpressResponse>(`${getBase()}/market/earnings-express`, 'earnings_express', 60000)
 }
 
 export interface RestrictedReleaseEvent {
@@ -2498,7 +2537,7 @@ export interface RestrictedReleaseResponse {
 }
 
 export async function fetchRestrictedRelease(): Promise<RestrictedReleaseResponse> {
-  return fetchJSON<RestrictedReleaseResponse>(`${BASE}/market/restricted-release`, 'restricted_release', 60000)
+  return fetchJSON<RestrictedReleaseResponse>(`${getBase()}/market/restricted-release`, 'restricted_release', 60000)
 }
 
 export interface DataSourceInfo {
@@ -2518,7 +2557,7 @@ export interface DataSourcesResponse {
 
 export async function fetchDataSources(): Promise<DataSourcesResponse> {
   // 数据源状态实时性要求高, 加 _t 参数绕过浏览器 HTTP 缓存
-  return fetchJSON<DataSourcesResponse>(`${BASE}/market/data-sources?_t=${Date.now()}`, 'data_sources', 30000)
+  return fetchJSON<DataSourcesResponse>(`${getBase()}/market/data-sources?_t=${Date.now()}`, 'data_sources', 30000)
 }
 
 // ── Stock Concept Rotation (THS + EastMoney fine-grained concept boards) ──────
@@ -2594,7 +2633,7 @@ export async function fetchStockConcepts(opts?: {
   params.set('min_count', String(opts?.minCount ?? 2))
   if (opts?.fields?.length) params.set('fields', opts.fields.join(','))
   return fetchJSON<StockConceptsResponse>(
-    `${BASE}/market/stock-concepts?${params.toString()}`,
+    `${getBase()}/market/stock-concepts?${params.toString()}`,
     'stock-concepts',
     30000,
   )
@@ -2707,7 +2746,7 @@ export async function fetchIndividualFundFlow(
   params.set('indicator', indicator)
   params.set('limit', String(limit))
   const data = await fetchJSON<IndividualFundFlowResponse>(
-    `${BASE}/fund_flow/individual?${params.toString()}`,
+    `${getBase()}/fund_flow/individual?${params.toString()}`,
     `individual_fund_flow_${indicator}`,
     60000,  // 1分钟缓存
   )
@@ -2727,7 +2766,7 @@ export async function fetchIndustryFundFlow(
   const params = new URLSearchParams()
   params.set('indicator', indicator)
   const data = await fetchJSON<IndustryFundFlow[]>(
-    `${BASE}/fund_flow/industry?${params.toString()}`,
+    `${getBase()}/fund_flow/industry?${params.toString()}`,
     `industry_fund_flow_${indicator}`,
     60000,
   )
@@ -2744,7 +2783,7 @@ export async function fetchMainFundFlow(
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   const data = await fetchJSON<MainFundFlowResponse>(
-    `${BASE}/fund_flow/main?${params.toString()}`,
+    `${getBase()}/fund_flow/main?${params.toString()}`,
     'main_fund_flow',
     60000,
   )
@@ -2764,7 +2803,7 @@ export async function fetchTurnoverRank(
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   const data = await fetchJSON<TurnoverRankResponse>(
-    `${BASE}/fund_flow/turnover_rank?${params.toString()}`,
+    `${getBase()}/fund_flow/turnover_rank?${params.toString()}`,
     'turnover_rank',
     60000,
   )
@@ -2779,7 +2818,7 @@ export async function fetchTurnoverRank(
  */
 export async function fetchHsgtFundFlow(): Promise<HsgtFundFlowResponse> {
   const data = await fetchJSON<HsgtFundFlow[]>(
-    `${BASE}/fund_flow/hsgt`,
+    `${getBase()}/fund_flow/hsgt`,
     'hsgt_fund_flow',
     60000,
   )
@@ -2808,7 +2847,7 @@ export interface MXQueryResponse {
 export async function queryMXData(req: MXQueryRequest): Promise<MXQueryResponse> {
   let token = ''
   try { token = localStorage.getItem('token') || '' } catch { /* localStorage unavailable */ }
-  const res = await fetch(`${BASE}/mx/query`, {
+  const res = await fetch(`${getBase()}/mx/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2825,52 +2864,52 @@ export async function getMXStatus(): Promise<{
   api_key_prefix: string
   skills_installed: Record<string, boolean>
 }> {
-  return fetchJSON(`${BASE}/mx/status`, 'mx_status')
+  return fetchJSON(`${getBase()}/mx/status`)  // 状态信息不缓存，确保实时
 }
 
 // ── 模拟盘 API ──
 
 export async function fetchPaperAccounts(): Promise<{ accounts: any[]; refresh_fail_count?: number; refresh_total_fails?: number; refresh_total_fail_threshold?: number }> {
-  return fetchJSON(`${BASE}/paper-trade/accounts`, 'paper_accounts')
+  return fetchJSON(`${getBase()}/paper-trade/accounts`, 'paper_accounts')
 }
 
 export async function createPaperAccount(req: { strategy_id: string; initial_cash?: number; params?: any }): Promise<any> {
-  return postJSON(`${BASE}/paper-trade/accounts`, req)
+  return postJSON(`${getBase()}/paper-trade/accounts`, req)
 }
 
 export async function startPaperAccount(accountId: string): Promise<any> {
-  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/start`, {})
+  return postJSON(`${getBase()}/paper-trade/accounts/${accountId}/start`, {})
 }
 
 export async function stopPaperAccount(accountId: string): Promise<any> {
-  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/stop`, {})
+  return postJSON(`${getBase()}/paper-trade/accounts/${accountId}/stop`, {})
 }
 
 export async function resetPaperAccount(accountId: string): Promise<any> {
-  return postJSON(`${BASE}/paper-trade/accounts/${accountId}/reset`, {})
+  return postJSON(`${getBase()}/paper-trade/accounts/${accountId}/reset`, {})
 }
 
 export async function fetchPaperPositions(accountId: string): Promise<{ positions: any[] }> {
-  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/positions`)
+  return fetchJSON(`${getBase()}/paper-trade/accounts/${accountId}/positions`)
 }
 
 export async function fetchPaperOrders(accountId: string): Promise<{ orders: any[] }> {
-  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/orders`)
+  return fetchJSON(`${getBase()}/paper-trade/accounts/${accountId}/orders`)
 }
 
 export async function fetchPaperEquityCurve(accountId: string, days: number = 30): Promise<{ points: any[] }> {
-  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/equity-curve?days=${days}`)
+  return fetchJSON(`${getBase()}/paper-trade/accounts/${accountId}/equity-curve?days=${days}`)
 }
 
 export async function fetchPaperSignals(accountId: string, limit: number = 50): Promise<{ signals: any[] }> {
-  return fetchJSON(`${BASE}/paper-trade/accounts/${accountId}/signals?limit=${limit}`)
+  return fetchJSON(`${getBase()}/paper-trade/accounts/${accountId}/signals?limit=${limit}`)
 }
 
 export async function updatePaperParams(accountId: string, params: Record<string, any>): Promise<any> {
-  return putJSON(`${BASE}/paper-trade/accounts/${accountId}/params`, { params })
+  return putJSON(`${getBase()}/paper-trade/accounts/${accountId}/params`, { params })
 }
 
 export async function deletePaperAccount(accountId: string): Promise<any> {
-  return deleteJSON(`${BASE}/paper-trade/accounts/${accountId}`)
+  return deleteJSON(`${getBase()}/paper-trade/accounts/${accountId}`)
 }
 

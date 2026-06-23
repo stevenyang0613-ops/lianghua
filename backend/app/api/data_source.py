@@ -17,11 +17,33 @@ router = APIRouter(prefix='/data_sources', tags=['data'])
 
 @router.get("/")
 async def list_data_sources():
-    """列出已配置的数据源"""
-    return [
-        {"name": "akshare", "type": "free", "status": "connected", "description": "AKShare 免费开源金融数据"},
-        {"name": "ths", "type": "free", "status": "connected", "description": "同花顺网页数据"},
-    ]
+    """列出已注册的数据源及其状态"""
+    try:
+        from app.data import get_data_source_manager
+        manager = get_data_source_manager()
+        status = manager.get_status()
+        # status 格式: {name: {"connected": bool, "last_success": str|None, "last_error": str|None, ...}}
+        sources = []
+        for name, st in status.items():
+            sources.append({
+                "name": name,
+                "type": "unknown",
+                "status": "connected" if st.connected else "disconnected",
+                "description": "",
+                "last_success": st.last_success.isoformat() if st.last_success else None,
+                "last_error": st.last_error,
+                "request_count": st.request_count,
+                "error_count": st.error_count,
+                "avg_latency_ms": st.avg_latency_ms,
+            })
+        return sources
+    except Exception as e:
+        logger.warning(f"[DataSource] list failed: {e}")
+        # 兜底：返回核心免费源
+        return [
+            {"name": "akshare", "type": "free", "status": "connected", "description": "AKShare 免费开源金融数据"},
+            {"name": "ths", "type": "free", "status": "connected", "description": "同花顺网页数据"},
+        ]
 
 
 @router.get('/sources/history')

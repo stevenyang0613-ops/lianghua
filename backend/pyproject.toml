@@ -31,6 +31,8 @@ dependencies = [
     "structlog>=24.1.0",
     "celery>=5.3.0",
     "certifi>=2024.2.2",
+    "pytdx>=1.1.0",
+    "yfinance>=0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +66,7 @@ asyncio_mode = "auto"
 # 单进程运行时 serial 标记仅作文档作用。
 markers = [
     "serial: 标记该测试必须串行执行（不可与其他测试并行）。适用于存在 fixture 共享状态竞争的测试。",
+    "integration: 标记需要外部服务（网络/数据库/第三方 API）的集成测试。",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:py_mini_racer",

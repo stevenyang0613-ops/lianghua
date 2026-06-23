@@ -32,8 +32,8 @@ function resourcePath(relativePath: string): string {
   if (isDev) {
     return path.join(__dirname, '..', relativePath)
   }
-  // In production __dirname = app.asar/dist/, so .. reaches app.asar/
-  return path.join(__dirname, '..', relativePath)
+  // 生产环境资源位于 extraResources，不在 asar 内部
+  return path.join(process.resourcesPath, relativePath)
 }
 
 // ---- Frontend page path (in extraResources, not asar) ----
@@ -190,8 +190,10 @@ function startFrontendServer(): Promise<number> {
         })
         stream.pipe(res)
       } catch (e) {
-        res.writeHead(404)
-        res.end('Not Found')
+        if (!res.headersSent) {
+          res.writeHead(404)
+          res.end('Not Found')
+        }
       }
     })
 
@@ -285,16 +287,19 @@ const WS_HEARTBEAT_INTERVAL_MS = 30000  // 30s 发一次 ping
 const WS_HEARTBEAT_TIMEOUT_MS = 60000 // 60s 未收到 pong 视为死连接
 const wsHeartbeatTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-function _cleanupWsConnection(wsId: string) {
+function _cleanupWsConnection(wsId: string, notifyRenderer: boolean = false) {
   const ws = wsConnections.get(wsId)
   if (ws) {
+    if (notifyRenderer) {
+      mainWindow?.webContents.send('ws-state', wsId, 'disconnected', 1000, 'manual close')
+    }
     ws.removeAllListeners()
     ws.close()
     wsConnections.delete(wsId)
   }
   const timer = wsHeartbeatTimers.get(wsId)
   if (timer) {
-    clearTimeout(timer)
+    clearInterval(timer)
     wsHeartbeatTimers.delete(wsId)
   }
 }
@@ -527,13 +532,19 @@ async function httpRequestHandler(
       res.on('data', (chunk: Buffer) => { data += chunk.toString() })
       res.on('end', () => {
         let parsed: any
+        let isOk = res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300
         try {
           parsed = JSON.parse(data)
         } catch {
           parsed = data
+          // 如果后端返回非 JSON 且 HTTP 状态码非 2xx，标记为失败，防止 HTML 错误页面被误认为成功
+          if (!isOk) {
+            resolve({ ok: false, status: res.statusCode || 0, data: parsed, error: `Non-JSON response (HTTP ${res.statusCode})` })
+            return
+          }
         }
         resolve({
-          ok: res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300,
+          ok: isOk,
           status: res.statusCode || 0,
           data: parsed,
         })
@@ -1690,12 +1701,15 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
 
     // 获取桌面认证 token 并附加到 WebSocket URL
     // 后端 ws.py 通过 query_params.get("token") 验证，必须带上 token 否则返回 403
+    // 修复：如果 URL 已包含 token，则不再重复添加
     let wsUrl = url
     try {
-      const token = await ensureDesktopAuthToken()
-      if (token) {
-        const sep = wsUrl.includes('?') ? '&' : '?'
-        wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`
+      if (!wsUrl.includes('token=')) {
+        const token = await ensureDesktopAuthToken()
+        if (token) {
+          const sep = wsUrl.includes('?') ? '&' : '?'
+          wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`
+        }
       }
     } catch (e) {
       console.warn('[Electron] Failed to get WS auth token:', (e as Error).message)
@@ -1723,10 +1737,10 @@ ipcMain.handle('ws-connect', async (_event, wsId: string, url: string) => {
     ws.on('close', (code: number, reason: Buffer) => {
       wsConnections.delete(wsId)
       mainWindow?.webContents.send('ws-state', wsId, 'disconnected', code, reason.toString())
-      // 清理心跳定时器
+      // 清理心跳定时器（setInterval 创建，必须用 clearInterval 清理）
       const timer = wsHeartbeatTimers.get(wsId)
       if (timer) {
-        clearTimeout(timer)
+        clearInterval(timer)
         wsHeartbeatTimers.delete(wsId)
       }
     })
@@ -1809,8 +1823,7 @@ ipcMain.handle('ws-send', async (_event, wsId: string, message: string) => {
 })
 
 ipcMain.handle('ws-close', async (_event, wsId: string) => {
-  _cleanupWsConnection(wsId)
-  return { ok: true }
+  _cleanupWsConnection(wsId, true)
 })
 
 ipcMain.handle('ws-state', async (_event, wsId: string) => {
@@ -1920,13 +1933,18 @@ restartBackend = (isManualRestart = false) => {
   for (const wsId of [...wsConnections.keys()]) {
     _cleanupWsConnection(wsId)
   }
+  // 使用互斥标志确保 startPythonBackend 只被调用一次，避免 fallback timeout 与 exit 事件竞态
+  let backendStarted = false
   const pendingTimeout = setTimeout(() => {
     if (isQuitting) {
       restartInFlight = false
       return
     }
     console.warn('[Electron] restartBackend fallback timeout firing')
-    startPythonBackend()
+    if (!backendStarted) {
+      backendStarted = true
+      startPythonBackend()
+    }
     restartInFlight = false
   }, 8000)
   pendingTimeout.unref()
@@ -1941,16 +1959,17 @@ restartBackend = (isManualRestart = false) => {
         restartInFlight = false
         return
       }
-      // Guard: pendingTimeout 已处理时不再重复启动
-      if (_backendStarting || pythonProcess) { restartInFlight = false; return }
-      startPythonBackend()
+      if (!backendStarted) {
+        backendStarted = true
+        startPythonBackend()
+      }
       restartInFlight = false
     })
     killPythonProcessGroup(oldProcess)
   } else {
     clearTimeout(pendingTimeout)
-    // Guard: 避免在已有启动中的情况下重复启动
-    if (!_backendStarting && !pythonProcess) {
+    if (!backendStarted) {
+      backendStarted = true
       startPythonBackend()
     }
     restartInFlight = false
@@ -2391,12 +2410,11 @@ if (!gotTheLock) {
     }
   })
 
-  // ---- GPU acceleration ----
-  // NOTE: Both app.disableHardwareAcceleration() and --disable-gpu have been
-  // shown to cause black/blank screens on Apple Silicon Macs (the window is
-  // created but never paints). Rely on Electron's default GPU acceleration
-  // which works reliably on modern hardware. If GPU crashes occur, handle
-  // them via Electron's built-in GPU process crash handling instead.
+  // ---- GPU acceleration / Network service stability fixes ----
+  // 修复 GPU process exited unexpectedly (exit_code=15)
+  app.disableHardwareAcceleration()
+  // 修复 Network service crashed or was terminated
+  app.commandLine.appendSwitch('disable-features', 'NetworkService')
 
   // ---- Global error handlers ----
   process.on('uncaughtException', (error: Error) => {
@@ -2542,9 +2560,9 @@ if (!gotTheLock) {
       clearInterval(deadConnectionScanner)
       deadConnectionScanner = null
     }
-    // Clear all heartbeat timers (created via setTimeout)
+    // Clear all heartbeat timers (created via setInterval, must use clearInterval)
     for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
-      clearTimeout(timer)
+      clearInterval(timer)
     }
     wsHeartbeatTimers.clear()
     if (tray) {
@@ -2581,7 +2599,7 @@ if (!gotTheLock) {
       deadConnectionScanner = null
     }
     for (const [wsId, timer] of wsHeartbeatTimers.entries()) {
-      clearTimeout(timer)
+      clearInterval(timer)
     }
     wsHeartbeatTimers.clear()
     for (const wsId of [...wsConnections.keys()]) {

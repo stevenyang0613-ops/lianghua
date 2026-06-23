@@ -59,7 +59,7 @@ const INITIAL_RETRY_INTERVAL_MS = 30000
 const MAX_RETRY_INTERVAL_MS = 120000
 
 async function fetchMetrics(signal?: AbortSignal): Promise<MetricsResponse> {
-  const token = localStorage.getItem('auth_token') || ''
+  const token = localStorage.getItem('ws_auth_token') || ''
   const res = await fetch(`${getBase()}/data-enrich/metrics`, {
     headers: { Authorization: `Bearer ${token}` },
     signal,

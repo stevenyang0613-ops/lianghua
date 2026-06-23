@@ -11,7 +11,7 @@
 
 import pandas as pd
 import numpy as np
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 from app.strategies.base import Strategy
 from app.models.backtest import StrategyParam
@@ -143,7 +143,6 @@ class FusionStrategy(Strategy):
         self._prev_selected: set[str] = set()
         self._buffer_tracker: dict[str, int] = {}
         # 修复: 统一 date 列为 datetime.date 类型，避免 mixed types 排序失败
-        from datetime import datetime
         def _norm_date(d):
             if hasattr(d, 'date'):
                 return d.date()
@@ -182,7 +181,8 @@ class FusionStrategy(Strategy):
                     self._portfolio_peak = max(self._portfolio_peak, eq)
                     if (eq / self._portfolio_peak - 1) * 100 <= psl and not self._portfolio_stopped:
                         self._portfolio_stopped = True
-                        sigs = [{'code': '__PORTFOLIO__', 'action': 'sell_all', 'price': 0.0, 'reason': f'组合止损'}]
+                        # 只返回具体持仓的卖出信号，不推送 __PORTFOLIO__ 伪代码
+                        sigs = []
                         for _, r in held.iterrows():
                             sigs.append({'code': r['code'], 'action': 'sell', 'price': float(r['price']), 'reason': '组合止损'})
                         self._prev_selected = set()
@@ -260,6 +260,7 @@ class FusionStrategy(Strategy):
                 nc.add(code)
                 if not wh:
                     sigs.append({'code': code, 'action': 'buy', 'price': float(row['price']),
+                                'confidence': float(row['xj_score']),
                                 'score': float(row['xj_score']),
                                 'reason': f'融合评分{row["xj_score"]:.3f}(#{ri})'})
                     self._buy_prices[code] = float(row['price'])

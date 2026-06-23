@@ -30,6 +30,8 @@ from app.api.auth import router as auth_router, verify_token
 from app.api.accounts import router as accounts_router
 from app.api.logs import router as logs_router
 from app.api.data_source import router as data_source_router
+from app.api.data_sources import router as data_sources_router
+from app.api.extra_data_sources import router as extra_data_sources_router
 from app.api.mx import router as mx_router
 from app.api.fund_flow import router as fund_flow_router
 from app.api.ai import router as ai_router
@@ -62,7 +64,10 @@ router.include_router(auth_router, prefix="/auth", tags=["auth"])  # 无需认�
 router.include_router(accounts_router, prefix="/accounts", tags=["accounts"], dependencies=[Depends(verify_token)])
 router.include_router(logs_router, prefix="/logs", tags=["logs"], dependencies=[Depends(verify_token)])
 router.include_router(mx_router, tags=["mx"], dependencies=[Depends(verify_token)])
+router.include_router(mx_router, tags=["mx"], dependencies=[Depends(verify_token)])
 router.include_router(data_source_router, tags=["data"], dependencies=[Depends(verify_token)])
+router.include_router(data_sources_router, prefix="/data-sources-v2", tags=["data-sources-v2"], dependencies=[Depends(verify_token)])
+router.include_router(extra_data_sources_router, prefix="/extra", tags=["extra"], dependencies=[Depends(verify_token)])
 router.include_router(fund_flow_router, tags=["fund_flow"], dependencies=[Depends(verify_token)])
 router.include_router(ai_router, prefix="/ai", tags=["ai"], dependencies=[Depends(verify_token)])
 router.include_router(paper_trade_router, prefix="/paper-trade", tags=["paper-trade"], dependencies=[Depends(verify_token)])
@@ -118,11 +123,13 @@ async def api_health_check(request: Request):
     try:
         engine = getattr(request.app.state, "engine", None)
         engine_running = engine and engine.is_running
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     try:
         db_ok = getattr(request.app.state, "storage", None) is not None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     return {
         "status": "ok",
@@ -210,3 +217,28 @@ async def data_enrich_self_check():
         "bond_count": bond_count,
         "caches": caches,
     }
+
+
+# ── 配置热重载 ──
+from app.config import settings, reload_settings
+
+@router.post("/admin/reload-config", dependencies=[Depends(verify_token)])
+async def reload_config(request: Request):
+    """运行时重新加载 .env 配置（无需重启后端）——需要登录认证"""
+    try:
+        reload_settings()
+        return {
+            "status": "ok",
+            "message": "配置已重新加载",
+            "config": {
+                "mx": bool(settings.MX_APIKEY),
+                "tavily": bool(settings.TAVILY_API_KEY),
+                "minimax": bool(settings.MINIMAX_API_KEY),
+                "deepseek": bool(settings.DEEPSEEK_API_KEY),
+                "github": bool(settings.GITHUB_TOKEN),
+                "akshare_proxy": settings.AKSHARE_PROXY_ENABLED,
+            }
+        }
+    except Exception as e:
+        logger.error(f"[Admin] 配置重载失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
