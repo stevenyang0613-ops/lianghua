@@ -387,18 +387,29 @@ export default function PaperTrade() {
   const [refreshTotalFailThreshold, setRefreshTotalFailThreshold] = useState(30)
   const [warningShownAt, setWarningShownAt] = useState<number | null>(null)
   const [dismissRefreshWarning, setDismissRefreshWarning] = useState(() => {
-    try { return sessionStorage.getItem('lianghua_dismiss_refresh_warning') === 'true' } catch { return true }
+    try { return localStorage.getItem(storageKey('dismiss_refresh_warning')) === 'true' } catch { return true }
   })
-  // useRef 解决闭包过期问题：warningShownAt 在 loadAccounts 内部被设置，
+  // 标签页隔离：每个标签页有独立的 load_fail_count，避免跨标签页污染
+  const tabIdRef = useRef((() => {
+    try {
+      let id = sessionStorage.getItem('lianghua_tab_id')
+      if (!id) {
+        id = 'tab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6)
+        sessionStorage.setItem('lianghua_tab_id', id)
+      }
+      return id
+    } catch { return 'tab_default' }
+  })())
+  const storageKey = (suffix: string) => `${tabIdRef.current}_${suffix}`
   // 不能加入 useCallback deps（否则无限循环），用 ref 避免 stale closure
   const warningShownRef = useRef(warningShownAt)
   warningShownRef.current = warningShownAt
   // loadAccounts 失败防抖：首次网络抖动不弹错误，连续失败 >=2 次才提示
-  // 用 sessionStorage 持久化，避免页面刷新后重置
+  // 用 localStorage + 标签页隔离持久化，避免页面刷新后重置，且不同标签页互不干扰
   const loadFailCountRef = useRef((() => {
     try {
-      const raw = sessionStorage.getItem('lianghua_load_fail_count')
-      const ts = sessionStorage.getItem('lianghua_load_fail_ts')
+      const raw = localStorage.getItem(storageKey('load_fail_count'))
+      const ts = localStorage.getItem(storageKey('load_fail_ts'))
       if (!raw || !ts) return 0
       const age = Date.now() - Number(ts)
       if (age > 5 * 60 * 1000) return 0  // 超过 5 分钟过期重置
@@ -411,7 +422,7 @@ export default function PaperTrade() {
   const handleDismissWarning = useCallback(() => {
     setDismissRefreshWarning(true)
     setWarningShownAt(null)
-    try { sessionStorage.setItem('lianghua_dismiss_refresh_warning', 'true') } catch { /* ignore */ }
+    try { localStorage.setItem(storageKey('dismiss_refresh_warning'), 'true') } catch { /* ignore */ }
   }, [])
 
   // warningShownAt 由 useEffect 的 setTimeout 在 10 秒后清除，无需在此检查 Date.now()
@@ -500,13 +511,13 @@ export default function PaperTrade() {
       }
       // 成功加载，重置失败计数
       loadFailCountRef.current = 0
-      try { sessionStorage.setItem('lianghua_load_fail_count', '0') } catch { /* ignore */ }
+      try { localStorage.setItem(storageKey('load_fail_count'), '0') } catch { /* ignore */ }
     } catch (e: unknown) {
       console.warn('Load paper accounts failed:', e)
       loadFailCountRef.current += 1
       try {
-        sessionStorage.setItem('lianghua_load_fail_count', String(loadFailCountRef.current))
-        sessionStorage.setItem('lianghua_load_fail_ts', String(Date.now()))
+        localStorage.setItem(storageKey('load_fail_count'), String(loadFailCountRef.current))
+        localStorage.setItem(storageKey('load_fail_ts'), String(Date.now()))
       } catch { /* ignore */ }
       // 首次失败不弹错误（避免网络抖动），连续失败 >=2 次才提示
       if (isMountedRef.current && loadFailCountRef.current >= 2) {

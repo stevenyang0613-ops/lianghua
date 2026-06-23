@@ -515,8 +515,8 @@ class EnhancedTimingModel:
         self._pending_position: Optional[float] = None
         self._pending_days: int = 0
         self._confirmed_position: float = self._last_position_ratio
-        # 波动率目标仓位保护：追踪近20日指数收益率
-        self._daily_returns: deque = deque(maxlen=20)
+        # 波动率目标仓位保护（P1-3）— 禁用
+        # self._daily_returns: deque = deque(maxlen=20)
         
     # ========== 市场环境检测 ==========
     
@@ -2161,26 +2161,12 @@ class EnhancedTimingModel:
         else:
             position_ratio = base_position
         
-        # ═══════════════════════════════════════════════════════════════
-        # 波动率目标仓位保护（P1-3）
-        # 公式: adjusted_pos = position_ratio × min(1, target_vol / realized_vol)
-        # 目标年化波动率 22%（HS300 长期年化 ~17%，留余量应对波动率聚集）
-        # ═══════════════════════════════════════════════════════════════
-        TARGET_ANNUAL_VOL = 0.22
-        if not math.isnan(data.stock_index_change):
-            self._daily_returns.append(data.stock_index_change)
-        if len(self._daily_returns) >= 10:
-            realized_daily_vol = pd.Series(list(self._daily_returns)).std()
-            realized_ann_vol = realized_daily_vol * math.sqrt(252)
-            if realized_ann_vol > TARGET_ANNUAL_VOL:
-                vol_cap = TARGET_ANNUAL_VOL / realized_ann_vol
-                capped_position = position_ratio * vol_cap
-                if capped_position < position_ratio:
-                    logger.debug(
-                        f"[VolTarget] 年化波动率{realized_ann_vol:.1%} > 目标{TARGET_ANNUAL_VOL:.0%}，"
-                        f"仓位从{position_ratio*100:.0f}%降至{capped_position*100:.0f}%"
-                    )
-                    position_ratio = max(0.05, min(1.0, capped_position))
+        # 波动率目标仓位保护（P1-3）— 禁用
+        # 原因：与仓位确认/限速机制存在交互问题：
+        # 1. 22% 目标波动率对 A 股过于激进（HS300 常态 17%，但 20 日滚动波动率经常超过 22%）
+        # 2. 限制后的 position_ratio 写入 _last_position_ratio，导致恢复缓慢
+        # 3. 30% 目标 + 存储 base_position 方案理论上可行，但需更深入地重新设计
+        # 待解决：波动率目标应在 rate limiting 之前应用，且不应影响 _last_position_ratio
         self._last_position_ratio = position_ratio
         
         # 对冲推荐

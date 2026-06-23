@@ -120,6 +120,7 @@ class PaperAccount:
             "rebalance_days": self.params.get("rebalance_days", 7) if isinstance(self.params, dict) else 7,
             # 关键: 返回真实的距离下一次调仓的 idx 差值
             "next_rebalance_idx": self._sim_idx + (self.params.get("rebalance_days", 7) - self._sim_idx % self.params.get("rebalance_days", 7)) % self.params.get("rebalance_days", 7) if isinstance(self.params, dict) and self.params.get("rebalance_days", 7) > 0 else self._sim_idx,
+        }
 
 
 # ── 核心管理器 ──────────────────────────────────────────
@@ -381,6 +382,23 @@ class PaperTradeManager:
                 account._sim_dates = []
             account.is_running = True
 
+            # 关键: 重置后立即执行一次，确保首次立即建仓
+            if account.is_running and init_df is not None and len(init_df) > 0:
+                try:
+                    from app.models.convertible import ConvertibleQuote
+                    bonds = []
+                    if self._market_engine is not None:
+                        raw_bonds = getattr(self._market_engine, 'latest_quotes', None) or []
+                        if raw_bonds:
+                            bonds = [b for b in raw_bonds if isinstance(b, ConvertibleQuote) and is_tradeable_bond(b)]
+                    if bonds:
+                        asyncio.create_task(self._process_account(
+                            account, init_df, bonds, time_mod.monotonic(), str(datetime.now().date())
+                        ))
+                        logger.info(f"[PaperTrade] Triggered immediate first run after reset for account {account_id}")
+                except Exception as e:
+                    logger.warning(f"[PaperTrade] Immediate first run after reset failed for {account_id}: {e}")
+
         logger.info(f"[PaperTrade] Reset account {account_id}")
 
     # ── 参数更新 ──────────────────────────────────────
@@ -558,6 +576,18 @@ class PaperTradeManager:
         if df.empty:
             raise RuntimeError("无行情数据且无历史快照，请等待行情推送后再试")
 
+        # ── 确保策略已完成 on_init 初始化 ──
+        # 如果 on_init 从未被调用（启动时无行情数据），先调用 on_init
+        if not getattr(strategy, '_dates', None):
+            logger.info(f"[PaperTrade] force_rebalance: calling on_init for {type(strategy).__name__}")
+            if df is not None and len(df) > 0:
+                init_df = self._build_init_df()
+                if init_df is not None and len(init_df) > 0:
+                    try:
+                        strategy.on_init(init_df)
+                    except Exception as e:
+                        logger.warning(f"[PaperTrade] force_rebalance: on_init failed: {e}")
+
         # ── 保存原始状态 ──
         original_idx = account._sim_idx
         original_dates = list(getattr(strategy, '_dates', []))
@@ -571,12 +601,17 @@ class PaperTradeManager:
 
         # ── 确保今天在策略 _dates 和 _date_data_map 中 ──
         if today_str not in original_dates:
-            strategy._dates = original_dates + [today_str]
+            strategy._dates = (original_dates or []) + [today_str]
         today_idx = len(strategy._dates) - 1
 
+        # 尝试初始化 _date_data_map（如果策略有该属性）
         if hasattr(strategy, '_date_data_map'):
             if today_str not in strategy._date_data_map:
                 strategy._date_data_map[today_str] = df
+        elif hasattr(strategy, '_data'):
+            # XuanjiV8 使用 _data 而非 _date_data_map
+            if today_str not in strategy._data:
+                strategy._data[today_str] = df
 
         # ── 临时设置：rebalance_days=1 → 每次都是调仓日 ──
         strategy._params['rebalance_days'] = 1

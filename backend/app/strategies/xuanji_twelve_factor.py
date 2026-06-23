@@ -383,7 +383,8 @@ class XuanjiTwelveFactorStrategy(Strategy):
 
         if rank <= hold_count:
             # 排名回到前hold_count，重置缓冲带计数器
-            self._buffer_tracker.pop(code, None)
+            if hasattr(self, '_buffer_tracker'):
+                self._buffer_tracker.pop(code, None)
             return True, f"排名{rank}"
 
         if rank > hold_count + buffer_size:
@@ -400,6 +401,13 @@ class XuanjiTwelveFactorStrategy(Strategy):
         if was_held:
             return True, f"缓冲观察({days_below}/{buffer_days}日)"
         return False, f"缓冲带不买入"
+
+    def on_destroy(self):
+        """策略清理"""
+        self._buffer_tracker.clear()
+        self._prev_selected.clear()
+        self._buy_prices.clear()
+        self._peak_prices.clear()
 
     # ============== 生命周期 ==============
 

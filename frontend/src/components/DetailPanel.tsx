@@ -11,8 +11,8 @@ import { fmt } from '../utils/format'
 
 const { Title, Text } = Typography
 
-
-
+// 银行行业毛利率标记值（与后端 BANK_GPM_SENTINEL 保持一致）
+const BANK_GPM_SENTINEL = -1.0
 
 export default function DetailPanel() {
   const selectedBond = useAppStore((s) => s.selectedBond)
@@ -45,7 +45,7 @@ export default function DetailPanel() {
 
   const gpmRender = useMemo(() => {
     const gpm = Number(bond.gpm)
-    const isBankNoGPM = Math.abs(gpm - (-1)) < 0.01
+    const isBankNoGPM = Math.abs(gpm - BANK_GPM_SENTINEL) < 0.05
     if (isBankNoGPM) return null
     const gpmVal = isNaN(gpm) ? null : gpm
     if (gpmVal === null || gpmVal === undefined) return null
