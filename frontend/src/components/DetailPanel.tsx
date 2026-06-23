@@ -132,8 +132,10 @@ export default function DetailPanel() {
               {bond.roe !== undefined && (
                 <Descriptions.Item label="ROE">{fmt(bond.roe)}%</Descriptions.Item>
               )}
-              {bond.gpm !== undefined && bond.gpm > 0 && (
-                <Descriptions.Item label="毛利率">{fmt(bond.gpm)}%</Descriptions.Item>
+              {bond.gpm !== undefined && bond.gpm !== -1 && (
+                <Descriptions.Item label="毛利率">
+                  {bond.gpm > 0 ? `${fmt(bond.gpm)}%` : bond.gpm === 0 ? '0%' : '银行(无毛利率)'}
+                </Descriptions.Item>
               )}
               {bond.debt_ratio !== undefined && (
                 <Descriptions.Item label="资产负债率">{fmt(bond.debt_ratio)}%</Descriptions.Item>

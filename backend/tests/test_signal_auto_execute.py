@@ -88,11 +88,11 @@ def test_sell_executed_before_buy():
 # ---------------------------------------------------------------------------
 
 def test_remaining_count_decrements_per_buy():
-    """Each buy decrements remaining count, affecting volume allocation."""
+    """Each buy decrements remaining cash, affecting volume allocation."""
     cash = 1000.0
     engine, trade_engine, storage = _make_engine_with_mocks(cash=cash)
 
-    # 3 buy signals at price=100 => alloc per buy = cash / remaining
+    # 3 buy signals at price=100 => alloc per buy = cash / count (fixed denominator)
     signals = [
         _make_signal(code='120001', action='buy', price=100.0, confidence=0.9),
         _make_signal(code='120002', action='buy', price=100.0, confidence=0.8),
@@ -101,17 +101,18 @@ def test_remaining_count_decrements_per_buy():
 
     engine._auto_execute(signals)
 
-    # First buy: alloc = 1000/3 ≈ 333.3 => volume = int(333.3/100) = 3
-    # Second buy: alloc = 1000/2 = 500 => volume = int(500/100) = 5
-    # Third buy: alloc = 1000/1 = 1000 => volume = int(1000/100) = 10
+    # alloc = cash / count (fixed denominator), then remaining_cash decreases by volume*price
+    # buy1: alloc = 1000/3 ≈ 333.3, volume = 3, remaining = 700
+    # buy2: alloc = 700/3 ≈ 233.3, volume = 2, remaining = 500
+    # buy3: alloc = 500/3 ≈ 166.6, volume = 1, remaining = 400
     buy_calls = trade_engine.buy.call_args_list
     assert len(buy_calls) == 3
 
     volumes = [c.kwargs['volume'] for c in buy_calls]
 
     assert volumes[0] == 3, f"First buy volume should be 3, got {volumes[0]}"
-    assert volumes[1] == 5, f"Second buy volume should be 5, got {volumes[1]}"
-    assert volumes[2] == 10, f"Third buy volume should be 10, got {volumes[2]}"
+    assert volumes[1] == 2, f"Second buy volume should be 2, got {volumes[1]}"
+    assert volumes[2] == 1, f"Third buy volume should be 1, got {volumes[2]}"
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +120,7 @@ def test_remaining_count_decrements_per_buy():
 # ---------------------------------------------------------------------------
 
 def test_cash_allocation_formula():
-    """Buy volume = max(1, int(cash / remaining / price))."""
+    """Buy volume = max(1, int(cash / count / price)). Cash decreases only on success."""
     cash = 1000.0
     engine, trade_engine, storage = _make_engine_with_mocks(cash=cash)
 
@@ -133,13 +134,13 @@ def test_cash_allocation_formula():
     buy_calls = trade_engine.buy.call_args_list
     assert len(buy_calls) == 2
 
-    # First buy: alloc = 1000/2 = 500, volume = int(500/100) = 5
+    # alloc = 1000/2 = 500, volume = int(500/100) = 5
+    # After first buy, remaining = 500, second alloc = 500/2 = 250, volume = 2
     v1 = buy_calls[0].kwargs['volume']
     assert v1 == 5, f"First buy volume should be 5, got {v1}"
 
-    # Second buy: alloc = 1000/1 = 1000, volume = int(1000/100) = 10
     v2 = buy_calls[1].kwargs['volume']
-    assert v2 == 10, f"Second buy volume should be 10, got {v2}"
+    assert v2 == 2, f"Second buy volume should be 2, got {v2}"
 
 
 def test_cash_allocation_minimum_volume_is_1():
@@ -201,7 +202,7 @@ def test_sell_frees_cash_for_buy():
 # ---------------------------------------------------------------------------
 
 def test_buy_failure_doesnt_block_remaining():
-    """If one buy fails, remaining count still decrements and others proceed."""
+    """If one buy fails, remaining cash is unchanged and others proceed with same alloc."""
     cash = 10000.0
     engine, trade_engine, storage = _make_engine_with_mocks(cash=cash)
 
@@ -232,14 +233,15 @@ def test_buy_failure_doesnt_block_remaining():
     assert signals[1].executed is True
     assert signals[2].executed is True
 
-    # remaining counter should have decremented for all 3
-    # If it didn't, volume allocation would be wrong for later buys
-    # With proper decrement: buy2 alloc = 10000/2 = 5000, buy3 alloc = 10000/1 = 10000
+    # With cash-based allocation: alloc = remaining_cash / count (fixed denominator)
+    # buy1 fails, remaining_cash stays 10000
+    # buy2: alloc = 10000/3 = 3333.3, volume = 33, remaining = 6677
+    # buy3: alloc = 6677/3 = 2225.6, volume = 22
     buy_calls = trade_engine.buy.call_args_list
     v2 = buy_calls[1].kwargs['volume']
     v3 = buy_calls[2].kwargs['volume']
-    assert v2 == 50, f"Second buy volume should be 50, got {v2}"
-    assert v3 == 100, f"Third buy volume should be 100, got {v3}"
+    assert v2 == 33, f"Second buy volume should be 33, got {v2}"
+    assert v3 == 22, f"Third buy volume should be 22, got {v3}"
 
 
 # ---------------------------------------------------------------------------
@@ -425,8 +427,8 @@ def test_executed_positions_appended_in_order():
     assert eps[1].code == '120002'
 
 
-def test_sell_without_position_uses_default_volume():
-    """When no matching position found, sell uses default volume of 10."""
+def test_sell_without_position_is_skipped():
+    """When no matching position found, sell is skipped to avoid short selling."""
     cash = 50000.0
     engine, trade_engine, storage = _make_engine_with_mocks(cash=cash, positions=[])
 
@@ -436,9 +438,9 @@ def test_sell_without_position_uses_default_volume():
 
     engine._auto_execute(signals)
 
-    sell_call = trade_engine.sell.call_args
-    v = sell_call.kwargs['volume']
-    assert v == 10, f"Default sell volume should be 10, got {v}"
+    # No sell should be called (no position to sell)
+    trade_engine.sell.assert_not_called()
+    assert signals[0].executed is False
 
 
 def test_already_executed_signals_are_skipped():
