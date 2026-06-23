@@ -429,3 +429,21 @@ Every agent working on this project MUST follow these rules.
 - `stock_zh_a_gdhs(symbol="20230930")` 返回该季度的全市场股东户数（含 tqdm 进度条），不是单只股票。
 - 如果看到 tqdm 进度条 "858/858" 耗时 1-2 分钟，说明误用了该接口。
 - 前端需要该数据的场景应使用 `stock_zh_a_gdhs_detail_em(symbol=code)`。
+
+### 61. 回测数据充足性检查应捕获双峰分布
+- `_is_data_sufficient` 不能只看 `avg_days_per_bond`（可能被大量仅有 1 天数据的债券拉低平均值）。
+- 必须额外检查 `well_covered_bonds >= 30`（至少有 20 天数据覆盖的债券数量）。
+- 双峰分布场景：DB 有 200+ 债券但 225 只仅 1 天数据 + 37 只全量 → avg=33days/bond 隐藏问题。
+- `_build_data` 返回的 DataFrame 应设置 `_backtest_data_warning` 属性，API 端点读取后返回 `data_warning` 字段。
+
+### 62. BacktestEngine.run 只记录已平仓交易，不记录持有至结束的持仓
+- 第一天买入 28 只但最终只记录 2 笔交易 → 这是正常的，其他 26 只一直持有到回测结束。
+- `remove_stale` 记录因数据中断而强制平仓的交易；`portfolio.sell()` 记录策略发出卖出信号的交易。
+- 持仓持有到结束不产生交易记录 → `len(result.trades)` 不是买入数。
+- 调试 BacktestEngine 时，用 `len(portfolio.holdings) + len(portfolio.trades)` 验证总买入数是否正确。
+
+### 63. CAUTION: `_build_data` mock 测试需要完整的 request 上下文
+- `_build_data` 需要 `request.app.state.storage` 和 `request.app.state.engine`。
+- 单元测试中无法直接调用 `_build_data`，应测试其调用的辅助函数（如 `_is_data_sufficient`）。
+- 使用 MagicMock 快速模拟 storage/engine：`request.app.state.storage = DataStorage(...)`。
+- 运行时 DB 锁定问题：复制文件到 `/tmp/` 绕过。
