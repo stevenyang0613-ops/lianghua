@@ -626,7 +626,7 @@ class EnhancedTimingModel:
         
         return weights
     
-    # ========== 1. 估值面 (14%) ==========
+    # ========== 1. 估值面 (13%) ==========
     
     def _score_valuation(self, data: EnhancedMarketData) -> CategoryScore:
         """估值面评分：转股溢价率 + 纯债YTM + 价格分布 + PE/PB分位"""
@@ -799,7 +799,7 @@ class EnhancedTimingModel:
             description=self._category_desc(cat_score, ["极度低估", "低估", "合理", "高估", "泡沫"]),
         )
     
-    # ========== 2. 基本面 (10%) ==========
+    # ========== 2. 基本面 (9%) ==========
     
     def _score_fundamental(self, data: EnhancedMarketData) -> CategoryScore:
         """基本面评分：盈利增速 + 盈利质量 + 估值合理性"""
@@ -1274,7 +1274,7 @@ class EnhancedTimingModel:
             description=self._category_desc(cat_score, ["流动性危机", "偏紧", "中性", "偏宽松", "极度宽松"]),
         )
     
-    # ========== 6. 技术面 (14%) ==========
+    # ========== 6. 技术面 (18%) ==========
     
     def _score_technical(self, data: EnhancedMarketData) -> CategoryScore:
         """技术面评分：MA排列 + MACD + RSI + 布林带 + 量价关系 + 指数位置"""
@@ -1460,7 +1460,7 @@ class EnhancedTimingModel:
             description=self._category_desc(cat_score, ["极度弱势", "弱势", "中性", "强势", "极度强势"]),
         )
     
-    # ========== 7. 情绪面 (10%) ==========
+    # ========== 7. 情绪面 (13%) ==========
     
     def _score_sentiment(self, data: EnhancedMarketData) -> CategoryScore:
         """情绪面评分：涨跌比 + 涨停跌停比 + 新高新低比 + PCR + VIX + 融资买入"""

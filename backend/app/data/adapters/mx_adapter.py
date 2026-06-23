@@ -13,17 +13,41 @@ import os
 import sys
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 
 import pandas as pd
 
 from .base import DataSourceAdapter, DataSourceConfig, DataQuery, DataType
+from .eastmoney_adapter import EastmoneyAdapter
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# MX API Key 首次验证时间戳文件（用于有效期管理）
+_MX_KEY_VALIDATED_AT_FILE = Path.home() / ".lianghua" / ".mx_key_validated_at"
+
+
+def _get_key_validated_at() -> Optional[datetime]:
+    """读取上次验证时间"""
+    try:
+        if _MX_KEY_VALIDATED_AT_FILE.exists():
+            ts = float(_MX_KEY_VALIDATED_AT_FILE.read_text().strip())
+            return datetime.fromtimestamp(ts)
+    except Exception:
+        pass
+    return None
+
+
+def _set_key_validated_at():
+    """记录验证时间"""
+    try:
+        _MX_KEY_VALIDATED_AT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MX_KEY_VALIDATED_AT_FILE.write_text(str(datetime.now().timestamp()))
+    except Exception:
+        pass
 
 
 class MXAdapter(DataSourceAdapter):
@@ -193,7 +217,10 @@ class MXAdapter(DataSourceAdapter):
     # ------------------------------------------------------------------
 
     async def query_natural(self, query_text: str, data_type: str = "financial") -> dict:
-        """自然语言查询 MX 金融数据（旧接口，保留兼容）"""
+        """自然语言查询 MX 金融数据（旧接口，保留兼容）
+        
+        当 MX API 不可用时，自动回退到 EastmoneyAdapter（直接 HTTP 调用，无需 Key）
+        """
         if not self._initialized:
             return {"success": False, "error": "MX adapter not initialized"}
         try:
@@ -229,8 +256,54 @@ class MXAdapter(DataSourceAdapter):
                     "source": "mx_data",
                 }
         except Exception as e:
-            logger.error(f"[MX] Query failed: {e}")
-            return {"success": False, "error": str(e)}
+            logger.warning(f"[MX] Query failed, attempting fallback to EastmoneyAdapter: {e}")
+            # 降级策略：MX 失败时回退到 EastmoneyAdapter（直接 HTTP 调用，无需 Key）
+            try:
+                em = EastmoneyAdapter(DataSourceConfig(name="eastmoney"))
+                await em.connect()
+                
+                # 尝试提取代码
+                codes = []
+                import re
+                code_matches = re.findall(r'(\d{6})', query_text)
+                if code_matches:
+                    codes = code_matches[:20]
+                
+                if data_type == "news":
+                    # 资讯搜索暂无可直接回退的接口，返回提示
+                    return {
+                        "success": False,
+                        "error": "MX API 暂不可用，资讯搜索暂无降级方案。请检查 MX_APIKEY 配置。",
+                        "fallback": False,
+                    }
+                elif codes:
+                    # 有代码 → 尝试获取实时行情
+                    df = await em.get_realtime_quotes(codes)
+                    if not df.empty:
+                        rows = df.to_dict("records")
+                        return {
+                            "success": True,
+                            "data": rows,
+                            "tables": [{"sheet_name": "实时行情", "rows": rows, "fieldnames": list(df.columns)}],
+                            "total_rows": len(rows),
+                            "source": "eastmoney_fallback",
+                            "fallback": True,
+                            "fallback_reason": str(e),
+                        }
+                
+                # 无代码或行情失败 → 回退到宏观/行业数据
+                return {
+                    "success": False,
+                    "error": f"MX API 暂不可用（{str(e)[:100]}），且当前查询暂无降级方案。请检查 MX_APIKEY 配置。",
+                    "fallback": False,
+                }
+            except Exception as fallback_err:
+                logger.error(f"[MX] Fallback to EastmoneyAdapter also failed: {fallback_err}")
+                return {
+                    "success": False,
+                    "error": f"MX API 错误: {str(e)[:100]}；降级回退也失败: {str(fallback_err)[:100]}",
+                    "fallback": False,
+                }
 
     # ------------------------------------------------------------------
     # 内部工具
