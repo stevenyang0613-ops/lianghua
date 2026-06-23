@@ -64,7 +64,7 @@ class MarketEngine:
         """返回最近一次的行情快照（兼容 paper_trade_manager 的引用）"""
         if not self._quotes:
             return []
-        return list(self._quotes.values())
+        return copy.deepcopy(list(self._quotes.values()))
 
     async def start(self) -> None:
         """启动定时刷新
@@ -199,6 +199,7 @@ class MarketEngine:
             skipped_zero_price = 0
             skipped_missing_price = 0
             skipped_stopped = 0
+            skipped_construct = 0
             now = date.today()
             for r in rows:
                 try:
@@ -300,10 +301,13 @@ class MarketEngine:
                         profit_yoy=r.get("profit_yoy"),
                         restricted_release_amount=r.get("restricted_release_amount"),
                     ))
-                except (ValueError, TypeError, KeyError):
+                except (ValueError, TypeError, KeyError) as _e:
+                    skipped_construct += 1
+                    if skipped_construct <= 5:
+                        logger.debug(f"[MarketEngine] Failed to construct ConvertibleQuote for {code}: {_e}")
                     continue
             if bonds:
-                logger.info(f"[MarketEngine] Loaded {len(bonds)} bonds from storage fallback (skipped {skipped_zero_price} with price=0, {skipped_stopped} stopped trading)")
+                logger.info(f"[MarketEngine] Loaded {len(bonds)} bonds from storage fallback (skipped {skipped_zero_price} price=0, {skipped_stopped} stopped, {skipped_construct} construct_fail)")
             return bonds
         except Exception as e:
             logger.error(f"[MarketEngine] Storage fallback failed: {e}")

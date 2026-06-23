@@ -184,6 +184,22 @@ _fresh = _fresh_impl
 _sf = _sf_impl
 
 
+def _get_latest_value(macro_map: dict) -> Optional[float]:
+    """从宏观数据字典中获取最近一期（日期键最大）的 value 字段。
+    宏观缓存使用日期字符串（如 "2026-01"）作键，条目为 {"value": ..., "yoy": ...} 格式。
+    """
+    if not macro_map:
+        return None
+    try:
+        latest_key = max(k for k in macro_map if isinstance(k, str) and k.replace("-", "").replace("/", "").isdigit())
+        entry = macro_map[latest_key]
+        if isinstance(entry, dict):
+            return entry.get("value")
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def _set_global_map(name: str, new_value, replace: bool = False):
     """线程安全地更新全局缓存映射。
     使用 copy-on-write：构建合并后的新 dict，一次性替换全局引用，
@@ -573,11 +589,17 @@ def _with_metrics(fn):
             if bond_total > 0 and map_name:
                 with _cache_lock:
                     m = globals().get(map_name)
-                    # AGENTS.md fix: bond-related maps use bond codes as keys, not stock codes
-                    codes_to_check = _bond_codes if (map_name in _BOND_CODE_MAPS and _bond_codes) else _bond_codes_snapshot
-                    if isinstance(m, dict):
-                        bond_count = sum(1 for c in codes_to_check if c in m and m.get(c) is not None
-                                                 and (not isinstance(m.get(c), dict) or m.get(c).get("_data_source") != "zero_fill"))
+                    if map_name in _MACRO_MAPS:
+                        # 宏观数据是全局指标，所有债券共享同一份数据
+                        # 只要 map 非空，bond_count = bond_total
+                        if m and isinstance(m, dict) and any(not k.startswith("_") for k in m):
+                            bond_count = bond_total
+                    else:
+                        # AGENTS.md fix: bond-related maps use bond codes as keys, not stock codes
+                        codes_to_check = _bond_codes if (map_name in _BOND_CODE_MAPS and _bond_codes) else _bond_codes_snapshot
+                        if isinstance(m, dict):
+                            bond_count = sum(1 for c in codes_to_check if c in m and m.get(c) is not None
+                                                     and (not isinstance(m.get(c), dict) or m.get(c).get("_data_source") != "zero_fill"))
             status = "ok" if count and count > 0 else "empty"
             # 新增：completeness (bond_count / bond_total) 让前端知道数据完整度
             # 例如：north_cache 60s 内只完成 109/854，completeness=0.13
@@ -1667,13 +1689,26 @@ def _refresh_fund_flow_cache():
     # 注意：不在主进程调用 stock_zh_a_spot_em（segfault 高风险），
     # 依赖 runner 子进程刷新 fund_flow 缓存，或走单股 fallback。
     logger.warning("[DataEnrich] Fund flow: no cache, trying individual fallback...")
-    # Individual fallback
-    ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
+    # 扩大 fallback 范围到全 A 股（而不仅是 bond stocks），提高覆盖率
+    all_codes = []
+    try:
+        df_all = _run_with_timeout(
+            ak.stock_info_a_code_name,
+            timeout=30.0, default=None,
+            op_name="fund_flow_stock_info_a_code_name",
+        )
+        if df_all is not None and not df_all.empty:
+            all_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
+    except Exception as e:
+        logger.debug(f"[DataEnrich] Fund flow: all codes fetch failed: {e}")
+    
+    # 如果全 A 股获取失败，回退到 bond stocks
+    ff_codes = all_codes if all_codes else (list(_bond_stock_codes) if _bond_stock_codes else [])
     if not ff_codes:
         _ensure_bond_stock_codes()
         ff_codes = list(_bond_stock_codes) if _bond_stock_codes else []
     if ff_codes:
-        logger.info(f"[DataEnrich] Fund flow: trying individual fallback for {len(ff_codes)} bond stocks")
+        logger.info(f"[DataEnrich] Fund flow: trying individual fallback for {len(ff_codes)} stocks")
         individual_result = _refresh_fund_flow_individual(ff_codes)
         if individual_result:
             merged = dict(_fund_flow_map) if _fund_flow_map else {}
@@ -4032,6 +4067,8 @@ def _compute_field_coverage() -> dict[str, float]:
         "turnover_rate",  # 0% 是停牌/不活跃股票的合法值
         "sentiment_score",  # 0 是中性情绪，算有效数据
         "buyback_amount",  # 0 表示无回购，算有效数据
+        "forced_call_days",  # 0 表示未触发/无强赎，算有效数据
+        "is_called",  # False 表示未触发，算有效数据（布尔值用 is None 判断缺失）
     }
     empty_string_valid = {"call_status", "concepts", "industry"}  # 空字符串/空列表也算缺失
     gpm_field = "gpm"  # -1 是银行标记，不算缺失
@@ -4668,20 +4705,22 @@ async def enrich_quotes(bonds: list) -> list:
 
         # Macro data enrichment — attach latest macro snapshot to each bond
         # (macro data is global, not per-stock; all bonds get the same snapshot)
+        # NOTE: macro maps use date strings as keys (e.g. "2026-01"), NOT "latest";
+        # sort keys chronologically and use the most recent entry's "value" field.
         if _macro_cpi_map:
-            _v = _macro_cpi_map.get("latest")
+            _v = _get_latest_value(_macro_cpi_map)
             if isinstance(_v, (int, float)):
                 b.macro_cpi = _v
         if _macro_ppi_map:
-            _v = _macro_ppi_map.get("latest")
+            _v = _get_latest_value(_macro_ppi_map)
             if isinstance(_v, (int, float)):
                 b.macro_ppi = _v
         if _macro_m2_map:
-            _v = _macro_m2_map.get("latest")
+            _v = _get_latest_value(_macro_m2_map)
             if isinstance(_v, (int, float)):
                 b.macro_m2 = _v
         if _macro_lpr_map:
-            _v = _macro_lpr_map.get("latest")
+            _v = _get_latest_value(_macro_lpr_map)
             if isinstance(_v, (int, float)):
                 b.macro_lpr = _v
 
@@ -6395,416 +6434,6 @@ def _fetch_one_holder(code: str):
         }
     except Exception:
         return None
-
-
-
-@_with_metrics
-def _refresh_margin_cache():
-    """主进程内刷新融资融券数据。
-
-    采用交易所每日融资融券明细：
-    - 深交所：ak.stock_margin_detail_szse(date)
-    - 上交所：ak.stock_margin_detail_sse(date)
-    自动回退最近 10 个交易日（节假日无数据）。
-    """
-    try:
-        result = {}
-
-        def _margin_detail_for_date(exchange: str, date_str: str):
-            fn = ak.stock_margin_detail_szse if exchange == "szse" else ak.stock_margin_detail_sse
-            return _run_with_timeout(
-                lambda: fn(date=date_str),
-                timeout=_TIMEOUT_MEDIUM, default=None,
-                op_name=f"margin_detail_{exchange}_{date_str}",
-                quiet_errors=True,  # East Money 融资明细接口在非交易日/某些日期不稳定，降低日志噪音
-            )
-
-        for exchange, code_col_candidates, balance_col_candidates in [
-            ("szse", ["证券代码", "代码"], ["融资余额", "融资融券余额"]),
-            ("sse", ["标的证券代码", "证券代码", "代码"], ["融资余额", "融资融券余额"]),
-        ]:
-            df = None
-            date_str = None
-            for days in range(10):
-                date_str = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
-                try:
-                    df = _margin_detail_for_date(exchange, date_str)
-                except Exception:
-                    df = None
-                if df is not None and len(df) > 0:
-                    break
-            if df is None or len(df) == 0:
-                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} no data for last 10 days")
-                continue
-
-            code_col = next((c for c in code_col_candidates if c in df.columns), None)
-            balance_col = next((c for c in balance_col_candidates if c in df.columns), None)
-            if not code_col:
-                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} missing code column")
-                continue
-            if not balance_col:
-                logger.warning(f"[DataEnrich] Margin: {exchange.upper()} missing balance column")
-                continue
-
-            filled = 0
-            for _, r in df.iterrows():
-                code = str(r.get(code_col, "")).strip()
-                if not code or len(code) != 6 or not code.isdigit():
-                    continue
-                balance = _sf(r.get(balance_col)) if balance_col else None
-                # 若当前交易所已有数据，保留首次出现（通常 SSE/SZSE 不重叠）
-                if code not in result:
-                    result[code] = {
-                        "margin_balance": balance,  # 保留 None 让前端区分"无数据"
-                        "_data_source": f"{exchange}_{date_str}",
-                    }
-                    filled += 1
-            logger.info(f"[DataEnrich] Margin {exchange.upper()}: {filled} stocks from {date_str}")
-
-        # Zero-fill: 对所有已知股票代码中无数据的股票填充 0
-        # 使用 _get_bond_or_fallback_codes() 而非 _ensure_bond_stock_codes()，
-        # 避免启动阶段 AKShare 信号量争用导致超时
-        for code in _get_bond_or_fallback_codes():
-            if code not in result:
-                result[code] = {
-                    "margin_balance": 0,  # TODO: zero-fill 应改为 float('nan') 以区分"非融资融券标的"(真实0)与"数据缺失"
-                    # 当前 enrich_quotes 中"非融资融券标的"也设为 0，需全链路修改后迁移
-                    "_data_source": "zero_fill",
-                }
-
-        # Source 2 fallback: stock_margin_underlying_em
-        real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_"))]
-        if len(real_entries) < 500:
-            try:
-                df_underlying = _run_with_timeout(
-                    ak.stock_margin_underlying_em,
-                    timeout=60, default=None, op_name="margin_underlying_em",
-                )
-                if df_underlying is not None and len(df_underlying) > 0:
-                    count_underlying = 0
-                    for _, r in df_underlying.iterrows():
-                        code = str(r.get("证券代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result and not result[code].get("_summary") and result[code].get("margin_balance") is not None:
-                            continue
-                        balance = _sf(r.get("融资余额"))
-                        if balance is None:
-                            balance = _sf(r.get("融资融券余额"))
-                        if balance is not None:
-                            result[code] = {
-                                "margin_balance": balance,
-                                "_data_source": "underlying_em",
-                            }
-                            count_underlying += 1
-                    logger.info(f"[DataEnrich] Margin: stock_margin_underlying_em added {count_underlying} stocks")
-            except Exception as e_underlying:
-                logger.warning(f"[DataEnrich] Margin stock_margin_underlying_em fallback failed: {e_underlying}")
-
-        if result:
-            # Add summary with total margin balance stats
-            real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_", "underlying_"))]
-            total_balance = sum(v.get("margin_balance", 0) or 0 for v in real_entries)
-            result["_summary"] = {
-                "total_balance": round(total_balance, 2),
-                "stock_count": len(real_entries),
-                "date": datetime.now().strftime("%Y%m%d"),
-            }
-            _set_global_map("_margin_map", result, replace=True)
-            _save_cache(_MARGIN_CACHE, result)
-            logger.info(f"[DataEnrich] Margin: {len(result)} stocks refreshed (含 zero_fill)")
-            return len(result)
-        if _margin_map:
-            logger.warning("[DataEnrich] Margin: all APIs returned empty, keeping existing cache")
-            return len(_margin_map)
-        return 0
-    except Exception as e:
-        logger.warning(f"[DataEnrich] Margin in-proc refresh failed: {e}")
-        return 0
-
-
-
-
-
-
-@_with_metrics
-def _refresh_holder_num_cache():
-    """主进程内刷新股东人数数据。
-
-    重要：akshare 1.18.x 没有批量"股东人数"接口（stock_holder_num_em 不存在），
-    只有单股接口 stock_main_stock_holder(stock=code)。
-    采用 10 并发线程池批量调用，优先覆盖 _bond_stock_codes，
-    然后扩展到全 A 股（上限 1000 只），避免启动卡住太久。
-    """
-    try:
-        result = {}
-        # Source 1: 批量接口 stock_zh_a_gdhs_detail_em（全 A 股最新股东户数）
-        try:
-            df_batch = _run_with_timeout(
-                ak.stock_zh_a_gdhs_detail_em,
-                timeout=120, default=None, op_name="stock_zh_a_gdhs_detail_em",
-            )
-            if df_batch is not None and len(df_batch) > 0:
-                count_batch = 0
-                # 同一只股票可能有多期记录，取最新一期（按公告日期降序）
-                latest_by_code: dict[str, dict] = {}
-                for _, r in df_batch.iterrows():
-                    code = str(r.get("代码", "")).strip().zfill(6)
-                    if not code or len(code) != 6 or not code.isdigit():
-                        continue
-                    holders = _sf(r.get("股东户数-本次"))
-                    if holders is None or holders <= 0:
-                        continue
-                    prev_holders = _sf(r.get("股东户数-上次"))
-                    change = _sf(r.get("股东户数-增减"))
-                    change_pct = _sf(r.get("股东户数-增减比例"))
-                    announce_date = str(r.get("股东户数公告日期", "")).strip()[:10]
-                    entry = {
-                        "holder_num": holders,
-                        "holder_num_change": change,
-                        "holder_num_change_pct": change_pct,
-                        "_date": announce_date,
-                        "_data_source": "stock_zh_a_gdhs_detail_em",
-                    }
-                    if prev_holders is not None and prev_holders > 0:
-                        # 如果当前批次没有计算 change，用本次-上次补充
-                        if entry["holder_num_change"] is None:
-                            entry["holder_num_change"] = holders - prev_holders
-                    existing = latest_by_code.get(code)
-                    if existing is None or announce_date > existing.get("_date", ""):
-                        latest_by_code[code] = entry
-                for code, entry in latest_by_code.items():
-                    result[code] = entry
-                    count_batch += 1
-                logger.info(f"[DataEnrich] HolderNum: stock_zh_a_gdhs_detail_em batch {count_batch} stocks")
-        except Exception as e_batch:
-            logger.warning(f"[DataEnrich] HolderNum batch failed: {e_batch}")
-
-        # Source 2 fallback: stock_hold_num_em (batch API) — 若存在
-        if len(result) < 100:
-            try:
-                df_hn = _run_with_timeout(
-                    getattr(ak, "stock_hold_num_em", lambda: pd.DataFrame()),
-                    timeout=60, default=None, op_name="stock_hold_num_em",
-                )
-                if df_hn is not None and len(df_hn) > 0:
-                    count_hn = 0
-                    for _, r in df_hn.iterrows():
-                        code = str(r.get("股票代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result:
-                            continue
-                        holders = _sf(r.get("股东户数")) or _sf(r.get("股东人数")) or _sf(r.get("股东总数"))
-                        if holders and holders > 0:
-                            prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                            prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                            if isinstance(prev_count, (int, float)) and prev_count > 0:
-                                holder_num_change = holders - prev_count
-                            else:
-                                holder_num_change = None
-                            result[code] = {
-                                "holder_num": holders,
-                                "holder_num_change": holder_num_change,
-                                "_data_source": "stock_hold_num_em",
-                            }
-                            count_hn += 1
-                    logger.info(f"[DataEnrich] HolderNum: stock_hold_num_em added {count_hn} stocks")
-            except Exception as e_hn:
-                logger.warning(f"[DataEnrich] HolderNum stock_hold_num_em fallback failed: {e_hn}")
-
-        # Source 3: 单股接口补齐（覆盖批量接口缺失的代码，不限 bond_codes）
-        all_codes = []
-        try:
-            df_all = _run_with_timeout(
-                ak.stock_info_a_code_name,
-                timeout=30.0, default=None,
-                op_name="holder_stock_info_a_code_name",
-            )
-            if df_all is not None and not df_all.empty:
-                all_codes = [str(c).strip().zfill(6) for c in df_all["代码"].tolist() if str(c).strip().isdigit()]
-        except Exception as e:
-            logger.debug(f"[DataEnrich] operation suppressed: {e}")
-            all_codes = list(_bond_stock_codes) if _bond_stock_codes else []
-
-        missing = [c for c in all_codes if c not in result]
-        if missing:
-            logger.info(f"[DataEnrich] HolderNum: {len(missing)} codes missing from batch, trying individual")
-            count_ind = 0
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-                futures = {pool.submit(_fetch_one_holder, c): c for c in missing}
-                deadline = time.time() + 120
-                while futures and time.time() < deadline:
-                    done, futures = concurrent.futures.wait(
-                        futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
-                    )
-                    for fut in done:
-                        try:
-                            r = fut.result()
-                            if r:
-                                code, entry = r
-                                result[code] = entry
-                                count_ind += 1
-                        except Exception as e:
-                            logger.debug(f"[DataEnrich] operation suppressed: {e}")
-                    if count_ind % 200 == 0 and count_ind > 0:
-                        _save_cache(_HOLDER_NUM_CACHE, result)
-                if futures:
-                    logger.warning(f"[DataEnrich] HolderNum: {len(futures)} individual futures unfinished, keeping {len(result)} completed")
-                    for fut in futures:
-                        fut.cancel()
-                return None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_fetch_one, c): c for c in all_codes}
-            processed = 0
-            # 用 wait() 配合 FIRST_COMPLETED，按批处理 done futures。
-            # 避免 ALL_COMPLETED 让少量卡死的 future 拖慢整体。
-            # 总超时 = 60s（远小于扩展执行器的 300s 限制），超时后保留已完成的
-            # 缓存值，让 periodic runner 在下次循环继续补充。
-            deadline = time.time() + 60
-            while futures and time.time() < deadline:
-                done, futures = concurrent.futures.wait(
-                    futures, timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
-                )
-                for fut in done:
-                    try:
-                        r = fut.result()
-                        if r:
-                            code, holders = r
-                            if holders and holders > 0:
-                                # 用上一次缓存的 holder_num 计算真实 change
-                                prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                                prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                                if isinstance(prev_count, (int, float)) and prev_count > 0:
-                                    holder_num_change = holders - prev_count
-                                else:
-                                    holder_num_change = None
-                                result[code] = {
-                                    "holder_num": holders,
-                                    "holder_num_change": holder_num_change,
-                                    "_data_source": "estimated",
-                                }
-                            processed += 1
-                    except Exception as e:
-                        logger.debug(f"[DataEnrich] operation suppressed: {e}")
-                        pass
-                    if processed % 100 == 0:
-                        _save_cache(_HOLDER_NUM_CACHE, result)
-            # 超时后：剩余 futures 取消（让线程退出），保留已完成的
-            if futures:
-                logger.warning(
-                    f"[DataEnrich] HolderNum: {len(futures)} (of {len(all_codes)}) "
-                    f"futures unfinished after 60s, keeping {len(result)} completed"
-                )
-                for fut in futures:
-                    fut.cancel()
-
-        # 若 result 为空（API 全部失败），回退到内存或磁盘缓存
-        # holder_num=0 在物理上不可能（任何公司都有股东），
-        # 所以 zero_fill 没有意义，但缓存中的旧数据仍可作为 "上次成功值" 使用
-        if not result and _holder_num_map:
-            logger.warning(
-                f"[DataEnrich] HolderNum: API returned empty, keeping existing cache "
-                f"({len(_holder_num_map)} stocks)"
-            )
-            return len(_holder_num_map)
-        # 双重保险：若内存缓存也没了，再尝试一次磁盘加载
-        if not result:
-            try:
-                _load_holder_num_cache()
-            except Exception as e:
-                logger.debug(f"[DataEnrich] HolderNum disk reload failed: {e}")
-            if _holder_num_map:
-                logger.info(
-                    f"[DataEnrich] HolderNum: API returned empty, reloaded disk cache "
-                    f"({len(_holder_num_map)} stocks)"
-                )
-                return len(_holder_num_map)
-        # Source 2 fallback: stock_hold_num_em (batch API)
-        if len(result) < 100:
-            try:
-                df_hn = _run_with_timeout(
-                    getattr(ak, "stock_hold_num_em", lambda: pd.DataFrame()),
-                    timeout=60, default=None, op_name="stock_hold_num_em",
-                )
-                if df_hn is not None and len(df_hn) > 0:
-                    count_hn = 0
-                    for _, r in df_hn.iterrows():
-                        code = str(r.get("股票代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result:
-                            continue
-                        holders = _sf(r.get("股东户数"))
-                        if holders is None:
-                            holders = _sf(r.get("股东人数"))
-                        if holders is None:
-                            holders = _sf(r.get("股东总数"))
-                        if holders is not None and holders >= 0:
-                            prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                            prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                            if isinstance(prev_count, (int, float)) and prev_count > 0:
-                                holder_num_change = holders - prev_count
-                            else:
-                                holder_num_change = None
-                            result[code] = {
-                                "holder_num": holders,
-                                "holder_num_change": holder_num_change,
-                                "_data_source": "stock_hold_num_em",
-                            }
-                            count_hn += 1
-                    logger.info(f"[DataEnrich] HolderNum: stock_hold_num_em added {count_hn} stocks")
-            except Exception as e_hn:
-                logger.warning(f"[DataEnrich] HolderNum stock_hold_num_em fallback failed: {e_hn}")
-
-        # Source 3 fallback: stock_zh_a_gdhs (individual API)
-        if len(result) < 100:
-            try:
-                missing = [c for c in all_codes if c not in result][:100]
-                count_gdhs = 0
-                for code in missing:
-                    try:
-                        df_gdhs = _run_with_timeout(
-                            partial(ak.stock_zh_a_gdhs, stock=code),
-                            timeout=30, default=None, op_name=f"stock_zh_a_gdhs_{code}",
-                        )
-                        if df_gdhs is not None and len(df_gdhs) > 0:
-                            last = df_gdhs.iloc[-1]
-                            hn = _sf(last.get("股东人数"))
-                            if hn is None:
-                                hn = _sf(last.get("股东户数"))
-                            if hn is None:
-                                hn = _sf(last.get("股东总数"))
-                            if hn is not None and hn >= 0:
-                                prev_entry = _holder_num_map.get(code, {}) if _holder_num_map else {}
-                                prev_count = prev_entry.get("holder_num") if isinstance(prev_entry, dict) else None
-                                if isinstance(prev_count, (int, float)) and prev_count > 0:
-                                    holder_num_change = hn - prev_count
-                                else:
-                                    holder_num_change = None
-                                result[code] = {
-                                    "holder_num": hn,
-                                    "holder_num_change": holder_num_change,
-                                    "_data_source": "stock_zh_a_gdhs",
-                                }
-                                count_gdhs += 1
-                    except Exception as e:
-                        logger.debug(f"[DataEnrich] operation suppressed: {e}")
-                        pass
-                logger.info(f"[DataEnrich] HolderNum: stock_zh_a_gdhs added {count_gdhs} stocks")
-            except Exception as e_gdhs:
-                logger.warning(f"[DataEnrich] HolderNum stock_zh_a_gdhs fallback failed: {e_gdhs}")
-
-        if result:
-            _set_global_map("_holder_num_map", result, replace=True)
-            _save_cache(_HOLDER_NUM_CACHE, result)
-            logger.info(f"[DataEnrich] HolderNum: {len(result)}/{len(all_codes)} stocks refreshed")
-            return len(result)
-        return 0
-    except Exception as e:
-        logger.warning(f"[DataEnrich] HolderNum in-proc refresh failed: {e}")
-        return 0
 
 
 @_with_metrics

@@ -1,6 +1,9 @@
 """西部量化可转债策略 V3.0 使用示例"""
 import sys
-sys.path.insert(0, '/Users/stevenyang/Public/lianghua/backend')
+from pathlib import Path
+_BACKEND_DIR = str(Path(__file__).resolve().parent.parent.parent.parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
 
 from datetime import date
 from app.xb_strategy.core.strategy import XBConvertibleStrategy

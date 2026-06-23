@@ -2,10 +2,11 @@
 import pytest
 import yaml
 import os
+from pathlib import Path
 
-# 部署配置使用硬编码绝对路径,开发机可能没有该目录
-# 当 DEPLOY_ROOT 不存在时,所有测试自动跳过
-DEPLOY_ROOT = "/Users/stevenyang/Public/lianghua/deploy"
+# 部署配置目录：相对于项目根目录（backend/tests/ → backend/ → 项目根）
+_DEPLOY_DIR = Path(__file__).resolve().parent.parent.parent / "deploy"
+DEPLOY_ROOT = str(_DEPLOY_DIR)
 requires_deploy_dir = pytest.mark.skipif(
     not os.path.exists(DEPLOY_ROOT),
     reason=f"部署配置目录不存在: {DEPLOY_ROOT} (开发环境无需此测试)",
@@ -18,12 +19,12 @@ class TestArgoCDConfig:
 
     def test_argocd_application_config_exists(self):
         """测试ArgoCD Application配置存在"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/argocd/argo-cd.yaml"
+        config_path = f"{DEPLOY_ROOT}/argocd/argo-cd.yaml"
         assert os.path.exists(config_path)
 
     def test_argocd_application_yaml_valid(self):
         """测试ArgoCD配置YAML有效性"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/argocd/argo-cd.yaml"
+        config_path = f"{DEPLOY_ROOT}/argocd/argo-cd.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -36,7 +37,7 @@ class TestArgoCDConfig:
 
     def test_argocd_sync_policy(self):
         """测试同步策略配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/argocd/argo-cd.yaml"
+        config_path = f"{DEPLOY_ROOT}/argocd/argo-cd.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -48,7 +49,7 @@ class TestArgoCDConfig:
 
     def test_argocd_application_set(self):
         """测试ApplicationSet配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/argocd/argo-cd.yaml"
+        config_path = f"{DEPLOY_ROOT}/argocd/argo-cd.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -69,12 +70,12 @@ class TestIstioConfig:
 
     def test_istio_gateway_config_exists(self):
         """测试Istio Gateway配置存在"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/istio/gateway.yaml"
+        config_path = f"{DEPLOY_ROOT}/istio/gateway.yaml"
         assert os.path.exists(config_path)
 
     def test_istio_gateway_yaml_valid(self):
         """测试Istio Gateway配置有效性"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/istio/gateway.yaml"
+        config_path = f"{DEPLOY_ROOT}/istio/gateway.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -86,7 +87,7 @@ class TestIstioConfig:
 
     def test_istio_virtual_service(self):
         """测试VirtualService配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/istio/gateway.yaml"
+        config_path = f"{DEPLOY_ROOT}/istio/gateway.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -102,7 +103,7 @@ class TestIstioConfig:
 
     def test_istio_destination_rule(self):
         """测试DestinationRule配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/istio/gateway.yaml"
+        config_path = f"{DEPLOY_ROOT}/istio/gateway.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -118,7 +119,7 @@ class TestIstioConfig:
 
     def test_canary_deployment_config(self):
         """测试金丝雀发布配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/istio/canary.yaml"
+        config_path = f"{DEPLOY_ROOT}/istio/canary.yaml"
         assert os.path.exists(config_path)
 
         with open(config_path) as f:
@@ -142,12 +143,12 @@ class TestVaultConfig:
 
     def test_vault_config_exists(self):
         """测试Vault配置存在"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/vault/vault.yaml"
+        config_path = f"{DEPLOY_ROOT}/vault/vault.yaml"
         assert os.path.exists(config_path)
 
     def test_vault_statefulset_config(self):
         """测试Vault StatefulSet配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/vault/vault.yaml"
+        config_path = f"{DEPLOY_ROOT}/vault/vault.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -164,12 +165,12 @@ class TestVaultConfig:
 
     def test_vault_policies_exist(self):
         """测试Vault策略配置存在"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/vault/policies.yaml"
+        config_path = f"{DEPLOY_ROOT}/vault/policies.yaml"
         assert os.path.exists(config_path)
 
     def test_k8s_auth_config(self):
         """测试Kubernetes认证配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/vault/k8s-auth.yaml"
+        config_path = f"{DEPLOY_ROOT}/vault/k8s-auth.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -185,17 +186,17 @@ class TestDisasterRecoveryConfig:
 
     def test_backup_script_exists(self):
         """测试备份脚本存在"""
-        script_path = "/Users/stevenyang/Public/lianghua/deploy/disaster-recovery/backup.sh"
+        script_path = f"{DEPLOY_ROOT}/disaster-recovery/backup.sh"
         assert os.path.exists(script_path)
 
     def test_restore_script_exists(self):
         """测试恢复脚本存在"""
-        script_path = "/Users/stevenyang/Public/lianghua/deploy/disaster-recovery/restore.sh"
+        script_path = f"{DEPLOY_ROOT}/disaster-recovery/restore.sh"
         assert os.path.exists(script_path)
 
     def test_dr_config_yaml_valid(self):
         """测试灾难恢复配置有效性"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/disaster-recovery/dr-config.yaml"
+        config_path = f"{DEPLOY_ROOT}/disaster-recovery/dr-config.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -208,7 +209,7 @@ class TestDisasterRecoveryConfig:
 
     def test_backup_cronjob_config(self):
         """测试备份CronJob配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/disaster-recovery/dr-config.yaml"
+        config_path = f"{DEPLOY_ROOT}/disaster-recovery/dr-config.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -225,7 +226,7 @@ class TestDisasterRecoveryConfig:
 
     def test_rpo_rto_config(self):
         """测试RPO/RTO配置"""
-        config_path = "/Users/stevenyang/Public/lianghua/deploy/disaster-recovery/dr-config.yaml"
+        config_path = f"{DEPLOY_ROOT}/disaster-recovery/dr-config.yaml"
         with open(config_path) as f:
             docs = list(yaml.safe_load_all(f))
 
@@ -247,7 +248,7 @@ class TestIntegrationConfig:
 
     def test_all_deploy_configs_exist(self):
         """测试所有部署配置存在"""
-        deploy_dir = "/Users/stevenyang/Public/lianghua/deploy"
+        deploy_dir = f"{DEPLOY_ROOT}"
 
         required_paths = [
             "argocd/argo-cd.yaml",
@@ -268,7 +269,7 @@ class TestIntegrationConfig:
         """测试所有YAML文件语法有效"""
         import glob
 
-        deploy_dir = "/Users/stevenyang/Public/lianghua/deploy"
+        deploy_dir = f"{DEPLOY_ROOT}"
         yaml_files = glob.glob(f"{deploy_dir}/**/*.yaml", recursive=True)
 
         # 需要跳过的文件列表（非YAML格式或模板文件）

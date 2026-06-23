@@ -156,7 +156,7 @@ class SGStrategyClient:
                 # 解析响应
                 try:
                     result = response.json()
-                except:
+                except Exception:
                     result = {"message": response.text}
 
                 return APIResponse(
@@ -385,7 +385,7 @@ class AsyncSGStrategyClient:
                 ) as response:
                     try:
                         result = await response.json()
-                    except:
+                    except Exception:
                         result = {"message": await response.text()}
 
                     return APIResponse(

@@ -2,7 +2,10 @@
 import pytest
 from datetime import date
 import sys
-sys.path.insert(0, '/Users/stevenyang/Public/lianghua/backend')
+from pathlib import Path
+_BACKEND_DIR = str(Path(__file__).resolve().parent.parent.parent.parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
 
 from app.xb_strategy.core.whitelist import WhitelistManager, EnhancedWhitelistManager
 from app.xb_strategy.core.types import SevenDimScore, Portfolio, Position
