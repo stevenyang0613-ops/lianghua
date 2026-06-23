@@ -231,9 +231,13 @@ class FeatureEngineer:
 
         # 3. 技术指标特征
         if self.config.use_ma_features:
-            features['price_ma5_ratio'] = cb_data.get('close', 100) / cb_data.get('ma5', 100)
-            features['price_ma10_ratio'] = cb_data.get('close', 100) / cb_data.get('ma10', 100)
-            features['price_ma20_ratio'] = cb_data.get('close', 100) / cb_data.get('ma20', 100)
+            close = cb_data.get('close')
+            ma5 = cb_data.get('ma5')
+            ma10 = cb_data.get('ma10')
+            ma20 = cb_data.get('ma20')
+            features['price_ma5_ratio'] = close / ma5 if close is not None and ma5 is not None and ma5 != 0 else 1.0
+            features['price_ma10_ratio'] = close / ma10 if close is not None and ma10 is not None and ma10 != 0 else 1.0
+            features['price_ma20_ratio'] = close / ma20 if close is not None and ma20 is not None and ma20 != 0 else 1.0
 
         if self.config.use_volatility:
             features['volatility_20d'] = cb_data.get('volatility_20d', 0)

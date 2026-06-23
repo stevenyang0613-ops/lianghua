@@ -1811,6 +1811,87 @@ class BacktestEngine:
 
         return [], []
 
+    def _prepare_backtest_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """回测数据预处理：补全必要列并填充缺失值。
+
+        关键约束：price 列不使用 100 作为默认值，避免把缺失价格误判为真实价格。
+        """
+        # 注意: price 不使用100作为默认值, 避免把缺失价格误判为真实价格100
+        if 'price' not in data.columns:
+            if 'close_price' in data.columns:
+                data['price'] = data['close_price']
+            elif 'close' in data.columns:
+                data['price'] = data['close']
+            else:
+                data['price'] = np.nan
+                logger.warning("[BacktestEngine] 数据源缺少 price/close_price/close 列，price 填充 NaN")
+        # 对已有 price 中的缺失值，按 code 前向填充；无法填充的保持 NaN
+        if data['price'].isna().any():
+            missing_before = data['price'].isna().sum()
+            data = data.sort_values(['code', 'date'])
+            data['price'] = data.groupby('code')['price'].ffill().bfill()
+            missing_after = data['price'].isna().sum()
+            if missing_after < missing_before:
+                logger.info(
+                    f"[BacktestEngine] price 缺失值按 code 前后向填充: {missing_before} -> {missing_after}"
+                )
+
+        strategy_required_defaults = {
+            'premium_ratio': 15.0,
+            'volume': 100000,
+            'change_pct': 0.0,
+            'ytm': 1.0,
+            'remaining_years': 3.0,
+        }
+        for col, default in strategy_required_defaults.items():
+            if col not in data.columns:
+                data[col] = default
+            else:
+                data[col] = data[col].fillna(default)
+
+        # 修复 (2025-06-15): 因子数据自动填充——缺失时先行业均值，再全局中位数
+        # 避免 ROE=10, PE=25 等固定默认值削弱因子有效性
+        # 防御: 如果 industry 列缺失，先用默认值填充（线程安全标记，只警告一次）
+        if 'industry' not in data.columns:
+            data['industry'] = 'unknown'
+            # 使用线程锁保护类级别标记，避免多线程竞争条件
+            _lock = getattr(BacktestEngine, '_industry_warn_lock', None)
+            if _lock is None:
+                _lock = threading.Lock()
+                BacktestEngine._industry_warn_lock = _lock
+            with _lock:
+                if not getattr(BacktestEngine, '_industry_warned', False):
+                    BacktestEngine._industry_warned = True
+                    logger.warning("[BacktestEngine] industry 列缺失，使用 'unknown' 作为默认值（后续不再警告）")
+        factor_cols = ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb']
+        for col in factor_cols:
+            if col in data.columns:
+                missing_before = data[col].isna().sum()
+                if missing_before > 0:
+                    # 先按行业均值填充
+                    industry_means = data.groupby('industry')[col].transform(
+                        lambda x: x.mean() if not x.isna().all() else np.nan
+                    )
+                    data[col] = data[col].fillna(industry_means)
+                    # 再全局中位数填充（剩余：该行业全缺失的）
+                    global_median = data[col].median()
+                    data[col] = data[col].fillna(global_median)
+                    missing_after = data[col].isna().sum()
+                    logger.info(
+                        f"[BacktestEngine] 因子填充 {col}: 缺失 {missing_before} 行 -> "
+                        f"填充后 {missing_after} 行 (行业均值+全局中位数 fallback)"
+                    )
+        # 正股涨跌幅：如果缺失，用转债涨跌幅近似（last resort）
+        if 'stock_change_pct' in data.columns:
+            missing_stock = data['stock_change_pct'].isna().sum()
+            if missing_stock > 0 and 'change_pct' in data.columns:
+                data['stock_change_pct'] = data['stock_change_pct'].fillna(data['change_pct'])
+                logger.info(
+                    f"[BacktestEngine] stock_change_pct 缺失 {missing_stock} 行，用 change_pct 近似填充"
+                )
+
+        return data
+
     def run(self, strategy: Strategy, data: pd.DataFrame, on_progress=None) -> BacktestResult:
         """运行回测 - 使用 Portfolio 类管理持仓，与 SignalEngine 共享一致的信号处理流程
         
@@ -1865,64 +1946,7 @@ class BacktestEngine:
         start_date = _normalize_date(dates[0])
         end_date = _normalize_date(dates[-1])
 
-        # Defensive: ensure strategy-required columns exist with safe defaults
-        # Must happen BEFORE building date_data_map so day_data also has these columns
-        # NOTE: defaults are conservative to avoid filtering out all bonds
-        # (e.g. premium_ratio=15 avoids low_premium's max_premium=30 filter)
-        strategy_required_defaults = {
-            'price': 100.0,
-            'premium_ratio': 15.0,
-            'volume': 100000,
-            'change_pct': 0.0,
-            'ytm': 1.0,
-            'remaining_years': 3.0,
-        }
-        for col, default in strategy_required_defaults.items():
-            if col not in data.columns:
-                data[col] = default
-            else:
-                data[col] = data[col].fillna(default)
-
-        # 修复 (2025-06-15): 因子数据自动填充——缺失时先行业均值，再全局中位数
-        # 避免 ROE=10, PE=25 等固定默认值削弱因子有效性
-        # 防御: 如果 industry 列缺失，先用默认值填充（线程安全标记，只警告一次）
-        if 'industry' not in data.columns:
-            data['industry'] = 'unknown'
-            # 使用线程锁保护类级别标记，避免多线程竞争条件
-            _lock = getattr(BacktestEngine, '_industry_warn_lock', None)
-            if _lock is None:
-                _lock = threading.Lock()
-                BacktestEngine._industry_warn_lock = _lock
-            with _lock:
-                if not getattr(BacktestEngine, '_industry_warned', False):
-                    BacktestEngine._industry_warned = True
-                    logger.warning("[BacktestEngine] industry 列缺失，使用 'unknown' 作为默认值（后续不再警告）")
-        factor_cols = ['roe', 'gpm', 'cagr', 'debt_ratio', 'pe', 'pb']
-        for col in factor_cols:
-            if col in data.columns:
-                missing_before = data[col].isna().sum()
-                if missing_before > 0:
-                    # 先按行业均值填充
-                    industry_means = data.groupby('industry')[col].transform(
-                        lambda x: x.mean() if not x.isna().all() else np.nan
-                    )
-                    data[col] = data[col].fillna(industry_means)
-                    # 再全局中位数填充（剩余：该行业全缺失的）
-                    global_median = data[col].median()
-                    data[col] = data[col].fillna(global_median)
-                    missing_after = data[col].isna().sum()
-                    logger.info(
-                        f"[BacktestEngine] 因子填充 {col}: 缺失 {missing_before} 行 -> "
-                        f"填充后 {missing_after} 行 (行业均值+全局中位数 fallback)"
-                    )
-        # 正股涨跌幅：如果缺失，用转债涨跌幅近似（last resort）
-        if 'stock_change_pct' in data.columns:
-            missing_stock = data['stock_change_pct'].isna().sum()
-            if missing_stock > 0 and 'change_pct' in data.columns:
-                data['stock_change_pct'] = data['stock_change_pct'].fillna(data['change_pct'])
-                logger.info(
-                    f"[BacktestEngine] stock_change_pct 缺失 {missing_stock} 行，用 change_pct 近似填充"
-                )
+        data = self._prepare_backtest_data(data)
 
         # 改进 (2025-06-15l): polars 替代 pandas groupby
         if self.use_polars and _HAS_POLARS:

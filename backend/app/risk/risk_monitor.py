@@ -264,8 +264,15 @@ class RiskMonitor:
         for bond_code, quantity in positions.items():
             if bond_code in market_data:
                 data = market_data[bond_code]
-                bid = data.get('bid', data.get('close', 100))
-                ask = data.get('ask', data.get('close', 100))
+                bid = data.get('bid')
+                ask = data.get('ask')
+                close = data.get('close')
+                if bid is None and close is not None:
+                    bid = close
+                if ask is None and close is not None:
+                    ask = close
+                if bid is None or ask is None:
+                    continue
                 mid = (bid + ask) / 2
                 if mid > 0:
                     spread = (ask - bid) / mid

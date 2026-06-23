@@ -1117,13 +1117,14 @@ class XibuSevenDimensionStrategy(Strategy):
         self._data = data.copy()
         # Defensive: ensure required columns exist with safe defaults
         # 改进 (2025-06-15ah): 补全所有数据源列，防止 calc_vectorized 中缺失列导致异常值
+        # 注意：price 列不使用100作为默认值，避免把缺失价格误判为真实价格100
         _required_columns = {
             'premium_ratio': 15.0,
             'change_pct': 0.0,
             'volume': 100000.0,
             'ytm': 1.0,
             'remaining_years': 3.0,
-            'price': 100.0,
+            'price': np.nan,
             'dual_low': 0.0,
             'forced_call_days': 0,
             'stock_change_pct': 0.0,

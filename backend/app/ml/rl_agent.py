@@ -90,7 +90,13 @@ class TradingEnvironment:
     def step(self, action: TradingAction) -> Tuple[TradingState, float, bool, Dict]:
         """执行动作"""
         current_data = self.data.iloc[self.current_step]
-        price = current_data.get('close', 100)
+        price = current_data.get('close')
+        if price is None or (isinstance(price, float) and np.isnan(price)):
+            # 价格缺失时不使用硬编码100，跳过交易并推进步数
+            self.current_step += 1
+            done = self.current_step >= len(self.data) - 1
+            return self._get_state(), 0.0, done, {'return': 0.0}
+        price = float(price)
         
         # 执行交易
         if action.action_type == 'buy':
@@ -111,8 +117,9 @@ class TradingEnvironment:
         prev_value = self.portfolio_value
         self.portfolio_value = self.cash
         for bond, qty in self.positions.items():
-            bond_price = current_data.get('close', 100)
-            self.portfolio_value += qty * bond_price
+            bond_price = current_data.get('close')
+            if bond_price is not None and not (isinstance(bond_price, float) and np.isnan(bond_price)):
+                self.portfolio_value += qty * float(bond_price)
         
         # 计算奖励
         portfolio_return = (self.portfolio_value - prev_value) / prev_value

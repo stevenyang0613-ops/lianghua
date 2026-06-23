@@ -362,8 +362,21 @@ class XuanjiV8Strategy(Strategy):
 
     def _fill_missing_columns(self, day_data: pd.DataFrame) -> None:
         """填充缺失的关键数据列"""
+        # price 不使用100作为默认值，避免把缺失价格误判为真实价格100
+        if 'price' not in day_data.columns:
+            if 'close' in day_data.columns:
+                day_data['price'] = day_data['close']
+            elif 'close_price' in day_data.columns:
+                day_data['price'] = day_data['close_price']
+            else:
+                day_data['price'] = np.nan
+        else:
+            # 对已有 price 中的缺失值按 code 前向/后向填充，无法填充的保持 NaN
+            if day_data['price'].isna().any() and 'code' in day_data.columns:
+                day_data['price'] = day_data.groupby('code')['price'].transform(lambda s: s.ffill().bfill())
+
         defaults = {
-            'price': 100.0, 'premium_ratio': 15.0, 'volume': 100000,
+            'premium_ratio': 15.0, 'volume': 100000,
             'change_pct': 0.0, 'ytm': 1.0, 'remaining_years': 3.0,
             'conversion_value': None, 'conversion_price': None, 'stock_price': None,
             'pe': None, 'pb': None, 'roe': None, 'gpm': None,
@@ -401,7 +414,11 @@ class XuanjiV8Strategy(Strategy):
         min_p = self.get_param('min_price')
         max_p = self.get_param('max_price')
         max_p2cbv = self.get_param('max_price_to_cbv')
-        
+
+        open('/tmp/fr_dbg.txt', 'a').write(
+            f"V8_FILTER_START rows={len(day_data)} min_vol={min_vol} max_prem={max_prem} "
+            f"price_range=[{min_p},{max_p}]\n")
+
         mask = (
             (day_data['price'] >= min_p) &
             (day_data['price'] <= max_p) &
@@ -410,12 +427,16 @@ class XuanjiV8Strategy(Strategy):
             (day_data['volume'] >= min_vol * 10000 if min_vol > 0 else True) &
             (day_data['remaining_years'] > 0.1)
         )
-        
+        open('/tmp/fr_dbg.txt', 'a').write(
+            f"V8_FILTER_BASE price/prem/vol/year rows={mask.sum()}\n")
+
         # 价格/纯债价值比过滤 (使用bond_value纯债价值)
         if 'bond_value' in day_data.columns and max_p2cbv > 0:
             bv = day_data['bond_value'].fillna(0)
             price_to_bv = day_data['price'] / bv.replace(0, np.nan)
             mask = mask & (price_to_bv.fillna(1.5) <= max_p2cbv)
+            open('/tmp/fr_dbg.txt', 'a').write(
+                f"V8_FILTER_CBV max_p2cbv={max_p2cbv} rows={mask.sum()}\n")
 
         # 条款过滤: 排除已公告强赎的转债
         if 'is_called' in day_data.columns:
@@ -426,6 +447,8 @@ class XuanjiV8Strategy(Strategy):
         if 'forced_call_days' in day_data.columns:
             call_days = day_data['forced_call_days'].fillna(999)
             mask = mask & ((call_days >= 3) | (call_days > 900))
+        open('/tmp/fr_dbg.txt', 'a').write(
+            f"V8_FILTER_CALL rows={mask.sum()}\n")
 
         # 排除可交换债（代码 132/133/EB 开头或名称含"可交换债"）
         if 'code' in day_data.columns:
@@ -434,6 +457,8 @@ class XuanjiV8Strategy(Strategy):
         if 'name' in day_data.columns:
             eb_names = day_data['name'].str.contains('可交换债', na=False)
             mask = mask & (~eb_names)
+        open('/tmp/fr_dbg.txt', 'a').write(
+            f"V8_FILTER_EB rows={mask.sum()}\n")
         
         return day_data[mask].copy()
 
