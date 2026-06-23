@@ -12,7 +12,7 @@ import { initNetworkMonitor, cleanupNetworkMonitor } from './utils/smartSync'
 import { initWarmup } from './utils/cacheWarmup'
 import { notificationService } from './utils/notifications'
 import { setupGlobalErrorHandler } from './utils/errorLogger'
-import { marketWs, signalsWs, cancelRefreshWsToken, destroyWsInstances } from './utils/wsInstances'
+import { marketWs, signalsWs, cancelRefreshWsToken, destroyWsInstances, startTokenRefreshTimer, stopTokenRefreshTimer } from './utils/wsInstances'
 import { preloadByPriority, setupSmartPreload } from './utils/routePreload'
 import { initDB, indexedDBStorage } from './utils/indexedDBStorage'
 import { initOfflineQueue } from './utils/offlineQueue'
@@ -26,6 +26,7 @@ import { initPerformanceOptimization, stopPerformanceOptimization } from './util
 import { logCollector } from './utils/logCollector'
 import { alertManager, initPredefinedRules } from './utils/alertNotification'
 import { startHealthCheck } from './utils/healthCheck'
+import { healthCheck } from './services/api'
 import { initWsListeners, cleanupWsListeners } from './stores/useAppStore'
 import { initThemeSystem, destroyThemeSystem } from './stores/useThemeStore'
 import { prefetchManager } from './utils/prefetchStrategy'
@@ -184,6 +185,19 @@ export default function App() {
     // 启动后端健康检查（后端断开时自动断WS，恢复时自动重连）
     const healthCleanup = startHealthCheck()
 
+    // 启动定期 token 刷新（每30分钟检查一次，避免 token 过期导致 WS 断开）
+    startTokenRefreshTimer()
+
+    // 定期轮询后端 market_running 状态，用于状态栏显示"数据加载中"
+    const marketStatusTimer = setInterval(async () => {
+      try {
+        if (useAppStore.getState().backendConnected) {
+          const res = await healthCheck()
+          useAppStore.getState().setMarketRunning(res.market_running || false)
+        }
+      } catch { /* ignore */ }
+    }, 10000)
+
       return () => {
         errorHandlerCleanup?.()
         hotkeysCleanup?.()
@@ -194,6 +208,7 @@ export default function App() {
         webVitalsCleanup?.()
         routePreloadCleanup?.()
         window.removeEventListener('unhandledrejection', rejectionGuard)
+        clearInterval(marketStatusTimer)
         try { marketWs.disconnect() } catch { /* isolated */ }
         try { signalsWs.disconnect() } catch { /* isolated */ }
         cleanupWsListeners()
@@ -201,6 +216,7 @@ export default function App() {
         cleanupBackgroundSync()
         cleanupNetworkMonitor()
         cancelRefreshWsToken()
+        stopTokenRefreshTimer()
         destroyWsInstances()
         destroyRequestCache()
         monitoring.destroy()

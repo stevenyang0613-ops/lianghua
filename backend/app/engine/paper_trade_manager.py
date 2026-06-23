@@ -573,20 +573,30 @@ class PaperTradeManager:
                         f"from storage date={last_date}"
                     )
 
+        # 如果 storage fallback 路径没有填充 valid_bonds，从 df 构造
+        if not valid_bonds and not df.empty and 'code' in df.columns:
+            for _, row in df.iterrows():
+                code = str(row.get('code', ''))
+                if code:
+                    from collections import namedtuple
+                    BondRef = namedtuple('BondRef', ['code', 'name'])
+                    valid_bonds.append(BondRef(code=code, name=str(row.get('name', code))))
+
         if df.empty:
             raise RuntimeError("无行情数据且无历史快照，请等待行情推送后再试")
 
         # ── 确保策略已完成 on_init 初始化 ──
         # 如果 on_init 从未被调用（启动时无行情数据），先调用 on_init
+        on_init_was_called = False
         if not getattr(strategy, '_dates', None):
             logger.info(f"[PaperTrade] force_rebalance: calling on_init for {type(strategy).__name__}")
-            if df is not None and len(df) > 0:
-                init_df = self._build_init_df()
-                if init_df is not None and len(init_df) > 0:
-                    try:
-                        strategy.on_init(init_df)
-                    except Exception as e:
-                        logger.warning(f"[PaperTrade] force_rebalance: on_init failed: {e}")
+            init_df = self._build_init_df()
+            if init_df is not None and len(init_df) > 0:
+                try:
+                    strategy.on_init(init_df)
+                    on_init_was_called = True
+                except Exception as e:
+                    logger.warning(f"[PaperTrade] force_rebalance: on_init failed: {e}")
 
         # ── 保存原始状态 ──
         original_idx = account._sim_idx
@@ -604,14 +614,29 @@ class PaperTradeManager:
             strategy._dates = (original_dates or []) + [today_str]
         today_idx = len(strategy._dates) - 1
 
-        # 尝试初始化 _date_data_map（如果策略有该属性）
-        if hasattr(strategy, '_date_data_map'):
-            if today_str not in strategy._date_data_map:
-                strategy._date_data_map[today_str] = df
-        elif hasattr(strategy, '_data'):
-            # XuanjiV8 使用 _data 而非 _date_data_map
-            if today_str not in strategy._data:
-                strategy._data[today_str] = df
+        # ── 从策略内部取最新交易日数据（比外部拼接的 df 更可靠） ──
+        #    策略 on_init 后，_date_data_map 或 _data 已含完整因子数据。
+        #    取策略记录的最新交易日数据作为 on_data 的输入，避免外部 df
+        #    缺少某些关键列（stock_change_pct、conversion_price 等）。
+        strategy_df = None
+        if hasattr(strategy, '_date_data_map') and strategy._date_data_map:
+            # 找最新日期
+            all_dates = sorted(strategy._date_data_map.keys())
+            latest_strategy_date = all_dates[-1] if all_dates else None
+            if latest_strategy_date:
+                strategy_df = strategy._date_data_map[latest_strategy_date].copy()
+                if today_str not in strategy._date_data_map:
+                    strategy._date_data_map[today_str] = strategy_df
+        elif hasattr(strategy, '_data') and isinstance(strategy._data, dict):
+            all_dates = sorted(strategy._data.keys())
+            latest_data_date = all_dates[-1] if all_dates else None
+            if latest_data_date:
+                strategy_df = strategy._data[latest_data_date].copy()
+                if today_str not in strategy._data:
+                    strategy._data[today_str] = strategy_df
+
+        # 若能从策略内部取到数据，优先用它；否则回退到外部 df
+        on_data_input = strategy_df if strategy_df is not None else df
 
         # ── 临时设置：rebalance_days=1 → 每次都是调仓日 ──
         strategy._params['rebalance_days'] = 1
@@ -624,7 +649,7 @@ class PaperTradeManager:
 
         try:
             try:
-                result = strategy.on_data(df, today_idx)
+                result = strategy.on_data(on_data_input, today_idx)
             except Exception as e:
                 logger.warning(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
                 return {"status": "no_signals", "message": f"策略执行异常: {e}", "signals": []}

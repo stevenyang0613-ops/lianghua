@@ -447,7 +447,7 @@ export function runBacktestStream(
       _reader = reader
       const decoder = new TextDecoder()
       let buffer = ''
-      let finalResult: { type: string; result: BacktestResult | OptimizationResult; data_source?: string } | null = null
+      let finalResult: { type: string; result: BacktestResult | OptimizationResult; data_source?: string; data_warning?: string } | null = null
 
       function pump(): Promise<void> {
         return reader.read().then(({ done, value }) => {

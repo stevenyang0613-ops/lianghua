@@ -63,7 +63,11 @@ export default function StatusBar() {
       </Space>
       <Space size={4}>
         {wsConnected ? (
-          <Tag icon={<WifiOutlined />} color="success">行情实时</Tag>
+          marketRunning ? (
+            <Tag icon={<WifiOutlined />} color="success">行情实时</Tag>
+          ) : (
+            <Tag icon={<LoadingOutlined />} color="processing">数据加载中</Tag>
+          )
         ) : (
           <>
             <Tag icon={<DisconnectOutlined />} color="warning">行情离线</Tag>
@@ -75,7 +79,11 @@ export default function StatusBar() {
       </Space>
       <Space size={4}>
         {signalWsConnected ? (
-          <Tag icon={<ThunderboltOutlined />} color="success">信号实时</Tag>
+          marketRunning ? (
+            <Tag icon={<ThunderboltOutlined />} color="success">信号实时</Tag>
+          ) : (
+            <Tag icon={<LoadingOutlined />} color="processing">信号加载中</Tag>
+          )
         ) : (
           <>
             <Tag icon={<DisconnectOutlined />} color="warning">信号离线</Tag>

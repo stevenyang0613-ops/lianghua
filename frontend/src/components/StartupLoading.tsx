@@ -105,6 +105,12 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
       console.log('[StartupLoading] Received backend-ready event, port:', port, 'hasToken:', !!token)
       setBackendPort(port)
       if (token) {
+        // 清理 localStorage 中可能存在的旧 token，避免 buildUrl 构建错误的 URL
+        const oldToken = localStorage.getItem('ws_auth_token')
+        if (oldToken && oldToken !== token) {
+          console.log('[StartupLoading] Clearing stale token from localStorage')
+          localStorage.removeItem('ws_auth_token')
+        }
         setWsAuthToken(token)
         refreshWsToken()
       }
