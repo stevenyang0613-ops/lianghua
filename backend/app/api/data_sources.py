@@ -309,6 +309,93 @@ def fetch_pe_pb_ths_financial(code: str, stock_price: float = None) -> dict:
 
 
 # ============================================================
+# 第3层: 妙想 MX (自然语言查询 PE/PB, 最后兜底)
+# ============================================================
+def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
+    """
+    通过妙想 MX 自然语言查询获取批量 PE/PB
+    当 Baidu/THS 都失败时，用 MX 做最后兜底。
+    每次最多查询 20 只股票，避免请求过长。
+    Returns: {code: {"pe": float, "pb": float}}
+    """
+    if not codes:
+        return {}
+
+    async def _query_mx():
+        from app.data.adapters.mx_adapter import MXAdapter
+        from app.data.adapters.base import DataSourceConfig
+        mx = MXAdapter(DataSourceConfig(name="mx"))
+        connected = await mx.connect()
+        if not connected:
+            logger.warning("[MX] PE/PB: 连接失败")
+            return {}
+        results = {}
+        for i in range(0, len(codes), 20):
+            batch = codes[i:i + 20]
+            query_text = " ".join(batch) + " 的市盈率 市净率"
+            resp = await mx.query_natural(query_text, "financial")
+            if not resp.get("success"):
+                logger.debug(f"[MX] 查询失败: {resp.get('error', 'unknown')}")
+                continue
+            for row in resp.get("data", []):
+                # 提取代码（多种字段名兼容）
+                code = None
+                for k in ["代码", "code", "股票代码", "symbol"]:
+                    if k in row and row[k]:
+                        import re
+                        m = re.search(r'(\d{6})', str(row[k]))
+                        if m:
+                            code = m.group(1)
+                            break
+                if not code:
+                    continue
+                entry = {}
+                for k in ["市盈率", "pe", "PE", "市盈率(TTM)", "ttm_pe"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if 0 < v < 10000:
+                                entry["pe"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["市净率", "pb", "PB"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if 0 < v < 1000:
+                                entry["pb"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                if entry:
+                    results[code] = entry
+            logger.info(f"[MX] PE/PB 批次 {i // 20 + 1}: {len(results)} 只")
+        return results
+
+    try:
+        import asyncio
+        return asyncio.run(_query_mx())
+    except RuntimeError:
+        # 已有事件循环（如 ThreadPoolExecutor 中），在新线程中运行
+        import threading
+        result_holder = {}
+
+        def _run():
+            result_holder["data"] = asyncio.run(_query_mx())
+        t = threading.Thread(target=_run)
+        t.start()
+        t.join(timeout=60)
+        if t.is_alive():
+            logger.warning("[MX] PE/PB 查询超时(60s)")
+            return {}
+        return result_holder.get("data", {})
+    except Exception as e:
+        logger.debug(f"[MX] fetch_pe_pb_mx error: {e}")
+        return {}
+
+
+# ============================================================
 # 主入口: 多层兜底PE/PB获取 (修复版 v2)
 # ============================================================
 def get_stock_valuations(stock_codes: list[str], stock_prices: dict[str, float] = None) -> dict[str, dict]:
@@ -417,6 +504,30 @@ def get_stock_valuations(stock_codes: list[str], stock_prices: dict[str, float] 
                         pass
             t1 = _time.time()
             logger.info(f"[MultiSource] THS完成 ({t1-t0:.1f}s)")
+
+    # ===== 第3层: 妙想 MX (自然语言查询, 最后兜底) =====
+    missing = [c for c in stock_codes
+               if c not in result or 'pe' not in result.get(c, {}) or 'pb' not in result.get(c, {})]
+    if missing and _remaining() > 15:
+        if len(missing) > 50:
+            logger.warning(f"[MultiSource] MX: 截取前50只")
+            missing = missing[:50]
+        logger.info(f"[MultiSource] 第3层: 妙想MX ({len(missing)}只)...")
+        t0 = _time.time()
+        pe_before = sum(1 for c in stock_codes if result.get(c, {}).get('pe'))
+        pb_before = sum(1 for c in stock_codes if result.get(c, {}).get('pb'))
+        mx_result = fetch_pe_pb_mx(missing)
+        for code, val in mx_result.items():
+            if val:
+                if code not in result:
+                    result[code] = {}
+                for k, v in val.items():
+                    if k not in result[code]:
+                        result[code][k] = v
+        t1 = _time.time()
+        pe_after = sum(1 for c in stock_codes if result.get(c, {}).get('pe'))
+        pb_after = sum(1 for c in stock_codes if result.get(c, {}).get('pb'))
+        logger.info(f"[MultiSource] MX完成: PE+{pe_after-pe_before}, PB+{pb_after-pb_before} ({t1-t0:.1f}s)")
 
     # 最终统计
     pe_ok = sum(1 for v in result.values() if v.get('pe'))
