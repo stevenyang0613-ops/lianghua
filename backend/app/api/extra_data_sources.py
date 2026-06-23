@@ -4,6 +4,17 @@
 核心问题: bond_value/纯债溢价率/转股价值 在历史回测中长期为 0%
 解决方案: 通过 akshare.bond_zh_cov_value_analysis 从东方财富数据中心获取每只转债的
          300-1500 天的纯债价值、转股价值、纯债溢价率、转股溢价率、收盘价
+
+信息来源:
+  ① 东方财富数据中心 (akshare.bond_zh_cov_value_analysis) — 纯债价值/转股价值历史
+  ② 东方财富数据中心 (datacenter-web.eastmoney.com)      — 转债日K线/转债行情
+  ③ 同花顺 THS (akshare.bond_zh_hs_cov_spot)             — 剩余规模/换手率实时
+  ④ 中证转债指数 (akshare.stock_zh_index_daily)          — 基准对比
+  ⑤ 同花顺财务摘要 (akshare.stock_financial_abstract_ths) — ROE/GPM/EPS/BPS
+  ⑥ 妙想 MX (东方财富官方 API)                           — 自然语言查询行业/财务/行情
+     - mx-data: 金融数据自然语言查询
+     - mx-search: 资讯搜索
+     - 需 MX_APIKEY 配置
 """
 
 import logging
@@ -24,6 +35,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _bg = get_registry()
+
+# ============================================================
+# 妙想 MX 全局配置
+# ============================================================
+_MX_TIMEOUT_SINGLE = 15       # 单只查询超时(秒): 行业/财务单只
+_MX_TIMEOUT_BATCH = 30        # 批量查询超时(秒): 财务批量兜底
+_MX_MAX_BATCH_SIZE = 30       # 批量兜底最大只数
 
 
 class ValueAnalysisRequest(BaseModel):
@@ -527,9 +545,47 @@ def _fetch_industry_yfinance_single(stock_code: str) -> Optional[str]:
         return None
 
 
+def _fetch_industry_mx_single(code: str) -> Optional[str]:
+    """从妙想 MX 获取行业归属"""
+    try:
+        import asyncio
+        from app.data.adapters.mx_adapter import MXAdapter
+        from app.data.adapters.base import DataSourceConfig
+
+        async def _query():
+            mx = MXAdapter(DataSourceConfig(name="mx"))
+            await mx.connect()
+            query_text = f"{code} 所属行业"
+            resp = await mx.query_natural(query_text, "financial")
+            if not resp.get("success"):
+                return None
+            rows = resp.get("data", [])
+            for row in rows:
+                for k in ["行业", "所属行业", "industry", "sector", "申万行业", "证监会行业"]:
+                    if k in row and row[k]:
+                        val = str(row[k]).strip()
+                        if val and val != "--":
+                            return val
+            return None
+
+        try:
+            return asyncio.run(_query())
+        except RuntimeError:
+            import threading
+            result_holder = {}
+            def _run():
+                result_holder["data"] = asyncio.run(_query())
+            t = threading.Thread(target=_run)
+            t.start()
+            t.join(timeout=_MX_TIMEOUT_SINGLE)
+            return result_holder.get("data")
+    except Exception:
+        return None
+
+
 def _fetch_industry_single(code: str) -> Optional[str]:
-    """多源兜底获取单个股票行业 - EM F10 > THS > Sina > yfinance"""
-    for fetcher in [_fetch_industry_em_single, _fetch_industry_ths_single, _fetch_industry_sina_single, _fetch_industry_yfinance_single]:
+    """多源兜底获取单个股票行业 - EM F10 > THS > Sina > yfinance > MX"""
+    for fetcher in [_fetch_industry_em_single, _fetch_industry_ths_single, _fetch_industry_sina_single, _fetch_industry_yfinance_single, _fetch_industry_mx_single]:
         try:
             ind = fetcher(code)
             if ind:
@@ -690,8 +746,118 @@ def fetch_stock_financial_ths_batch(stock_codes: list[str], max_workers: int = 8
                 logger.info(f"  进度: {i+1}/{len(stock_codes)} ({len(result)}只有数据)")
                 _time.sleep(0.3)
 
-    logger.info(f"[THS Financial] 完成: {len(result)}/{len(stock_codes)}只")
+    # ===== 兜底: 妙想 MX 查询缺失的财务数据 =====
+    missing = [c for c in stock_codes if c not in result]
+    mx_count = 0
+    if missing:
+        logger.info(f"[THS Financial] MX 兜底: {len(missing)}只...")
+        t0 = _time.time()
+        mx_result = _fetch_financial_mx_batch(missing[:_MX_MAX_BATCH_SIZE])
+        for code, entry in mx_result.items():
+            if entry and code not in result:
+                result[code] = entry
+                mx_count += 1
+        logger.info(f"[THS Financial] MX 兜底完成: {mx_count}只 ({_time.time()-t0:.1f}s)")
+
+    logger.info(f"[THS Financial] 完成: {len(result)}/{len(stock_codes)}只 (THS={len(result)-mx_count}, MX={mx_count})")
     return result
+
+
+def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
+    """通过妙想 MX 自然语言查询批量获取财务摘要"""
+    if not codes:
+        return {}
+    try:
+        import asyncio
+        from app.data.adapters.mx_adapter import MXAdapter
+        from app.data.adapters.base import DataSourceConfig
+
+        async def _query():
+            mx = MXAdapter(DataSourceConfig(name="mx"))
+            await mx.connect()
+            results = {}
+            for code in codes:
+                query_text = f"{code} 净资产收益率 毛利率 资产负债率 基本每股收益 每股净资产"
+                resp = await mx.query_natural(query_text, "financial")
+                if not resp.get("success"):
+                    continue
+                rows = resp.get("data", [])
+                if not rows:
+                    continue
+                row = rows[0]
+                entry = {}
+                for k in ["净资产收益率", "ROE", "roe"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["roe"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["毛利率", "gross_margin", "销售毛利率"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["gpm"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["资产负债率", "debt_ratio", "asset_liability_ratio"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["debt_ratio"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["基本每股收益", "EPS", "eps"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["eps"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["每股净资产", "BPS", "bps"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["bps"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                if entry:
+                    import re
+                    code_found = None
+                    for k in ["代码", "code", "股票代码", "symbol"]:
+                        if k in row and row[k]:
+                            m = re.search(r'(\d{6})', str(row[k]))
+                            if m:
+                                code_found = m.group(1)
+                                break
+                    target_code = code_found if code_found else code
+                    results[target_code] = entry
+            return results
+
+        try:
+            return asyncio.run(_query())
+        except RuntimeError:
+            import threading
+            result_holder = {}
+            def _run():
+                result_holder["data"] = asyncio.run(_query())
+            t = threading.Thread(target=_run)
+            t.start()
+            t.join(timeout=_MX_TIMEOUT_BATCH)
+            return result_holder.get("data", {})
+    except Exception as e:
+        logger.debug(f"[MX Financial] batch error: {e}")
+        return {}
 
 
 # ============================================================

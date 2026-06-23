@@ -592,17 +592,16 @@ class PaperTradeManager:
             raise RuntimeError("无行情数据且无历史快照，请等待行情推送后再试")
 
         # ── 确保策略已完成 on_init 初始化 ──
-        # 如果 on_init 从未被调用（启动时无行情数据），先调用 on_init
+        # 强制重新初始化：使用最新历史数据覆盖启动时可能只有 1 天的旧状态
         on_init_was_called = False
-        if not getattr(strategy, '_dates', None):
-            logger.info(f"[PaperTrade] force_rebalance: calling on_init for {type(strategy).__name__}")
-            init_df = self._build_init_df()
-            if init_df is not None and len(init_df) > 0:
-                try:
-                    strategy.on_init(init_df)
-                    on_init_was_called = True
-                except Exception as e:
-                    logger.warning(f"[PaperTrade] force_rebalance: on_init failed: {e}")
+        logger.info(f"[PaperTrade] force_rebalance: calling on_init for {type(strategy).__name__}")
+        init_df = self._build_init_df()
+        if init_df is not None and len(init_df) > 0:
+            try:
+                strategy.on_init(init_df)
+                on_init_was_called = True
+            except Exception as e:
+                logger.warning(f"[PaperTrade] force_rebalance: on_init failed: {e}")
 
         # ── 保存原始状态 ──
         original_idx = account._sim_idx
@@ -857,9 +856,9 @@ class PaperTradeManager:
                 date_cursor = self._storage.conn.execute("""
                     SELECT DISTINCT snapshot_date
                     FROM daily_snapshots
-                    WHERE snapshot_date >= CURRENT_DATE - INTERVAL '180 days'
+                    WHERE snapshot_date >= CURRENT_DATE - INTERVAL '365 days'
                     ORDER BY snapshot_date DESC
-                    LIMIT 60
+                    LIMIT 120
                 """)
                 trading_dates = [str(row[0]) for row in date_cursor.fetchall()]
                 

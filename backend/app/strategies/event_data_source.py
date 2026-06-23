@@ -7,7 +7,12 @@
 - 回售公告
 - 其他重要公告
 
-数据来源：东方财富 stock_notice_report（每日全市场公告，含可转债/正股动态）
+数据来源：
+  ① 东方财富 stock_notice_report（每日全市场公告，含可转债/正股动态）
+  ② 妙想 MX (东方财富官方 API) — 资讯搜索补充公告监控
+     - mx-search: 关键词搜索下修/强赎/回售/评级变动等公告
+     - mx-data: 自然语言查询事件进展
+     - 需 MX_APIKEY 配置
 """
 
 from dataclasses import dataclass, field
@@ -290,34 +295,65 @@ class EventDataSource:
                 await asyncio.sleep(60)  # 错误后等待1分钟
 
     async def _check_new_announcements(self) -> None:
-        """从东方财富 stock_notice_report 拉取当日可转债相关公告"""
-        if not ak or not hasattr(ak, 'stock_notice_report'):
-            return
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-            today = datetime.now().strftime("%Y%m%d")
-            loop = asyncio.get_running_loop()
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                df = await loop.run_in_executor(ex, lambda: ak.stock_notice_report(symbol='全部', date=today))
-            if df is None or df.empty:
-                return
-            for _, row in df.iterrows():
-                title = str(row.get('公告标题', ''))
-                code = str(row.get('代码', ''))
-                name = str(row.get('名称', ''))
-                publish_time = str(row.get('公告日期', ''))
-                if not any(kw in title for kw in self._config.keywords):
-                    continue
-                if not (code.startswith('1') or code.startswith('5')):
-                    continue
-                content = title
-                event = self._parse_announcement(content, code, name, title, publish_time, 'eastmoney')
-                if event:
-                    await self.broadcast(event)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug(f"[EventSource] 公告拉取失败: {e}")
+        """从东方财富 stock_notice_report 拉取当日可转债相关公告，失败时兜底妙想 MX"""
+        has_ak = ak and hasattr(ak, 'stock_notice_report')
+        em_ok = False
+        if has_ak:
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+                today = datetime.now().strftime("%Y%m%d")
+                loop = asyncio.get_running_loop()
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    df = await loop.run_in_executor(ex, lambda: ak.stock_notice_report(symbol='全部', date=today))
+                if df is not None and not df.empty:
+                    em_ok = True
+                    for _, row in df.iterrows():
+                        title = str(row.get('公告标题', ''))
+                        code = str(row.get('代码', ''))
+                        name = str(row.get('名称', ''))
+                        publish_time = str(row.get('公告日期', ''))
+                        if not any(kw in title for kw in self._config.keywords):
+                            continue
+                        if not (code.startswith('1') or code.startswith('5')):
+                            continue
+                        content = title
+                        event = self._parse_announcement(content, code, name, title, publish_time, 'eastmoney')
+                        if event:
+                            await self.broadcast(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug(f"[EventSource] 东方财富公告拉取失败: {e}")
+        
+        # ===== 兜底: 妙想 MX 资讯搜索补充 =====
+        if not em_ok:
+            logger.info("[EventSource] MX 兜底: 尝试妙想资讯搜索...")
+            try:
+                from app.data.adapters.mx_adapter import MXAdapter
+                from app.data.adapters.base import DataSourceConfig
+                mx = MXAdapter(DataSourceConfig(name="mx"))
+                await mx.connect()
+                keywords = " ".join(self._config.keywords[:5])
+                resp = await mx.query_natural(f"可转债 {keywords} 公告", "news")
+                if resp.get("success"):
+                    items = resp.get("data", [])
+                    for item in items:
+                        title = str(item.get("title", ""))
+                        code = str(item.get("code", ""))
+                        name = str(item.get("name", ""))
+                        publish_time = str(item.get("date", ""))
+                        if not any(kw in title for kw in self._config.keywords):
+                            continue
+                        if not (code.startswith('1') or code.startswith('5')):
+                            continue
+                        event = self._parse_announcement(title, code, name, title, publish_time, 'mx')
+                        if event:
+                            await self.broadcast(event)
+                    logger.info(f"[EventSource] MX 兜底: {len(items)} 条公告")
+                else:
+                    logger.debug(f"[EventSource] MX 查询失败: {resp.get('error', 'unknown')}")
+            except Exception as e:
+                logger.debug(f"[EventSource] MX 兜底也失败: {e}")
         pass
 
     def stop_monitoring(self) -> None:

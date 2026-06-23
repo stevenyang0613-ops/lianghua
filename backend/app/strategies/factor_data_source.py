@@ -1,12 +1,16 @@
 """
 因子数据源模块
 
-接入外部数据源（AKShare）：
+接入外部数据源（AKShare + 妙想 MX）：
 - 行业PMI/景气度数据 (macro_china_pmi + sw_index_third_info)
 - 行业景气度排名
 - 大股东质押率 (stock_gpzy_pledge_ratio_em)
 - 财务指标 (stock_zyjs_ths 个股主要指标)
 - 市场情绪指标 (ak.stock_market_activity_legu + stock_zt_pool_em)
+- 妙想 MX (东方财富官方 API) — 补充因子数据查询
+  - mx-data: 自然语言查询财务/行业/估值因子
+  - mx-search: 资讯搜索辅助情绪判断
+  - 需 MX_APIKEY 配置
 """
 
 from dataclasses import dataclass
@@ -279,6 +283,7 @@ class FactorDataSource:
     def get_financial_indicators(self, code: str) -> dict:
         """
         获取财务指标（来自同花顺个股主要指标 stock_zyjs_ths）
+        当 THS 失败时，兜底妙想 MX 自然语言查询
         """
         if not code or not ak:
             return {}
@@ -287,7 +292,7 @@ class FactorDataSource:
         try:
             df = ak.stock_zyjs_ths(symbol=clean)
             if df is None or df.empty:
-                return {}
+                return self._get_financial_indicators_mx(code)
             result = {}
             for _, r in df.iterrows():
                 name = str(r.get('指标', ''))
@@ -314,7 +319,62 @@ class FactorDataSource:
                     result['net_profit_growth'] = fv
             return result
         except Exception as e:
-            logger.debug(f"[FactorDS] {code} 财务指标拉取失败: {e}")
+            logger.debug(f"[FactorDS] {code} THS 财务指标拉取失败: {e}, 尝试 MX 兜底")
+            return self._get_financial_indicators_mx(code)
+
+    def _get_financial_indicators_mx(self, code: str) -> dict:
+        """通过妙想 MX 自然语言查询获取财务指标 (fallback)"""
+        try:
+            import asyncio
+            from app.data.adapters.mx_adapter import MXAdapter
+            from app.data.adapters.base import DataSourceConfig
+
+            async def _query():
+                mx = MXAdapter(DataSourceConfig(name="mx"))
+                await mx.connect()
+                query_text = f"{code} 资产负债率 流动比率 速动比率 净资产收益率 毛利率 净利润增长率"
+                resp = await mx.query_natural(query_text, "financial")
+                if not resp.get("success"):
+                    return {}
+                rows = resp.get("data", [])
+                if not rows:
+                    return {}
+                row = rows[0]
+                result = {}
+                mapping = {
+                    'asset_liability_ratio': ['资产负债率', 'debt_ratio', 'asset_liability_ratio'],
+                    'current_ratio': ['流动比率', 'current_ratio'],
+                    'quick_ratio': ['速动比率', 'quick_ratio'],
+                    'roe': ['净资产收益率', 'ROE', 'roe'],
+                    'gross_margin': ['毛利率', 'gross_margin', '销售毛利率'],
+                    'net_profit_growth': ['净利润增长率', 'net_profit_growth', '净利润增长'],
+                    'operating_cashflow': ['经营现金流', 'operating_cashflow', '每股经营现金流'],
+                }
+                for dst, src_keys in mapping.items():
+                    for k in src_keys:
+                        if k in row and row[k] is not None:
+                            try:
+                                v = float(row[k])
+                                if not (np.isnan(v) or np.isinf(v)):
+                                    result[dst] = v
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+                return result
+
+            try:
+                return asyncio.run(_query())
+            except RuntimeError:
+                import threading
+                result_holder = {}
+                def _run():
+                    result_holder["data"] = asyncio.run(_query())
+                t = threading.Thread(target=_run)
+                t.start()
+                t.join(timeout=15)
+                return result_holder.get("data", {})
+        except Exception as e:
+            logger.debug(f"[FactorDS] {code} MX 财务指标也失败: {e}")
             return {}
 
     # ==================== 市场数据 ====================
