@@ -388,7 +388,14 @@ export default function PaperTrade() {
   // loadAccounts 失败防抖：首次网络抖动不弹错误，连续失败 >=2 次才提示
   // 用 sessionStorage 持久化，避免页面刷新后重置
   const loadFailCountRef = useRef((() => {
-    try { return Number(sessionStorage.getItem('lianghua_load_fail_count') || 0) } catch { return 0 }
+    try {
+      const raw = sessionStorage.getItem('lianghua_load_fail_count')
+      const ts = sessionStorage.getItem('lianghua_load_fail_ts')
+      if (!raw || !ts) return 0
+      const age = Date.now() - Number(ts)
+      if (age > 5 * 60 * 1000) return 0  // 超过 5 分钟过期重置
+      return Number(raw)
+    } catch { return 0 }
   })())
   const { isElectron, showNotification, restartBackend } = useElectron()
 
@@ -489,7 +496,10 @@ export default function PaperTrade() {
     } catch (e: unknown) {
       console.warn('Load paper accounts failed:', e)
       loadFailCountRef.current += 1
-      try { sessionStorage.setItem('lianghua_load_fail_count', String(loadFailCountRef.current)) } catch { /* ignore */ }
+      try {
+        sessionStorage.setItem('lianghua_load_fail_count', String(loadFailCountRef.current))
+        sessionStorage.setItem('lianghua_load_fail_ts', String(Date.now()))
+      } catch { /* ignore */ }
       // 首次失败不弹错误（避免网络抖动），连续失败 >=2 次才提示
       if (isMountedRef.current && loadFailCountRef.current >= 2) {
         message.error('加载账户失败，请检查网络连接')

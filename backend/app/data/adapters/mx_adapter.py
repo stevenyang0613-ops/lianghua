@@ -290,7 +290,8 @@ class MXAdapter(DataSourceAdapter):
                     return {
                         "success": False,
                         "error": "MX API 暂不可用，资讯搜索暂无降级方案。请检查 MX_APIKEY 配置。",
-                        "fallback": False,
+                        "fallback": True,
+                        "fallback_reason": str(e),
                     }
                 elif codes:
                     # 有代码 → 尝试获取实时行情
@@ -306,19 +307,29 @@ class MXAdapter(DataSourceAdapter):
                             "fallback": True,
                             "fallback_reason": str(e),
                         }
+                    else:
+                        # Eastmoney 也返回空 → 标记已尝试降级
+                        return {
+                            "success": False,
+                            "error": f"MX API 不可用（{str(e)[:80]}…），Eastmoney 降级回退也未返回数据。",
+                            "fallback": True,
+                            "fallback_reason": str(e),
+                        }
                 
                 # 无代码或行情失败 → 回退到宏观/行业数据
                 return {
                     "success": False,
-                    "error": f"MX API 暂不可用（{str(e)[:100]}），且当前查询暂无降级方案。请检查 MX_APIKEY 配置。",
-                    "fallback": False,
+                    "error": f"MX API 暂不可用（{str(e)[:80]}…），且当前查询暂无降级方案。请检查 MX_APIKEY 配置。",
+                    "fallback": True,
+                    "fallback_reason": str(e),
                 }
             except Exception as fallback_err:
                 logger.error(f"[MX] Fallback to EastmoneyAdapter also failed: {fallback_err}")
                 return {
                     "success": False,
-                    "error": f"MX API 错误: {str(e)[:100]}；降级回退也失败: {str(fallback_err)[:100]}",
-                    "fallback": False,
+                    "error": f"MX API 错误: {str(e)[:80]}…；降级回退也失败: {str(fallback_err)[:80]}…",
+                    "fallback": True,
+                    "fallback_reason": str(e),
                 }
 
     # ------------------------------------------------------------------

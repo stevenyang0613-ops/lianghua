@@ -714,7 +714,13 @@ class MacroDataService:
                 if entries_with_net:
                     total = sum(v.get("net", 0) for v in entries_with_net)
                     return round(total / 1e8, 2)  # 元 -> 亿元
-                # _north_map 存在但无 net 字段 → 数据缺失，不返回 0
+                # _north_map 存在但无 net 字段 → 尝试从 hold_shares 或 hold_market_cap 估算
+                entries_with_hold = [v for v in _de._north_map.values()
+                                     if isinstance(v, dict) and (v.get("hold_shares") is not None or v.get("hold_market_cap") is not None)]
+                if entries_with_hold:
+                    # 有持仓数据但无净流入数据，返回 NaN（有数据但无法估算净流入）
+                    logger.debug("[MacroData] North map has hold data but no net, returning NaN")
+                    return float('nan')
         except Exception as e:
             logger.debug(f"[MacroData] north_map fallback failed: {e}")
         # 降级到 AKShare
@@ -829,10 +835,7 @@ class MacroDataService:
         try:
             if ak is None:
                 return float('nan'), float('nan'), float('nan')
-            current_balance = 0.0
-            prev_balance = 0.0
-            buy_amount = 0.0
-
+            any_source_success = False
             # Primary: SSE 汇总（单位：元）
             for offset in range(1, 5):
                 d = (datetime.now() - timedelta(days=offset)).strftime('%Y%m%d')
@@ -841,6 +844,7 @@ class MacroDataService:
                     if df is not None and not df.empty:
                         current_balance = float(df['融资融券余额'].iloc[0]) / 1e8
                         buy_amount = float(df['融资买入额'].iloc[0]) / 1e8
+                        any_source_success = True
                         # 找前一个交易日
                         for p_offset in range(offset + 1, offset + 10):
                             pd_str = (datetime.now() - timedelta(days=p_offset)).strftime('%Y%m%d')
@@ -864,6 +868,7 @@ class MacroDataService:
                         latest = df.iloc[-1]
                         current_balance = float(latest['融资融券余额']) / 1e8
                         buy_amount = float(latest['融资买入额']) / 1e8
+                        any_source_success = True
                         if len(df) >= 2:
                             prev_balance = float(df.iloc[-2]['融资融券余额']) / 1e8
                 except Exception as e:
@@ -880,6 +885,7 @@ class MacroDataService:
                     if df is not None and not df.empty:
                         sz_balance = float(df['融资融券余额'].iloc[0])
                         sz_buy = float(df['融资买入额'].iloc[0])
+                        any_source_success = True
                         # 查找深交所前一个交易日
                         for p_offset in range(offset + 1, offset + 10):
                             pd_str = (datetime.now() - timedelta(days=p_offset)).strftime('%Y%m%d')
@@ -903,6 +909,7 @@ class MacroDataService:
                         latest = df.iloc[-1]
                         sz_balance = float(latest['融资融券余额']) / 1e8
                         sz_buy = float(latest['融资买入额']) / 1e8
+                        any_source_success = True
                         if len(df) >= 2:
                             sz_prev_balance = float(df.iloc[-2]['融资融券余额']) / 1e8
                 except Exception as e:
@@ -911,9 +918,8 @@ class MacroDataService:
             total_balance = current_balance + sz_balance
             total_prev = prev_balance + sz_prev_balance
             change = total_balance - total_prev
-            # 防御 zero-fill: 如果所有数据源都失败（余额保持为0），返回 NaN 而非 0
-            if total_balance == 0 and total_prev == 0 and buy_amount == 0 and sz_buy == 0:
-                # 确认没有任何一个数据源成功获取过数据
+            # 防御 zero-fill: 如果没有任何数据源成功，返回 NaN 而非 0
+            if not any_source_success:
                 return float('nan'), float('nan'), float('nan')
             buy_ratio = 0.0
             if total_balance > 0:

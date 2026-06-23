@@ -511,9 +511,9 @@ def _get_bond_or_fallback_codes() -> frozenset:
                 if isinstance(k, str) and len(k) == 6 and k.isdigit():
                     fallback_codes.add(k)
     if fallback_codes:
-        logger.warning(f"[DataEnrich] _get_bond_or_fallback_codes 回退到 spot/fin map，{len(fallback_codes)} codes")
+        logger.info(f"[DataEnrich] _get_bond_or_fallback_codes 回退到 spot/fin map，{len(fallback_codes)} codes")
         return frozenset(fallback_codes)
-    logger.warning("[DataEnrich] _get_bond_or_fallback_codes 返回空集合，所有 zero-fill 将跳过")
+    logger.info("[DataEnrich] _get_bond_or_fallback_codes 返回空集合，所有 zero-fill 将跳过")
     return frozenset()
 
 
@@ -5171,24 +5171,37 @@ async def start_background_refresh():
                 # AGENTS.md fix: 清理旧 runner 子进程，避免残留进程竞争资源
                 try:
                     import subprocess as _sp
-                    _sp.run(['pkill', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=5)
+                    import sys as _sys_module
+                    if _sys_module.platform == 'win32':
+                        # Windows: 使用 taskkill 终止进程
+                        _sp.run(['taskkill', '/F', '/IM', 'python.exe'], capture_output=True, text=True, timeout=5)
+                    else:
+                        _sp.run(['pkill', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=5)
                     # 轮询等待旧进程完全终止，避免竞态条件（最多等 10 秒）
                     for _wait in range(20):
-                        chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
-                        if chk.returncode != 0 or not chk.stdout.strip():
-                            break
+                        if _sys_module.platform == 'win32':
+                            chk = _sp.run(['tasklist', '/FI', 'IMAGENAME eq python.exe'], capture_output=True, text=True, timeout=2)
+                            if b'data_enrich_runner' not in chk.stdout:
+                                break
+                        else:
+                            chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
+                            if chk.returncode != 0 or not chk.stdout.strip():
+                                break
                         await asyncio.sleep(0.5)
                     else:
                         # 轮询超时后，精确获取 PID 再 SIGKILL，避免误杀其他 Python 进程
-                        pid_chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
-                        if pid_chk.returncode == 0 and pid_chk.stdout.strip():
-                            pids = [p.strip() for p in pid_chk.stdout.strip().split('\n') if p.strip()]
-                            logger.warning(f"[DataEnrich] data_enrich_runner.py 未在 10 秒内退出，精确 SIGKILL PIDs: {pids}")
-                            for pid in pids:
-                                try:
-                                    _sp.run(['kill', '-9', pid], capture_output=True, text=True, timeout=3)
-                                except Exception:
-                                    pass
+                        if _sys_module.platform == 'win32':
+                            logger.warning("[DataEnrich] Windows runner 清理未完整实现")
+                        else:
+                            pid_chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
+                            if pid_chk.returncode == 0 and pid_chk.stdout.strip():
+                                pids = [p.strip() for p in pid_chk.stdout.strip().split('\n') if p.strip()]
+                                logger.warning(f"[DataEnrich] data_enrich_runner.py 未在 10 秒内退出，精确 SIGKILL PIDs: {pids}")
+                                for pid in pids:
+                                    try:
+                                        _sp.run(['kill', '-9', pid], capture_output=True, text=True, timeout=3)
+                                    except Exception:
+                                        pass
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

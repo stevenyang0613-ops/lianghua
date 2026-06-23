@@ -91,9 +91,10 @@ class FusionStrategy(Strategy):
         s_dual = self._normalize_zscore(day_data['dual_low_norm'], ascending=True)
         s_mom = self._normalize_zscore(day_data.get('momentum', pd.Series(0, index=day_data.index)).fillna(0).clip(-0.5, 0.5), ascending=False)
         s_hv = self._normalize_zscore(day_data.get('hv', pd.Series(20, index=day_data.index)).fillna(20), ascending=True)
-        # 防御 zero-fill: gpm <= 0 视为缺失数据（zero-fill 标记，非真实毛利率）
+        # 防御 zero-fill: gpm < 0 视为缺失数据（zero-fill 标记或银行标记 -1，非真实毛利率）
+        # 注意：gpm = 0 是可能的真实值（极低毛利），不替换为 NaN
         if 'gpm' in day_data.columns:
-            day_data.loc[day_data['gpm'] <= 0, 'gpm'] = float('nan')
+            day_data.loc[day_data['gpm'] < 0, 'gpm'] = float('nan')
         qual = []
         for col, asc in [('roe', False), ('gpm', False), ('cagr', False), ('debt_ratio', True)]:
             if col in day_data.columns and day_data[col].notna().any():
