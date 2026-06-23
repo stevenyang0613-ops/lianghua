@@ -2188,28 +2188,60 @@ export interface SectorEtf {
   sector: string
 }
 
+// 默认映射（仅作离线 / 接口不可用时的兜底）
+// 真实数据应通过 fetchSectorEtfMap() 从后端 /api/v1/config/sector-etf-map 获取
 export const SECTOR_ETF_MAP: SectorEtf[] = [
-  { sw_code: '801010', etf_code: '159919', etf_name: '沪深300ETF', sector: '金融' },
-  { sw_code: '801020', etf_code: '510500', etf_name: '中证500ETF', sector: '周期' },
-  { sw_code: '801030', etf_code: '159915', etf_name: '创业板ETF', sector: '成长' },
-  { sw_code: '801040', etf_code: '510880', etf_name: '红利ETF', sector: '红利' },
-  { sw_code: '801050', etf_code: '515050', etf_name: '科技ETF', sector: '科技' },
-  { sw_code: '801060', etf_code: '512880', etf_name: '证券ETF', sector: '金融' },
-  { sw_code: '801070', etf_code: '512070', etf_name: '非银ETF', sector: '非银金融' },
-  { sw_code: '801080', etf_code: '512690', etf_name: '酒ETF', sector: '消费' },
-  { sw_code: '801090', etf_code: '512010', etf_name: '医药ETF', sector: '医药' },
-  { sw_code: '801100', etf_code: '516160', etf_name: '新能源ETF', sector: '新能源' },
-  { sw_code: '801110', etf_code: '515800', etf_name: '800ETF', sector: '宽基' },
-  { sw_code: '801120', etf_code: '515220', etf_name: '煤炭ETF', sector: '能源' },
-  { sw_code: '801130', etf_code: '512100', etf_name: '1000ETF', sector: '小盘' },
-  { sw_code: '801140', etf_code: '516510', etf_name: '云计算ETF', sector: '云计算' },
-  { sw_code: '801150', etf_code: '515030', etf_name: '新汽车ETF', sector: '汽车' },
-  { sw_code: '801160', etf_code: '512660', etf_name: '军工ETF', sector: '军工' },
-  { sw_code: '801170', etf_code: '515790', etf_name: '光伏ETF', sector: '光伏' },
-  { sw_code: '801180', etf_code: '516110', etf_name: '汽车ETF', sector: '汽车' },
-  { sw_code: '801190', etf_code: '512580', etf_name: '碳中和ETF', sector: '碳中和' },
-  { sw_code: '801200', etf_code: '562800', etf_name: '稀有金属ETF', sector: '稀有金属' },
+  { sw_code: '801010', etf_code: '510050', etf_name: '上证50ETF',     sector: '大盘蓝筹' },
+  { sw_code: '801020', etf_code: '159949', etf_name: '创业板50ETF',   sector: '成长' },
+  { sw_code: '801030', etf_code: '510500', etf_name: '中证500ETF',    sector: '中盘' },
+  { sw_code: '801040', etf_code: '510880', etf_name: '红利ETF',       sector: '红利' },
+  { sw_code: '801050', etf_code: '515050', etf_name: '科技ETF',       sector: '科技' },
+  { sw_code: '801060', etf_code: '512880', etf_name: '证券ETF',       sector: '金融' },
+  { sw_code: '801070', etf_code: '512070', etf_name: '非银ETF',       sector: '非银金融' },
+  { sw_code: '801080', etf_code: '512690', etf_name: '酒ETF',         sector: '消费' },
+  { sw_code: '801090', etf_code: '512010', etf_name: '医药ETF',       sector: '医药' },
+  { sw_code: '801100', etf_code: '516160', etf_name: '新能源ETF',     sector: '新能源' },
+  { sw_code: '801110', etf_code: '515800', etf_name: '800ETF',        sector: '宽基' },
+  { sw_code: '801120', etf_code: '515220', etf_name: '煤炭ETF',       sector: '能源' },
+  { sw_code: '801130', etf_code: '512100', etf_name: '1000ETF',       sector: '小盘' },
+  { sw_code: '801140', etf_code: '516510', etf_name: '云计算ETF',     sector: '云计算' },
+  { sw_code: '801150', etf_code: '515030', etf_name: '新汽车ETF',     sector: '汽车' },
+  { sw_code: '801160', etf_code: '512660', etf_name: '军工ETF',       sector: '军工' },
+  { sw_code: '801170', etf_code: '515790', etf_name: '光伏ETF',       sector: '光伏' },
+  { sw_code: '801180', etf_code: '516110', etf_name: '汽车ETF',       sector: '汽车' },
+  { sw_code: '801190', etf_code: '512580', etf_name: '碳中和ETF',     sector: '碳中和' },
+  { sw_code: '801200', etf_code: '562800', etf_name: '稀有金属ETF',   sector: '稀有金属' },
 ]
+
+// 缓存从后端拉取的配置，避免每次组件渲染都请求
+let _sectorEtfMapCache: SectorEtf[] | null = null
+let _sectorEtfMapPromise: Promise<SectorEtf[]> | null = null
+
+/**
+ * 从后端 /api/v1/config/sector-etf-map 获取最新的申万行业-ETF 映射
+ * 失败时回退到前端的兜底 SECTOR_ETF_MAP
+ */
+export async function fetchSectorEtfMap(): Promise<SectorEtf[]> {
+  if (_sectorEtfMapCache) return _sectorEtfMapCache
+  if (_sectorEtfMapPromise) return _sectorEtfMapPromise
+  _sectorEtfMapPromise = fetchJSON<SectorEtf[]>(`${getBase()}/config/sector-etf-map`, 'sector-etf-map', 60_000)
+    .then((data) => {
+      if (Array.isArray(data) && data.length > 0) {
+        _sectorEtfMapCache = data
+      } else {
+        _sectorEtfMapCache = SECTOR_ETF_MAP
+      }
+      return _sectorEtfMapCache
+    })
+    .catch(() => {
+      _sectorEtfMapCache = SECTOR_ETF_MAP
+      return _sectorEtfMapCache
+    })
+    .finally(() => {
+      _sectorEtfMapPromise = null
+    })
+  return _sectorEtfMapPromise
+}
 
 // ── Stock Industry Rotation ───────────────────────────────────────────
 

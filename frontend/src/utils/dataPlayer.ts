@@ -11,6 +11,7 @@ export interface DataPlayerConfig {
   autoPlay: boolean
   showIndicators: boolean
   initialCash: number
+  code: string   // 要回放的转债代码，'' 表示让用户选择
 }
 
 export interface PlayerState {
@@ -53,6 +54,7 @@ class DataPlayerEngine {
     autoPlay: false,
     showIndicators: true,
     initialCash: 1000000,
+    code: '',   // 空字符串表示让用户选择
   }
 
   loadFrames(frames: MarketFrame[]): void {
@@ -192,7 +194,60 @@ class DataPlayerEngine {
 
 export const dataPlayer = new DataPlayerEngine()
 
-// 生成模拟数据
+/**
+ * 从后端 /api/v1/history/daily/{code} 拉取真实历史 K 线
+ * 后端 storage.get_daily_history 返回 daily_snapshots 表的真实数据（来自 AKShare 抓取）
+ *
+ * 失败时返回空数组（不生成 mock 数据），由调用方决定是否回退到 mock
+ */
+export async function fetchRealFrames(code: string, days: number = 365): Promise<MarketFrame[]> {
+  try {
+    const base = (typeof window !== 'undefined' && (window as any).__LH_API_BASE__) || ''
+    const url = `${base}/api/v1/history/daily/${encodeURIComponent(code)}?days=${days}`
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } })
+    if (!resp.ok) return []
+    const json: any = await resp.json()
+    const records: any[] = Array.isArray(json?.history) ? json.history : []
+    if (records.length === 0) return []
+    return records
+      .filter((r) => r && r.snapshot_date)
+      .map((r, idx) => {
+        const open = Number(r.open_price ?? r.price ?? 0)
+        const close = Number(r.close_price ?? r.price ?? 0)
+        const high = Number(r.high_price ?? close ?? 0)
+        const low = Number(r.low_price ?? close ?? 0)
+        const vol = Number(r.volume ?? 0)
+        const amt = Number(r.amount ?? vol * close)
+        return {
+          index: idx,
+          date: String(r.snapshot_date).slice(0, 10),
+          time: '15:00',
+          code: String(r.code ?? code),
+          name: String(r.name ?? ''),
+          open,
+          high,
+          low,
+          close,
+          volume: vol,
+          amount: amt,
+          bids: [
+            { price: close - 0.01, volume: 0 },
+            { price: close - 0.02, volume: 0 },
+            { price: close - 0.03, volume: 0 },
+          ],
+          asks: [
+            { price: close + 0.01, volume: 0 },
+            { price: close + 0.02, volume: 0 },
+            { price: close + 0.03, volume: 0 },
+          ],
+        } as MarketFrame
+      })
+  } catch {
+    return []
+  }
+}
+
+// 生成模拟数据（仅作为 API 失败时的兜底，不进入真实交易/回测路径）
 export function generateMockFrames(config: DataPlayerConfig, code: string = '110001'): MarketFrame[] {
   const frames: MarketFrame[] = []
   const startDate = new Date(config.startDate)

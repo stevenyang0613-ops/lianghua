@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Query
 from datetime import date
+from app.utils.data_source import DataSource
 
 router = APIRouter()
 
@@ -15,7 +16,11 @@ async def list_history_records(
 ):
     storage = _get_storage(request)
     records = storage.list_recent_records(limit) if hasattr(storage, 'list_recent_records') else []
-    return {"records": records, "count": len(records)}
+    return {
+        "records": records,
+        "count": len(records),
+        "data_source": DataSource.REAL.value,
+    }
 
 
 @router.get("/history/{code}")
@@ -27,7 +32,11 @@ async def get_quote_history(
     """报价历史（按时间倒序 limit 条）。前端 ChartPanel 兼容保留此路径。"""
     storage = _get_storage(request)
     history = storage.get_quote_history(code, limit)
-    return {"code": code, "history": history}
+    return {
+        "code": code,
+        "history": history,
+        "data_source": DataSource.REAL.value,
+    }
 
 
 @router.get("/daily/{code}")
@@ -38,7 +47,12 @@ async def get_daily_history(
 ):
     storage = _get_storage(request)
     history = storage.get_daily_history(code, days)
-    return {"code": code, "days": days, "history": history}
+    return {
+        "code": code,
+        "days": days,
+        "history": history,
+        "data_source": DataSource.REAL.value,
+    }
 
 
 # 注意：必须放在最后注册。FastAPI 按注册顺序匹配，literal 路径（/records、/daily/{code}）
@@ -55,4 +69,8 @@ async def get_quote_history_alias(
     """
     storage = _get_storage(request)
     history = storage.get_quote_history(code, limit)
-    return {"code": code, "history": history}
+    return {
+        "code": code,
+        "history": history,
+        "data_source": DataSource.REAL.value,
+    }

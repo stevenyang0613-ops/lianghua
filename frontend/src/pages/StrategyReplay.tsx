@@ -6,7 +6,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, Button, Space, Slider, Typography, Row, Col, Statistic, Tag, Table, Empty, Spin, Select } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, StepBackwardOutlined, StepForwardOutlined, StopOutlined, DownloadOutlined, LineChartOutlined } from '@ant-design/icons'
-import { replayEngine, generateMockReplayData, type ReplayStep, type ReplayConfig, type ReplayState } from '../utils/strategyReplay'
+import { replayEngine, generateMockReplayData, fetchRealReplaySteps, type ReplayStep, type ReplayConfig, type ReplayState } from '../utils/strategyReplay'
 import type { ColumnsType } from 'antd/es/table'
 import { fmt } from '../utils/format'
 
@@ -16,6 +16,7 @@ export default function StrategyReplay() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [config, setConfig] = useState<ReplayConfig>({
+    code: '',      // 默认空字符串，让用户选择
     strategy: 'macd_cross',
     startDate: '2024-01-01',
     endDate: '2024-12-31',
@@ -61,14 +62,24 @@ export default function StrategyReplay() {
     if (isLoadingRef.current) return
     isLoadingRef.current = true
     setLoading(true)
-    loadTimeoutRef.current = setTimeout(() => {
-      const data = generateMockReplayData(config)
-      setSteps(data)
-      replayEngine.loadSteps(data)
-      setLoading(false)
-      isLoadingRef.current = false
-      loadTimeoutRef.current = null
-    }, 500)
+    // 优先从后端拉取真实历史 K 线并计算技术指标；
+    // 失败或数据不足时回退到 mock 兜底（仅作演示）。
+    fetchRealReplaySteps(config)
+      .then((real) => {
+        const data = real.length > 0 ? real : generateMockReplayData(config)
+        setSteps(data)
+        replayEngine.loadSteps(data)
+      })
+      .catch(() => {
+        const data = generateMockReplayData(config)
+        setSteps(data)
+        replayEngine.loadSteps(data)
+      })
+      .finally(() => {
+        setLoading(false)
+        isLoadingRef.current = false
+        loadTimeoutRef.current = null
+      })
   }, [config])
 
   const handlePlay = () => {

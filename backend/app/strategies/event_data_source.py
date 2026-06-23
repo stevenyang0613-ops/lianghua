@@ -331,20 +331,35 @@ class EventDataSource:
             try:
                 from app.data.adapters.mx_adapter import MXAdapter
                 from app.data.adapters.base import DataSourceConfig
+                from app.config import settings
                 mx = MXAdapter(DataSourceConfig(name="mx"))
                 await mx.connect()
+                if getattr(mx, '_degraded_mode', False):
+                    logger.warning("[EventSource] MX 降级模式(无API Key), 资讯搜索可能不可用")
+                if not settings.MX_APIKEY:
+                    logger.warning("[EventSource] MX_APIKEY 未配置, 跳过MX兜底")
+                    return
                 keywords = " ".join(self._config.keywords[:5])
                 resp = await mx.query_natural(f"可转债 {keywords} 公告", "news")
                 if resp.get("success"):
                     items = resp.get("data", [])
                     for item in items:
                         title = str(item.get("title", ""))
+                        # 代码提取：优先 item.code，否则从标题中提取
                         code = str(item.get("code", ""))
+                        if not code or code == "None":
+                            import re
+                            m = re.search(r'(\d{6})', title)
+                            if m:
+                                code = m.group(1)
                         name = str(item.get("name", ""))
                         publish_time = str(item.get("date", ""))
                         if not any(kw in title for kw in self._config.keywords):
                             continue
-                        if not (code.startswith('1') or code.startswith('5')):
+                        # 转债代码以 1/5 开头，正股以 0/3/6/9 开头
+                        if not (code.startswith('1') or code.startswith('5') or 
+                                code.startswith('0') or code.startswith('3') or 
+                                code.startswith('6') or code.startswith('9')):
                             continue
                         event = self._parse_announcement(title, code, name, title, publish_time, 'mx')
                         if event:

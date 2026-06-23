@@ -754,32 +754,13 @@ async def _fetch_industry_etf_data(start_date: date, end_date: date) -> pd.DataF
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import logging
     import time as _time
+    from app.api.sector_etf import get_sector_etf_map_for_backtest
 
     logger = logging.getLogger(__name__)
 
     # ETF 映射表: 行业代码 → (ETF代码, ETF名称, 行业标签)
-    etf_map = {
-        "801010": ("510050", "上证50", "大盘蓝筹"),
-        "801020": ("159949", "创业板50", "成长"),
-        "801030": ("510500", "中证500", "中盘"),
-        "801040": ("510880", "红利ETF", "红利"),
-        "801050": ("515050", "科技ETF", "科技"),
-        "801060": ("512880", "证券ETF", "金融"),
-        "801070": ("512070", "非银ETF", "非银金融"),
-        "801080": ("512690", "酒ETF", "消费"),
-        "801090": ("512010", "医药ETF", "医药"),
-        "801100": ("516160", "新能源ETF", "新能源"),
-        "801110": ("515800", "800ETF", "宽基"),
-        "801120": ("515220", "煤炭ETF", "能源"),
-        "801130": ("512100", "1000ETF", "小盘"),
-        "801140": ("516510", "云计算ETF", "云计算"),
-        "801150": ("515030", "新汽车ETF", "汽车"),
-        "801160": ("512660", "军工ETF", "军工"),
-        "801170": ("515790", "光伏ETF", "光伏"),
-        "801180": ("516110", "汽车ETF", "汽车"),
-        "801190": ("512580", "碳中和ETF", "碳中和"),
-        "801200": ("562800", "稀有金属ETF", "稀有金属"),
-    }
+    # 统一从 app.api.sector_etf 配置模块读取，避免前后端重复硬编码
+    etf_map = get_sector_etf_map_for_backtest()
 
     logger.info(f"[ETFData] 多层数据源获取ETF: {len(etf_map)}只, {start_date}~{end_date}")
 
@@ -1609,7 +1590,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
 def _raise_empty_backtest_error(start_date: date) -> None:
     """当所有数据源均无法获取回测数据时抛出明确错误
 
-    历史此处曾返回一条硬编码的假数据行（code='000000', price=100.0 等），
+    历史此处曾返回一条硬编码的假数据行（占位 code + 假价格等），
     导致回测在假数据上运行。改为直接抛出 HTTP 异常，禁止任何基于占位数据的回测。
     """
     raise HTTPException(

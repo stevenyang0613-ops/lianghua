@@ -6080,10 +6080,12 @@ def _refresh_lhb_cache():
                 # 若旧数据是 zero-fill，_delta 取 new_count（作为首次真实观测），避免 0→new_count 的高估
                 is_zero_fill = isinstance(old_entry, dict) and old_entry.get("_data_source") == "zero_fill"
                 _delta = new_count if is_zero_fill else (new_count - old_count)
+                _first_real_obs = is_zero_fill or (isinstance(old_entry, dict) and not old_entry.get("_data_source"))
                 result[code] = {
                     "lhb_count": new_count,
                     "_prev_count": old_count,
                     "_delta": _delta,
+                    "_first_real_obs": _first_real_obs,
                     "_data_source": "lhb_stock_statistic_em",
                 }
         # Source 2 fallback: stock_lhb_stock_detail_em
@@ -6107,6 +6109,7 @@ def _refresh_lhb_cache():
                             "lhb_count": new_count,
                             "_prev_count": 0,
                             "_delta": new_count,
+                            "_first_real_obs": True,
                             "_data_source": "lhb_stock_detail_em",
                         }
                         count_detail += 1

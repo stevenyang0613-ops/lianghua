@@ -488,10 +488,10 @@ def _fetch_industry_em_single(stock_code: str) -> Optional[str]:
 
 
 def _fetch_industry_ths_single(stock_code: str) -> Optional[str]:
-    """从 THS 个股信息获取行业"""
+    """从 东方财富 个股信息获取行业（原 THS stock_individual_info_ths 在 akshare 1.18.x 中已移除）"""
     import akshare as ak
     try:
-        df = ak.stock_individual_info_ths(symbol=stock_code)
+        df = ak.stock_individual_info_em(symbol=stock_code)
         if df is None or df.empty:
             return None
         for _, r in df.iterrows():
@@ -553,18 +553,25 @@ def _fetch_industry_mx_single(code: str) -> Optional[str]:
         from app.data.adapters.base import DataSourceConfig
 
         async def _query():
+            from app.config import settings
             mx = MXAdapter(DataSourceConfig(name="mx"))
             await mx.connect()
+            if getattr(mx, '_degraded_mode', False):
+                logger.warning(f"[MX Industry] {code}: 降级模式(无API Key), 跳过")
+                return None
+            if not settings.MX_APIKEY:
+                logger.warning(f"[MX Industry] {code}: MX_APIKEY 未配置")
+                return None
             query_text = f"{code} 所属行业"
             resp = await mx.query_natural(query_text, "financial")
             if not resp.get("success"):
                 return None
             rows = resp.get("data", [])
             for row in rows:
-                for k in ["行业", "所属行业", "industry", "sector", "申万行业", "证监会行业"]:
+                for k in ["行业", "所属行业", "industry", "sector", "申万行业", "证监会行业", "行业分类", "一级行业", "二级行业"]:
                     if k in row and row[k]:
                         val = str(row[k]).strip()
-                        if val and val != "--":
+                        if val and val != "--" and val != "-":
                             return val
             return None
 
@@ -773,8 +780,15 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
         from app.data.adapters.base import DataSourceConfig
 
         async def _query():
+            from app.config import settings
             mx = MXAdapter(DataSourceConfig(name="mx"))
             await mx.connect()
+            if getattr(mx, '_degraded_mode', False):
+                logger.warning("[MX Financial] 降级模式(无API Key), 跳过批量财务兜底")
+                return {}
+            if not settings.MX_APIKEY:
+                logger.warning("[MX Financial] MX_APIKEY 未配置, 跳过")
+                return {}
             results = {}
             for code in codes:
                 query_text = f"{code} 净资产收益率 毛利率 资产负债率 基本每股收益 每股净资产"
@@ -786,7 +800,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     continue
                 row = rows[0]
                 entry = {}
-                for k in ["净资产收益率", "ROE", "roe"]:
+                for k in ["净资产收益率", "ROE", "roe", "净资产收益率(摊薄)", "净资产收益率_摊薄", "ROE_TTM", "roe_ttm", "净资产收益率TTM"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -795,7 +809,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                                 break
                         except (ValueError, TypeError):
                             pass
-                for k in ["毛利率", "gross_margin", "销售毛利率"]:
+                for k in ["毛利率", "gross_margin", "销售毛利率", "Gross Margin", "主营业务毛利率"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -804,7 +818,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                                 break
                         except (ValueError, TypeError):
                             pass
-                for k in ["资产负债率", "debt_ratio", "asset_liability_ratio"]:
+                for k in ["资产负债率", "debt_ratio", "asset_liability_ratio", "资产负债率(%)", "总资产负债率"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -813,7 +827,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                                 break
                         except (ValueError, TypeError):
                             pass
-                for k in ["基本每股收益", "EPS", "eps"]:
+                for k in ["基本每股收益", "EPS", "eps", "每股收益", "每股盈利", "基本EPS"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -822,12 +836,30 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                                 break
                         except (ValueError, TypeError):
                             pass
-                for k in ["每股净资产", "BPS", "bps"]:
+                for k in ["每股净资产", "BPS", "bps", "每股净值", "每股净资产(元)", "每股账面价值"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
                             if not (np.isnan(v) or np.isinf(v)):
                                 entry["bps"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["净利率", "npm", "净利率(%)", "销售净利率", "净利润率"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["npm"] = v
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                for k in ["营业收入", "revenue", "营业总收入", "总营收", "Revenue"]:
+                    if k in row and row[k] is not None:
+                        try:
+                            v = float(row[k])
+                            if not (np.isnan(v) or np.isinf(v)):
+                                entry["revenue"] = v
                                 break
                         except (ValueError, TypeError):
                             pass

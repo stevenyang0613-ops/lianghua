@@ -5,12 +5,14 @@
 PE/PB数据:
   ① Baidu valuation (逐股 PE+PB, 多线程) — ~0.85s/只 × 2次, 15线程并行
   ② THS财务摘要 (EPS/BPS推算)             — 最后备选, 季度数据
+  ③ 妙想 MX (自然语言查询 PE/PB)           — 东方财富官方 API, 需 MX_APIKEY
 
 转债行情数据:
   ① THS转债列表 + Sina实时行情           — 主力
   ② Jisilu集思录                         — 溢价率/双低/评级
   ③ Tencent K线 (正股)                    — 正股历史日线
   ④ 正股K线推算转债价格                    — premium ratio 估算法
+  ⑤ 妙想 MX (自然语言查询实时行情)         — 东方财富官方 API, 需 MX_APIKEY
 """
 import os
 import time as _time
@@ -28,6 +30,10 @@ from app.data import get_data_source_manager
 from app.services.task_registry import TaskStatus, get_registry
 
 _bg = get_registry()
+
+# 妙想 MX 配置
+_MX_PE_PB_BATCH_SIZE = 20     # 每批查询股票数
+_MX_PE_PB_TIMEOUT = 60        # 整体超时(秒)
 
 data_source_manager = get_data_source_manager()
 
@@ -324,14 +330,22 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
     async def _query_mx():
         from app.data.adapters.mx_adapter import MXAdapter
         from app.data.adapters.base import DataSourceConfig
+        from app.config import settings
         mx = MXAdapter(DataSourceConfig(name="mx"))
         connected = await mx.connect()
         if not connected:
             logger.warning("[MX] PE/PB: 连接失败")
             return {}
+        # 降级模式检测
+        if getattr(mx, '_degraded_mode', False):
+            logger.warning("[MX] PE/PB: 处于降级模式(无有效API Key), 自然语言查询PE/PB可能失败")
+            return {}
+        if not settings.MX_APIKEY:
+            logger.warning("[MX] PE/PB: MX_APIKEY 未配置, 跳过MX兜底")
+            return {}
         results = {}
-        for i in range(0, len(codes), 20):
-            batch = codes[i:i + 20]
+        for i in range(0, len(codes), _MX_PE_PB_BATCH_SIZE):
+            batch = codes[i:i + _MX_PE_PB_BATCH_SIZE]
             query_text = " ".join(batch) + " 的市盈率 市净率"
             resp = await mx.query_natural(query_text, "financial")
             if not resp.get("success"):
@@ -350,7 +364,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                 if not code:
                     continue
                 entry = {}
-                for k in ["市盈率", "pe", "PE", "市盈率(TTM)", "ttm_pe"]:
+                for k in ["市盈率", "pe", "PE", "市盈率(TTM)", "ttm_pe", "市盈率_TTM", "PE_TTM", "pe_ttm", "静态市盈率", "动态市盈率"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -359,7 +373,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                                 break
                         except (ValueError, TypeError):
                             pass
-                for k in ["市净率", "pb", "PB"]:
+                for k in ["市净率", "pb", "PB", "市净率_PB", "pb_ratio", "市净率LF"]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
@@ -370,7 +384,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                             pass
                 if entry:
                     results[code] = entry
-            logger.info(f"[MX] PE/PB 批次 {i // 20 + 1}: {len(results)} 只")
+            logger.info(f"[MX] PE/PB 批次 {i // _MX_PE_PB_BATCH_SIZE + 1}: {len(results)} 只")
         return results
 
     try:
@@ -385,9 +399,9 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
             result_holder["data"] = asyncio.run(_query_mx())
         t = threading.Thread(target=_run)
         t.start()
-        t.join(timeout=60)
+        t.join(timeout=_MX_PE_PB_TIMEOUT)
         if t.is_alive():
-            logger.warning("[MX] PE/PB 查询超时(60s)")
+            logger.warning(f"[MX] PE/PB 查询超时({_MX_PE_PB_TIMEOUT}s)")
             return {}
         return result_holder.get("data", {})
     except Exception as e:

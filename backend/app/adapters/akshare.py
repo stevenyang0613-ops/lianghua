@@ -236,6 +236,7 @@ class AKShareAdapter(DataSourceAdapter):
                 call_status = str(r.get("强赎状态", "")).strip()
                 last_trade_date = self._parse_iso_date(r.get("最后交易日", ""))
                 maturity = self._parse_iso_date(r.get("到期日", ""))
+                convert_start_date = self._parse_iso_date(r.get("转股起始日", ""))
                 redemption_price = safe_float(r.get("强赎价"))
                 jsl_price = safe_float(r.get("现价"))
                 jsl_premium = safe_float(r.get("转股溢价率"))
@@ -254,6 +255,7 @@ class AKShareAdapter(DataSourceAdapter):
                     "call_status": call_status,
                     "last_trade_date": last_trade_date,
                     "maturity_date": maturity,
+                    "convert_start_date": convert_start_date,
                     "redemption_price": redemption_price,
                     "forced_call_days": forced_call_days,
                     "jsl_price": jsl_price,
@@ -263,6 +265,10 @@ class AKShareAdapter(DataSourceAdapter):
 
                 # 可交换债额外构建行情(EB 单独走另一条数据流)
                 if not (code.startswith("132") or code.startswith("133")):
+                    continue
+
+                # EB 未上市新券过滤：转股起始日缺失/未来 → 视为尚未上市
+                if self._is_unlisted_new_bond(list_date=None, convert_start_date=convert_start_date):
                     continue
                 name = str(r.get("名称", "")).strip()
                 # 从spot_map补充涨跌幅、成交额和价格
@@ -413,6 +419,42 @@ class AKShareAdapter(DataSourceAdapter):
     def _is_delisted(code: str, name: str) -> bool:
         """判断是否为退市整理期转债（代码404开头或名称含'退债'）"""
         return code.startswith('404') or '退债' in name
+
+    @staticmethod
+    def _is_unlisted_new_bond(list_date, convert_start_date) -> bool:
+        """判断是否为尚未上市的新券
+
+        未上市新券在所有数据源中均无真实价格（EM/JSL 默认返回100元发行价），
+        不应进入行情和候选池。判定条件：
+        1. 上市时间缺失/无效/未来
+        2. 转股起始日缺失/无效/未来
+
+        任一条件不满足即视为已上市/可交易。
+        """
+        today = datetime.now().date()
+        # 检查上市时间
+        if list_date is not None and str(list_date) not in ("", "NaT", "nan", "None"):
+            try:
+                s = str(list_date)[:10]
+                ld = datetime.strptime(s, "%Y-%m-%d").date()
+                if ld <= today:
+                    return False  # 已上市
+            except (ValueError, TypeError):
+                pass
+        # 检查转股起始日
+        if convert_start_date is not None and str(convert_start_date) not in ("", "NaT", "nan", "None"):
+            try:
+                csd_raw = convert_start_date
+                if hasattr(csd_raw, "date"):
+                    csd = csd_raw.date()
+                else:
+                    csd = datetime.strptime(str(csd_raw)[:10], "%Y-%m-%d").date()
+                if csd <= today:
+                    return False  # 已可转股，视为已上市
+            except (ValueError, TypeError, AttributeError):
+                pass
+        # 两个日期均缺失/未来/无效 → 未上市新券
+        return True
 
     @staticmethod
     def _is_stopped_trading(price: float, remaining_years: float,
@@ -595,6 +637,15 @@ class AKShareAdapter(DataSourceAdapter):
             # 无 Sina 无 JSL 价格（即东财默认100元）→ 数据源均不跟踪，过滤
             if (sina_price is None or sina_price <= 0) and (jsl_price is None or jsl_price <= 0) and em_price == 100.0:
                 return None
+
+            # 未上市新券过滤：仅当 price=100.0 时生效（避免误伤已上市但暂无赎回信息的债券）
+            # 未上市新券在所有数据源中都返回默认发行价100元，不能参与交易
+            # 判定标准：上市时间缺失/未来 且 转股起始日缺失/未来
+            if price == 100.0:
+                list_date = row.get("上市时间", "")
+                convert_start_date = ri.get("convert_start_date") if ri else None
+                if self._is_unlisted_new_bond(list_date, convert_start_date):
+                    return None
 
             return ConvertibleQuote(
                 code=code,

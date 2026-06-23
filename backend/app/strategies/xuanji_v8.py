@@ -246,7 +246,6 @@ class XuanjiV8Strategy(Strategy):
         current_date = self._dates[idx]
         day_data = data.copy()
         if day_data.empty:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_249\n")
             return None
         
         # 计算当日日期索引
@@ -261,7 +260,6 @@ class XuanjiV8Strategy(Strategy):
             return self._generate_stop_all_signals(day_data)
         
         if self._portfolio_stopped:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_263\n")
             return None
         
         # === 单券止损 ===
@@ -273,7 +271,6 @@ class XuanjiV8Strategy(Strategy):
         
         # === 调仓日才生成信号 ===
         if not is_rebalance:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_274\n")
             return None
         
         # === 前置过滤 ===
@@ -415,9 +412,6 @@ class XuanjiV8Strategy(Strategy):
         max_p = self.get_param('max_price')
         max_p2cbv = self.get_param('max_price_to_cbv')
 
-        open('/tmp/fr_dbg.txt', 'a').write(
-            f"V8_FILTER_START rows={len(day_data)} min_vol={min_vol} max_prem={max_prem} "
-            f"price_range=[{min_p},{max_p}]\n")
 
         mask = (
             (day_data['price'] >= min_p) &
@@ -427,16 +421,12 @@ class XuanjiV8Strategy(Strategy):
             (day_data['volume'] >= min_vol * 10000 if min_vol > 0 else True) &
             (day_data['remaining_years'] > 0.1)
         )
-        open('/tmp/fr_dbg.txt', 'a').write(
-            f"V8_FILTER_BASE price/prem/vol/year rows={mask.sum()}\n")
 
         # 价格/纯债价值比过滤 (使用bond_value纯债价值)
         if 'bond_value' in day_data.columns and max_p2cbv > 0:
             bv = day_data['bond_value'].fillna(0)
             price_to_bv = day_data['price'] / bv.replace(0, np.nan)
             mask = mask & (price_to_bv.fillna(1.5) <= max_p2cbv)
-            open('/tmp/fr_dbg.txt', 'a').write(
-                f"V8_FILTER_CBV max_p2cbv={max_p2cbv} rows={mask.sum()}\n")
 
         # 条款过滤: 排除已公告强赎的转债
         if 'is_called' in day_data.columns:
@@ -447,8 +437,6 @@ class XuanjiV8Strategy(Strategy):
         if 'forced_call_days' in day_data.columns:
             call_days = day_data['forced_call_days'].fillna(999)
             mask = mask & ((call_days >= 3) | (call_days > 900))
-        open('/tmp/fr_dbg.txt', 'a').write(
-            f"V8_FILTER_CALL rows={mask.sum()}\n")
 
         # 排除可交换债（代码 132/133/EB 开头或名称含"可交换债"）
         if 'code' in day_data.columns:
@@ -457,9 +445,7 @@ class XuanjiV8Strategy(Strategy):
         if 'name' in day_data.columns:
             eb_names = day_data['name'].str.contains('可交换债', na=False)
             mask = mask & (~eb_names)
-        open('/tmp/fr_dbg.txt', 'a').write(
-            f"V8_FILTER_EB rows={mask.sum()}\n")
-        
+
         return day_data[mask].copy()
 
     def _check_portfolio_stop(self, day_data: pd.DataFrame) -> bool:

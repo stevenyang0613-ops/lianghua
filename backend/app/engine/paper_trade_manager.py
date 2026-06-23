@@ -861,7 +861,6 @@ class PaperTradeManager:
                     LIMIT 120
                 """)
                 trading_dates = [str(row[0]) for row in date_cursor.fetchall()]
-                
                 if trading_dates:
                     placeholders = ",".join("?" for _ in trading_dates)
                     cursor = self._storage.conn.execute(f"""
@@ -966,7 +965,6 @@ class PaperTradeManager:
                         LIMIT 60
                     """)
                     trading_dates = [str(row[0]) for row in date_cursor.fetchall()]
-                    
                     if trading_dates:
                         placeholders = ",".join("?" for _ in trading_dates)
                         cursor = self._storage.conn.execute(f"""

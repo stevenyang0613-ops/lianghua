@@ -330,8 +330,15 @@ class FactorDataSource:
             from app.data.adapters.base import DataSourceConfig
 
             async def _query():
+                from app.config import settings
                 mx = MXAdapter(DataSourceConfig(name="mx"))
                 await mx.connect()
+                if getattr(mx, '_degraded_mode', False):
+                    logger.warning(f"[FactorDS-MX] {code}: 降级模式(无API Key)")
+                    return {}
+                if not settings.MX_APIKEY:
+                    logger.warning(f"[FactorDS-MX] {code}: MX_APIKEY 未配置")
+                    return {}
                 query_text = f"{code} 资产负债率 流动比率 速动比率 净资产收益率 毛利率 净利润增长率"
                 resp = await mx.query_natural(query_text, "financial")
                 if not resp.get("success"):
@@ -342,13 +349,13 @@ class FactorDataSource:
                 row = rows[0]
                 result = {}
                 mapping = {
-                    'asset_liability_ratio': ['资产负债率', 'debt_ratio', 'asset_liability_ratio'],
-                    'current_ratio': ['流动比率', 'current_ratio'],
-                    'quick_ratio': ['速动比率', 'quick_ratio'],
-                    'roe': ['净资产收益率', 'ROE', 'roe'],
-                    'gross_margin': ['毛利率', 'gross_margin', '销售毛利率'],
-                    'net_profit_growth': ['净利润增长率', 'net_profit_growth', '净利润增长'],
-                    'operating_cashflow': ['经营现金流', 'operating_cashflow', '每股经营现金流'],
+                    'asset_liability_ratio': ['资产负债率', 'debt_ratio', 'asset_liability_ratio', '资产负债率(%)', '总资产负债率'],
+                    'current_ratio': ['流动比率', 'current_ratio', '流动比率(倍)'],
+                    'quick_ratio': ['速动比率', 'quick_ratio', '速动比率(倍)'],
+                    'roe': ['净资产收益率', 'ROE', 'roe', '净资产收益率(摊薄)', 'ROE_TTM', 'roe_ttm', '净资产收益率TTM'],
+                    'gross_margin': ['毛利率', 'gross_margin', '销售毛利率', '主营业务毛利率', 'Gross Margin'],
+                    'net_profit_growth': ['净利润增长率', 'net_profit_growth', '净利润增长', '净利润同比增速', '净利润增长率(%)'],
+                    'operating_cashflow': ['经营现金流', 'operating_cashflow', '每股经营现金流', '经营活动现金流', '经营活动现金流量'],
                 }
                 for dst, src_keys in mapping.items():
                     for k in src_keys:

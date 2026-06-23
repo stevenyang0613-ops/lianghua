@@ -5,7 +5,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Card, Button, Space, Slider, Typography, Row, Col, Statistic, Select, DatePicker, Empty, Spin, Table } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, StepBackwardOutlined, StepForwardOutlined, StopOutlined, FastForwardOutlined, BackwardOutlined } from '@ant-design/icons'
-import { dataPlayer, generateMockFrames, type MarketFrame, type PlayerState, type DataPlayerConfig } from '../utils/dataPlayer'
+import { dataPlayer, generateMockFrames, fetchRealFrames, type MarketFrame, type PlayerState, type DataPlayerConfig } from '../utils/dataPlayer'
+import { fetchAllQuotes } from '../services/api'
 import dayjs from 'dayjs'
 import echarts from '../utils/echarts'
 import { useRef } from 'react'
@@ -23,9 +24,13 @@ export default function DataPlayer() {
     autoPlay: false,
     showIndicators: true,
     initialCash: 1000000,
+    code: '',
   })
   const [frames, setFrames] = useState<MarketFrame[]>([])
   const [currentFrame, setCurrentFrame] = useState<MarketFrame | null>(null)
+  // 可回放的真实转债列表（从后端 /api/v1/market/quotes 拉取）
+  const [bondOptions, setBondOptions] = useState<{ value: string; label: string }[]>([])
+  const [bondOptionsLoading, setBondOptionsLoading] = useState(false)
   const [state, setState] = useState<PlayerState>({
     isPlaying: false,
     isPaused: false,
@@ -52,6 +57,30 @@ export default function DataPlayer() {
       unsubscribeFrame()
       unsubscribeState()
     }
+  }, [])
+
+  // 拉取真实转债列表供用户选择（替代默认的 110001 模拟）
+  useEffect(() => {
+    let cancelled = false
+    setBondOptionsLoading(true)
+    fetchAllQuotes()
+      .then((resp) => {
+        if (cancelled) return
+        const bonds = Array.isArray(resp?.bonds) ? resp.bonds : []
+        const opts = bonds
+          .filter((b: any) => b && b.code && !b.is_called && !b.is_stopped)
+          .slice(0, 200)  // 限制 200 只避免 select 卡顿
+          .map((b: any) => ({
+            value: String(b.code),
+            label: `${b.code} ${b.name ?? ''}`.trim(),
+          }))
+        setBondOptions(opts)
+        // 若未选择 code，自动选第一只
+        setConfig((c) => c.code ? c : { ...c, code: opts[0]?.value ?? '' })
+      })
+      .catch(() => { /* 失败保留空列表，回退到 mock */ })
+      .finally(() => { if (!cancelled) setBondOptionsLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -120,12 +149,20 @@ export default function DataPlayer() {
 
   const handleLoadData = useCallback(() => {
     setLoading(true)
-    setTimeout(() => {
-      const data = generateMockFrames(config)
-      setFrames(data)
-      dataPlayer.loadFrames(data)
-      setLoading(false)
-    }, 500)
+    // 优先拉取真实历史 K 线；失败时回退到 mock（仅作演示）
+    const code = config.code || '110001'
+    fetchRealFrames(code, 365)
+      .then((real) => {
+        const data = real.length > 0 ? real : generateMockFrames({ ...config, code })
+        setFrames(data)
+        dataPlayer.loadFrames(data)
+      })
+      .catch(() => {
+        const data = generateMockFrames({ ...config, code })
+        setFrames(data)
+        dataPlayer.loadFrames(data)
+      })
+      .finally(() => setLoading(false))
   }, [config])
 
   const handlePlay = () => {
@@ -176,6 +213,19 @@ export default function DataPlayer() {
                   { value: 'minute', label: '分钟' },
                   { value: 'tick', label: 'Tick' },
                 ]}
+              />
+              <Select
+                showSearch
+                placeholder="选择转债代码"
+                value={config.code || undefined}
+                onChange={(v) => setConfig({ ...config, code: v })}
+                style={{ width: 220 }}
+                filterOption={(input, option) =>
+                  String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={bondOptions}
+                loading={bondOptionsLoading}
+                notFoundContent={bondOptionsLoading ? '加载中…' : '暂无债券'}
               />
               <RangePicker
                 value={[config.startDate, config.endDate].map(d => d ? dayjs(d) : null) as [dayjs.Dayjs, dayjs.Dayjs]}

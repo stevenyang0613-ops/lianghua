@@ -7,6 +7,7 @@ import threading
 import random
 from pathlib import Path
 import statistics
+from app.utils.data_source import DataSource
 
 router = APIRouter()
 
@@ -572,6 +573,7 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
                 "total": len(result),
                 "bonds": result,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
+                "data_source": DataSource.REAL.value,
             }
         return result
 
@@ -583,11 +585,12 @@ async def get_quotes(request: Request, symbols: str = Query(None)):
                 "total": len(result),
                 "bonds": result,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
+                "data_source": DataSource.REAL.value,
             }
         return result
 
     if not symbol_list:
-        return {"total": 0, "bonds": [], "updated_at": ""}
+        return {"total": 0, "bonds": [], "updated_at": "", "data_source": DataSource.MISSING.value}
     return []
 
 
@@ -670,12 +673,16 @@ async def get_quote_by_code(request: Request, code: str):
     if engine:
         quote = await engine.get_quote(code)
         if quote:
-            return quote_to_dict(quote)
+            out = quote_to_dict(quote)
+            out["data_source"] = DataSource.REAL.value
+            return out
 
     if storage:
         for row in storage.get_latest_quotes():
             if row.get("code") == code:
-                return _row_to_dict(row)
+                out = _row_to_dict(row)
+                out["data_source"] = DataSource.REAL.value
+                return out
 
     raise HTTPException(status_code=404, detail=f"Quote for {code} not found")
 

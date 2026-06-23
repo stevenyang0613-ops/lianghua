@@ -53,7 +53,7 @@ import {
   fetchEarningsForecast, type EarningsForecastResponse, type EarningsForecastStock,
   fetchEarningsExpress, type EarningsExpressResponse, type EarningsExpressStock,
   fetchRestrictedRelease, type RestrictedReleaseResponse, type RestrictedReleaseEvent,
-  SECTOR_ETF_MAP,
+  fetchSectorEtfMap, SECTOR_ETF_MAP, type SectorEtf,
 } from '../services/api'
 import { useThemeStore } from '../stores/useThemeStore'
 import dayjs from 'dayjs'
@@ -204,6 +204,8 @@ export default function SectorRotation() {
   const [result, setResult] = useState<BacktestResult|null>(null)
   const [running, setRunning] = useState(false)
   const [btError, setBtError] = useState<string|null>(null)
+  // 行业 ETF 映射：默认使用前端的兜底映射，组件挂载时从后端拉取并覆盖
+  const [sectorEtfMap, setSectorEtfMap] = useState<SectorEtf[]>(SECTOR_ETF_MAP)
 
   // 筛选/排序状态
   const [indSort, setIndSort] = useState<string>('bond_count')
@@ -253,6 +255,10 @@ export default function SectorRotation() {
   useEffect(()=>{
     isMountedRef.current = true
     loadStrategyInfo()
+    // 异步从后端拉取行业 ETF 映射，失败则保留前端兜底
+    fetchSectorEtfMap()
+      .then((map) => { if (isMountedRef.current) setSectorEtfMap(map) })
+      .catch(() => { /* 保留 SECTOR_ETF_MAP 兜底 */ })
     return () => { isMountedRef.current = false }
   },[])
 
@@ -1184,13 +1190,13 @@ export default function SectorRotation() {
           {key:'etf', label:<span><StockOutlined/> ETF映射</span>, children: (
             <div style={{flex:1,display:'flex',flexDirection:'column',gap:12,overflow:'auto'}}>
               <Row gutter={[8,8]}>
-                <Col span={6}><StatCard title='ETF数量' value={SECTOR_ETF_MAP.length} suffix='只' color='#1890ff' icon={<StockOutlined/>}/></Col>
-                <Col span={6}><StatCard title='覆盖行业' value={[...new Set(SECTOR_ETF_MAP.map(e=>e.sector))].length} suffix='个' color='#52c41a'/></Col>
+                <Col span={6}><StatCard title='ETF数量' value={sectorEtfMap.length} suffix='只' color='#1890ff' icon={<StockOutlined/>}/></Col>
+                <Col span={6}><StatCard title='覆盖行业' value={[...new Set(sectorEtfMap.map(e=>e.sector))].length} suffix='个' color='#52c41a'/></Col>
                 <Col span={6}><StatCard title='数据来源' value='申万行业' color='#722ed1' icon={<DatabaseOutlined/>}/></Col>
                 <Col span={6}><StatCard title='回测支持' value='已就绪' color='#13c2c2' icon={<CheckCircleOutlined/>}/></Col>
               </Row>
-              <Card size='small' title={<span><StockOutlined/> 行业ETF映射表</span>} extra={<Button size='small' icon={<DownloadOutlined/>} onClick={()=>exportCSV(SECTOR_ETF_MAP,'etf-map-'+dayjs().format('YYYYMMDD')+'.csv')}>导出</Button>} styles={{body:{padding:0}}}>
-                <Table dataSource={SECTOR_ETF_MAP.map((e,i)=>({...e,key:i}))}
+              <Card size='small' title={<span><StockOutlined/> 行业ETF映射表</span>} extra={<Button size='small' icon={<DownloadOutlined/>} onClick={()=>exportCSV(sectorEtfMap,'etf-map-'+dayjs().format('YYYYMMDD')+'.csv')}>导出</Button>} styles={{body:{padding:0}}}>
+                <Table dataSource={sectorEtfMap.map((e,i)=>({...e,key:i}))}
                   columns={[
                     {title:'申万代码',dataIndex:'sw_code',width:100},
                     {title:'ETF代码',dataIndex:'etf_code',width:100,render:(v:string)=><Text style={{color:'#1677ff',fontWeight:600}}>{v}</Text>},

@@ -21,6 +21,7 @@ export interface ReplayStep {
 }
 
 export interface ReplayConfig {
+  code: string      // 要回放的转债代码
   strategy: string
   startDate: string
   endDate: string
@@ -209,7 +210,175 @@ class StrategyReplayEngine {
 
 export const replayEngine = new StrategyReplayEngine()
 
-// 模拟生成回放数据
+/**
+ * 从后端 /api/v1/history/daily/{code} 拉取真实历史 K 线，
+ * 并按 config.strategy 计算真实技术指标（MA/MACD/RSI/Bollinger），
+ * 模拟回放 buy/sell 信号。
+ *
+ * 失败或数据不足时返回空数组（由调用方决定是否回退到 mock）。
+ */
+export async function fetchRealReplaySteps(config: ReplayConfig): Promise<ReplayStep[]> {
+  if (!config.code) return []
+  try {
+    const base = (typeof window !== 'undefined' && (window as any).__LH_API_BASE__) || ''
+    const days = 365
+    const url = `${base}/api/v1/history/daily/${encodeURIComponent(config.code)}?days=${days}`
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } })
+    if (!resp.ok) return []
+    const json: any = await resp.json()
+    const records: any[] = Array.isArray(json?.history) ? json.history : []
+    if (records.length < 30) return []
+
+    // 解析并按日期排序
+    const bars = records
+      .map((r) => ({
+        date: String(r.snapshot_date ?? r.date ?? '').slice(0, 10),
+        code: String(r.code ?? config.code),
+        name: String(r.name ?? ''),
+        open: Number(r.open_price ?? r.price ?? 0),
+        high: Number(r.high_price ?? r.price ?? 0),
+        low: Number(r.low_price ?? r.price ?? 0),
+        close: Number(r.close_price ?? r.price ?? 0),
+        volume: Number(r.volume ?? 0),
+      }))
+      .filter((b) => b.date && b.close > 0)
+      .sort((a, b) => a.date.localeCompare(b.date))
+    if (bars.length < 30) return []
+
+    // 计算技术指标
+    const closes = bars.map((b) => b.close)
+    const indicatorsList = bars.map((_, i) => calcIndicators(closes, i, config.strategy))
+
+    // 简单回放逻辑：根据 strategy 信号 buy/sell
+    let cash = config.initialCash
+    let shares = 0
+    let position = 0
+    const steps: ReplayStep[] = []
+    const buyReasons: Record<string, string> = {
+      macd_cross: 'MACD金叉，买入信号',
+      ma_cross: '均线多头排列，买入信号',
+      rsi_reversal: 'RSI超卖反转，买入信号',
+      bollinger: '触及布林下轨，买入信号',
+    }
+    const sellReasons: Record<string, string> = {
+      macd_cross: 'MACD死叉，止盈卖出',
+      ma_cross: '均线死叉，止盈卖出',
+      rsi_reversal: 'RSI超买卖出',
+      bollinger: '触及布林上轨，止盈卖出',
+    }
+
+    bars.forEach((bar, i) => {
+      const ind = indicatorsList[i]
+      let action: 'buy' | 'sell' | 'hold' = 'hold'
+      let reason = ''
+      const sig = ind.signal
+      if (sig === 'buy' && shares === 0 && cash > bar.close) {
+        const buyShares = Math.floor((cash * 0.95) / bar.close / 100) * 100
+        if (buyShares > 0) {
+          shares = buyShares
+          cash -= shares * bar.close
+          position = shares * bar.close
+          action = 'buy'
+          reason = buyReasons[config.strategy] || '买入信号'
+        }
+      } else if (sig === 'sell' && shares > 0) {
+        const sellShares = Math.floor(shares * 0.5)
+        cash += sellShares * bar.close
+        shares -= sellShares
+        position = shares * bar.close
+        action = 'sell'
+        reason = sellReasons[config.strategy] || '卖出信号'
+      }
+      const totalValue = cash + position
+      const profit = totalValue - config.initialCash
+      const profitPct = (profit / config.initialCash) * 100
+      steps.push({
+        step: i,
+        date: bar.date,
+        action,
+        code: bar.code,
+        name: bar.name || config.code,
+        price: bar.close,
+        shares,
+        cash: Math.round(cash * 100) / 100,
+        position: Math.round(position * 100) / 100,
+        totalValue: Math.round(totalValue * 100) / 100,
+        profit: Math.round(profit * 100) / 100,
+        profitPct: Math.round(profitPct * 100) / 100,
+        reason,
+        indicators: {
+          MA5: ind.MA5,
+          MA10: ind.MA10,
+          MACD: ind.MACD,
+          RSI: ind.RSI,
+        },
+      })
+    })
+    return steps
+  } catch {
+    return []
+  }
+}
+
+function calcIndicators(closes: number[], idx: number, strategy: string): {
+  signal: 'buy' | 'sell' | 'hold'
+  MA5: number; MA10: number; MACD: number; RSI: number
+} {
+  const last = idx
+  const ma = (n: number) => {
+    if (last < n - 1) return 0
+    let s = 0
+    for (let i = last - n + 1; i <= last; i++) s += closes[i]
+    return s / n
+  }
+  const MA5 = ma(5)
+  const MA10 = ma(10)
+
+  // MACD = EMA12 - EMA26（近似）
+  let ema12 = 0, ema26 = 0
+  if (last >= 25) {
+    ema12 = closes[0]
+    ema26 = closes[0]
+    for (let i = 1; i <= last; i++) {
+      ema12 = closes[i] * (2 / 13) + ema12 * (11 / 13)
+      ema26 = closes[i] * (2 / 27) + ema26 * (25 / 27)
+    }
+  }
+  const MACD = ema12 - ema26
+
+  // RSI 14
+  let rsi = 50
+  if (last >= 14) {
+    let gain = 0, loss = 0
+    for (let i = last - 13; i <= last; i++) {
+      const diff = closes[i] - closes[i - 1]
+      if (diff > 0) gain += diff
+      else loss -= diff
+    }
+    const avgGain = gain / 14
+    const avgLoss = loss / 14
+    rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
+  }
+
+  // 信号判定
+  let signal: 'buy' | 'sell' | 'hold' = 'hold'
+  if (strategy === 'ma_cross') {
+    if (MA5 > 0 && MA10 > 0 && MA5 > MA10) signal = 'buy'
+    else if (MA5 > 0 && MA10 > 0 && MA5 < MA10) signal = 'sell'
+  } else if (strategy === 'macd_cross') {
+    if (MACD > 0) signal = 'buy'
+    else if (MACD < 0) signal = 'sell'
+  } else if (strategy === 'rsi_reversal') {
+    if (rsi < 30) signal = 'buy'
+    else if (rsi > 70) signal = 'sell'
+  } else if (strategy === 'bollinger') {
+    if (closes[last] < MA10 * 0.98) signal = 'buy'
+    else if (closes[last] > MA10 * 1.02) signal = 'sell'
+  }
+  return { signal, MA5, MA10, MACD, RSI: rsi }
+}
+
+// 模拟生成回放数据（仅作 API 失败时的兜底）
 export function generateMockReplayData(config: ReplayConfig): ReplayStep[] {
   const steps: ReplayStep[] = []
   let cash = config.initialCash
