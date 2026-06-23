@@ -59,6 +59,13 @@ class MarketEngine:
         self._last_periodic_save: float = 0.0  # timestamp of last periodic save
         self._PERIODIC_SAVE_INTERVAL = 300  # 5 minutes
 
+    @property
+    def latest_quotes(self) -> list:
+        """返回最近一次的行情快照（兼容 paper_trade_manager 的引用）"""
+        if not self._quotes:
+            return []
+        return list(self._quotes.values())
+
     async def start(self) -> None:
         """启动定时刷新
 
