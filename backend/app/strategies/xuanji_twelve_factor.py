@@ -478,7 +478,6 @@ class XuanjiTwelveFactorStrategy(Strategy):
         current_date = self._dates[idx]
         day_data = data.copy()
         if day_data.empty:
-            open('/tmp/fr_dbg.txt', 'a').write("XTF_RETURN_NONE_LINE_481\n")
             return None
 
         # 防御: 统一 code 列为字符串类型，避免 int64 vs str 的 isin 匹配失败
@@ -533,7 +532,6 @@ class XuanjiTwelveFactorStrategy(Strategy):
                 self._portfolio_peak = 1.0  # 重置峰值，避免旧基准影响新止损
                 logger.info(f"[Xuanji] 组合止损冷却期结束，idx={idx}，恢复策略")
             else:
-                open('/tmp/fr_dbg.txt', 'a').write("XTF_RETURN_NONE_LINE_535\n")
                 return None
 
         # === 每天检查追踪止损（v5.0 改进）===
@@ -561,7 +559,6 @@ class XuanjiTwelveFactorStrategy(Strategy):
                 return stop_signals
 
         if not is_rebalance_day:
-            open('/tmp/fr_dbg.txt', 'a').write("XTF_RETURN_NONE_LINE_562\n")
             return None
 
         # factor_data 回退: 若 _date_data_map 缺失当前日期，用 data 参数本身计算基础因子
@@ -603,7 +600,6 @@ class XuanjiTwelveFactorStrategy(Strategy):
             veto_mask[idx_row] = passed
         day_data = day_data[veto_mask]
         if day_data.empty:
-            open('/tmp/fr_dbg.txt', 'a').write("XTF_RETURN_NONE_LINE_603\n")
             return None
 
         # 基础筛选
@@ -617,7 +613,6 @@ class XuanjiTwelveFactorStrategy(Strategy):
             (day_data['volume'] > 0)
         ]
         if day_data.empty:
-            open('/tmp/fr_dbg.txt', 'a').write("XTF_RETURN_NONE_LINE_616\n")
             return None
 
         # === 债券分层 ===

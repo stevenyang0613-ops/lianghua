@@ -537,8 +537,6 @@ class EnhancedTimingModel:
         self._sharp_decline_cooldown: int = 0  # 保护退出缓冲（天）
         # Vix 日度历史（用于 vol target 平滑）
         self._vix_history: deque = deque(maxlen=5)
-        # 连续 bear/strong_bear 计数（regime-signal 一致性约束）
-        self._bear_regime_streak: int = 0
     
     def _smooth_category_score(self, name: str, raw_score: float) -> float:
         """对单一类别的原始得分应用 EMA 平滑
@@ -2106,39 +2104,14 @@ class EnhancedTimingModel:
         # detect_market_regime 定义：STRONG_BEAR=深度超卖(反弹机会), BULL=轻度超买(回调风险)
         # 因此：超卖时加分(抄底), 超买时减分(防范回调)
         # 幅度控制：±2 分以内，避免对综合得分造成过大偏移
-        # 持续 bear 市场（连续3天以上）：移除 mean-reversion 加分，避免反复诱多
-        if regime in (MarketRegime.BEAR, MarketRegime.STRONG_BEAR):
-            self._bear_regime_streak += 1
-        else:
-            self._bear_regime_streak = 0
-        if self._bear_regime_streak >= 3 and regime in (MarketRegime.BEAR, MarketRegime.STRONG_BEAR):
-            # 持续 bear 市场：禁用 mean-reversion 加分，改为惩罚避免反复诱多
-            regime_penalty = {
-                MarketRegime.STRONG_BEAR: -3,
-                MarketRegime.BEAR: -2,
-                MarketRegime.RANGE: 0,
-                MarketRegime.BULL: -2,
-                MarketRegime.STRONG_BULL: -3,
-            }
-        else:
-            regime_penalty = {
-                MarketRegime.STRONG_BEAR: +2,   # 深度超卖，反弹机会，小幅加分
-                MarketRegime.BEAR: +1,          # 轻度超卖，小幅加分
-                MarketRegime.RANGE: 0,
-                MarketRegime.BULL: -2,          # 轻度超买，回调风险，小幅减分
-                MarketRegime.STRONG_BULL: -3,   # 深度超买，减分防范回调
-            }
+        regime_penalty = {
+            MarketRegime.STRONG_BEAR: +2,   # 深度超卖，反弹机会，小幅加分
+            MarketRegime.BEAR: +1,          # 轻度超卖，小幅加分
+            MarketRegime.RANGE: 0,
+            MarketRegime.BULL: -2,          # 轻度超买，回调风险，小幅减分
+            MarketRegime.STRONG_BULL: -3,   # 深度超买，减分防范回调
+        }
         total_score += regime_penalty.get(regime, 0)
-        
-        # A2. Regime-Signal 一致性约束：bear 市场禁止弱看多以上信号
-        # 修复 2023-11-12 案例：regime=bear×23, signal=weak_bullish×43 → -3% 损失
-        if regime in (MarketRegime.BEAR, MarketRegime.STRONG_BEAR) and total_score > 52:
-            inconsistency_penalty = -5 if regime == MarketRegime.STRONG_BEAR else -3
-            total_score += inconsistency_penalty
-            logger.debug(
-                f"[RegimeSig] {regime.value}×{self._bear_regime_streak}天 + score={total_score-inconsistency_penalty:.0f}"
-                f"→{total_score:.0f}（一致性惩罚={inconsistency_penalty}）"
-            )
         
         # B. 多因子共振放大器（解决信号过平滑）
         # 当多数因子一致看多/看空时，非线性放大得分

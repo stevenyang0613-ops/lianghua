@@ -1869,27 +1869,8 @@ class BacktestEngine:
         # Must happen BEFORE building date_data_map so day_data also has these columns
         # NOTE: defaults are conservative to avoid filtering out all bonds
         # (e.g. premium_ratio=15 avoids low_premium's max_premium=30 filter)
-        # 注意: price 不使用100作为默认值, 避免把缺失价格误判为真实价格100
-        if 'price' not in data.columns:
-            if 'close_price' in data.columns:
-                data['price'] = data['close_price']
-            elif 'close' in data.columns:
-                data['price'] = data['close']
-            else:
-                data['price'] = np.nan
-                logger.warning("[BacktestEngine] 数据源缺少 price/close_price/close 列，price 填充 NaN")
-        # 对已有 price 中的缺失值，按 code 前向填充；无法填充的保持 NaN
-        if data['price'].isna().any():
-            missing_before = data['price'].isna().sum()
-            data = data.sort_values(['code', 'date'])
-            data['price'] = data.groupby('code')['price'].ffill().bfill()
-            missing_after = data['price'].isna().sum()
-            if missing_after < missing_before:
-                logger.info(
-                    f"[BacktestEngine] price 缺失值按 code 前后向填充: {missing_before} -> {missing_after}"
-                )
-
         strategy_required_defaults = {
+            'price': 100.0,
             'premium_ratio': 15.0,
             'volume': 100000,
             'change_pct': 0.0,

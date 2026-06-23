@@ -1,12 +1,9 @@
 import pandas as pd
 import numpy as np
 from typing import Optional
-import logging
 
 from app.strategies.base import Strategy
 from app.models.backtest import StrategyParam
-
-logger = logging.getLogger(__name__)
 
 
 class SectorRotationStrategy(Strategy):
@@ -29,14 +26,7 @@ class SectorRotationStrategy(Strategy):
 
     def on_init(self, data: pd.DataFrame) -> None:
         self._data = data.copy()
-        # 不使用100作为价格默认值；没有真实价格时填充NaN并告警
-        if "close" in self._data.columns:
-            self._data["price"] = self._data["close"]
-        elif "price" in self._data.columns:
-            pass  # 保持已有的 price 列
-        else:
-            logger.warning("[SectorRotation] 数据源缺少 close/price 列， price 填充 NaN")
-            self._data["price"] = np.nan
+        self._data["price"] = self._data.get("close", self._data.get("price", 100))
         self._data["code"] = self._data.get("industry_code", self._data.get("etf_code", self._data.get("code", "")))
 
         self._dates = sorted(self._data["date"].unique())

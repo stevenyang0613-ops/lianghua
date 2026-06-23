@@ -447,9 +447,13 @@ class XibuSevenDimensionStrategy(Strategy):
     def _calc_chip_score(self, row: pd.Series) -> float:
         """
         筹码面评分（满分6.6分）
-        简化版：基于成交量判断筹码集中度
+        简化版：基于成交量和价格位置判断筹码集中度
         """
         volume = row.get('volume', 0)
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时不应默认100, 仅基于成交量评分
+            price = None
 
         # 成交量适中为佳（过小说明关注度低，过大说明分歧大）
         score = 3.3  # 基础分
@@ -1113,14 +1117,13 @@ class XibuSevenDimensionStrategy(Strategy):
         self._data = data.copy()
         # Defensive: ensure required columns exist with safe defaults
         # 改进 (2025-06-15ah): 补全所有数据源列，防止 calc_vectorized 中缺失列导致异常值
-        # 注意：price 列不使用100作为默认值，避免把缺失价格误判为真实价格100
         _required_columns = {
             'premium_ratio': 15.0,
             'change_pct': 0.0,
             'volume': 100000.0,
             'ytm': 1.0,
             'remaining_years': 3.0,
-            'price': np.nan,
+            'price': 100.0,
             'dual_low': 0.0,
             'forced_call_days': 0,
             'stock_change_pct': 0.0,

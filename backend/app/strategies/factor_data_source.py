@@ -1,16 +1,12 @@
 """
 因子数据源模块
 
-接入外部数据源（AKShare + 妙想 MX）：
+接入外部数据源（AKShare）：
 - 行业PMI/景气度数据 (macro_china_pmi + sw_index_third_info)
 - 行业景气度排名
 - 大股东质押率 (stock_gpzy_pledge_ratio_em)
 - 财务指标 (stock_zyjs_ths 个股主要指标)
 - 市场情绪指标 (ak.stock_market_activity_legu + stock_zt_pool_em)
-- 妙想 MX (东方财富官方 API) — 补充因子数据查询
-  - mx-data: 自然语言查询财务/行业/估值因子
-  - mx-search: 资讯搜索辅助情绪判断
-  - 需 MX_APIKEY 配置
 """
 
 from dataclasses import dataclass

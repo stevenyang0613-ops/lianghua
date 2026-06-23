@@ -1607,17 +1607,15 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
 
 
 def _empty_backtest_row(start_date: date) -> dict:
-    """返回一个标记为空的回测行，所有价格字段使用 NaN，避免硬编码100误导上层"""
+    """返回一个空回测行, 让调用方不会完全崩溃"""
     import math
     return {
         'code': '000000', 'name': '', 'date': start_date,
-        'close_price': float('nan'), 'open_price': float('nan'),
-        'high_price': float('nan'), 'low_price': float('nan'),
-        'price': float('nan'), 'volume': 0,
-        'premium_ratio': float('nan'), 'conversion_price': 0, 'stock_code': '',
-        'remaining_years': float('nan'), 'ytm': float('nan'), 'change_pct': float('nan'),
-        'pe': float('nan'), 'pb': float('nan'), 'iv': float('nan'),
-        '_empty_row': True,
+        'close_price': 100.0, 'open_price': 100.0, 'high_price': 100.0, 'low_price': 100.0,
+        'price': 100.0, 'volume': 0,
+        'premium_ratio': 15.0, 'conversion_price': 0, 'stock_code': '',
+        'remaining_years': 3.0, 'ytm': 1.0, 'change_pct': 0.0,
+        'pe': float('nan'), 'pb': float('nan'), 'iv': 20.0,
     }
 
 

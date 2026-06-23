@@ -7,12 +7,7 @@
 - 回售公告
 - 其他重要公告
 
-数据来源：
-  ① 东方财富 stock_notice_report（每日全市场公告，含可转债/正股动态）
-  ② 妙想 MX (东方财富官方 API) — 资讯搜索补充公告监控
-     - mx-search: 关键词搜索下修/强赎/回售/评级变动等公告
-     - mx-data: 自然语言查询事件进展
-     - 需 MX_APIKEY 配置
+数据来源：东方财富 stock_notice_report（每日全市场公告，含可转债/正股动态）
 """
 
 from dataclasses import dataclass, field
