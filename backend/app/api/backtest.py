@@ -596,7 +596,8 @@ async def _fill_missing_factors(df: pd.DataFrame, request: Request, cached_bonds
         except asyncio.TimeoutError:
             logger.warning("[BacktestData] _fill_missing_factors: engine.get_all_quotes超时(>5s)")
             return df
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[BacktestData] _fill_missing_factors engine.get_all_quotes failed: {e}")
             return df
 
     if not bonds:
@@ -829,7 +830,8 @@ async def _fetch_industry_etf_data(start_date: date, end_date: date) -> pd.DataF
                     dt = date.fromisoformat(str(row["date"])[:10])
                 else:
                     continue
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[BacktestData] ETF date parse failed: {e}")
                 continue
             if dt < start_date or dt > end_date:
                 continue
@@ -1029,7 +1031,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             try:
                 try:
                     df_ths = ak.stock_financial_abstract_ths(symbol=sc, indicator="按报告期")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[BacktestData] THS financial abstract for {sc} failed: {e}")
                     continue
                 if df_ths is not None and hasattr(df_ths, 'empty') and not df_ths.empty:
                     latest = df_ths.iloc[0]
@@ -1110,7 +1113,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             for _, row in df.iterrows():
                 try:
                     dt = row["date"] if isinstance(row["date"], date) else date.fromisoformat(str(row["date"])[:10])
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[BacktestData] Kline date parse failed: {e}")
                     continue
                 if dt < start_date or dt > end_date:
                     continue
@@ -1133,7 +1137,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                     "change_pct": round(change_pct, 2),
                 })
             return records
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[BacktestData] _fetch_kline_tx failed: {e}")
             return []
 
     # 转债K线 (腾讯)
@@ -1191,7 +1196,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                         if cv > 0:
                             records[dt] = cv
                     return (sc, records)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[BacktestData] _fetch_baostock_stock for {sc} failed: {e}")
                     return (sc, {})
             
             with ThreadPoolExecutor(max_workers=20) as ex:
@@ -1235,7 +1241,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                     if cv is not None and cv > 0:
                         records[dt] = cv
                 return (sc, records)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[BacktestData] _fetch_tencent_stock for {sc} failed: {e}")
                 return (sc, {})
         with ThreadPoolExecutor(max_workers=15) as ex:
             futures = {ex.submit(_fetch_tencent_stock, sc): sc for sc in unique_stocks if sc not in stock_kline}
@@ -1519,7 +1526,8 @@ def _save_fallback_to_duckdb(df: pd.DataFrame, start_date: date, end_date: date)
         try:
             from app.config import settings
             db_path = settings.db_path
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[BacktestData] settings import failed: {e}")
             db_path = str(Path(__file__).parent.parent.parent / "data" / "market.db")
 
     if not os.path.isfile(db_path):

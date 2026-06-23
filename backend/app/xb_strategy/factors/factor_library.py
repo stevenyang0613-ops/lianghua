@@ -688,7 +688,8 @@ class FactorCombiner:
             residuals = Y - model.predict(X)
 
             return {code: res for code, res in zip(common_codes, residuals)}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[FactorLibrary] residual_factor failed: {e}")
             return target
 
 

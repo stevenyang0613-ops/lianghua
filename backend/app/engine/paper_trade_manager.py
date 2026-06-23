@@ -253,6 +253,17 @@ class PaperTradeManager:
                 account.strategy.on_init(init_df)
                 # 初始化模拟索引为历史数据的最后一个索引，使 idx 始终指向 "今天"
                 account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                # 关键修复: 确保 _sim_idx 对齐调仓日，否则启动后可能需等待多个交易日才调仓
+                if hasattr(account.strategy, 'get_param'):
+                    rebalance_days = account.strategy.get_param('rebalance_days')
+                    if rebalance_days and rebalance_days > 0:
+                        orig_idx = account._sim_idx
+                        account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
+                        if account._sim_idx != orig_idx:
+                            logger.info(
+                                f"[PaperTrade] Aligned sim_idx {orig_idx} -> {account._sim_idx} "
+                                f"to nearest rebalance day (rebalance_days={rebalance_days})"
+                            )
                 account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 logger.info(
                     f"[PaperTrade] Initialized strategy for account {account_id} "
@@ -322,6 +333,11 @@ class PaperTradeManager:
                 try:
                     account.strategy.on_init(init_df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    # 关键修复: 重置后也要对齐调仓日
+                    if hasattr(account.strategy, 'get_param'):
+                        rebalance_days = account.strategy.get_param('rebalance_days')
+                        if rebalance_days and rebalance_days > 0:
+                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after reset failed for {account_id}: {e}")
@@ -354,6 +370,11 @@ class PaperTradeManager:
                 try:
                     account.strategy.on_init(init_df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    # 关键修复: 参数更新后也要对齐调仓日
+                    if hasattr(account.strategy, 'get_param'):
+                        rebalance_days = account.strategy.get_param('rebalance_days')
+                        if rebalance_days and rebalance_days > 0:
+                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after param update failed for {account_id}: {e}")
@@ -365,6 +386,173 @@ class PaperTradeManager:
         # 持久化
         self._save_account(account)
         logger.info(f"[PaperTrade] Updated params for account {account_id}")
+
+    def force_rebalance(self, account_id: str) -> dict:
+        """强制策略立即调仓（无视调仓间隔天数限制）
+
+        策略按调仓间隔（如 7 天）决定何时产生信号，新启动的账户往往
+        还没到第一次调仓日就处于"空仓等待"状态。此方法临时将
+        rebalance_days 设为 1（每天都是调仓日），触发策略生成信号并执行，
+        之后恢复原始参数，不影响后续正常运行。
+
+        Returns:
+            {"status": "ok"/"no_signals", "signals": [...], "positions": [...]}
+        """
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise KeyError(f"Account {account_id} not found")
+
+        # 未运行时先启动
+        if not account.is_running:
+            self.start_account(account_id)
+
+        if account.strategy is None:
+            raise RuntimeError("策略未初始化，请稍后再试")
+
+        strategy = account.strategy
+        today_str = str(datetime.now().date())
+
+        # ── 获取最新行情（优先实时，回退历史快照） ──
+        bonds = None
+        df = pd.DataFrame()
+        valid_bonds = []
+        if self._market_engine is not None:
+            bonds = getattr(self._market_engine, 'latest_quotes', None)
+            if bonds is None:
+                get_fn = getattr(self._market_engine, 'get_latest_quotes', None)
+                if get_fn:
+                    try:
+                        bonds = get_fn()
+                    except Exception:
+                        pass
+        if bonds:
+            valid_bonds = [b for b in bonds if is_tradeable_bond(b)]
+            rows = []
+            for b in valid_bonds:
+                row = b.to_strategy_dict()
+                row["date"] = datetime.now().date()
+                rows.append(row)
+            df = pd.DataFrame(rows) if rows else pd.DataFrame()
+            if not df.empty:
+                account.trade_engine.update_prices(valid_bonds)
+
+        # 无实时行情时，从数据库历史快照构建 DataFrame
+        if df.empty:
+            logger.info(f"[PaperTrade] force_rebalance: no live quotes, using storage fallback")
+            init_df = self._build_init_df()
+            if init_df is not None and len(init_df) > 0:
+                # 取最新交易日的数据
+                init_df = init_df.sort_values("date")
+                last_date = init_df["date"].iloc[-1]
+                df = init_df[init_df["date"] == last_date].copy()
+                # 标准化列名（_build_init_df 用 close_price 作为 price 别名）
+                if "close_price" in df.columns and "price" not in df.columns:
+                    df = df.rename(columns={"close_price": "price"})
+                if not df.empty:
+                    logger.info(
+                        f"[PaperTrade] force_rebalance: loaded {len(df)} bonds "
+                        f"from storage date={last_date}"
+                    )
+
+        if df.empty:
+            raise RuntimeError("无行情数据且无历史快照，请等待行情推送后再试")
+
+        # ── 保存原始状态 ──
+        original_idx = account._sim_idx
+        original_dates = list(getattr(strategy, '_dates', []))
+        original_strategy_rebalance = strategy._params.get('rebalance_days', 7)
+        saved_states: dict = {}
+
+        if hasattr(strategy, '_last_rebalance_idx'):
+            saved_states['_last_rebalance_idx'] = strategy._last_rebalance_idx
+        if hasattr(strategy, '_portfolio_stop_trigger_idx'):
+            saved_states['_portfolio_stop_trigger_idx'] = strategy._portfolio_stop_trigger_idx
+
+        # ── 确保今天在策略 _dates 和 _date_data_map 中 ──
+        if today_str not in original_dates:
+            strategy._dates = original_dates + [today_str]
+        today_idx = len(strategy._dates) - 1
+
+        if hasattr(strategy, '_date_data_map'):
+            if today_str not in strategy._date_data_map:
+                strategy._date_data_map[today_str] = df
+
+        # ── 临时设置：rebalance_days=1 → 每次都是调仓日 ──
+        strategy._params['rebalance_days'] = 1
+        if hasattr(strategy, '_last_rebalance_idx'):
+            strategy._last_rebalance_idx = -999  # (idx - (-999)) >= 1 永远成立
+        if hasattr(strategy, '_portfolio_stop_trigger_idx'):
+            strategy._portfolio_stop_trigger_idx = -1  # 清除止损触发
+
+        account._sim_idx = today_idx
+
+        try:
+            result = strategy.on_data(df, today_idx)
+
+            if not result:
+                return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}
+
+            # ── 构建信号（去重逻辑同 _process_account） ──
+            now = time_mod.time()
+            signals_to_execute = []
+            for sig in result:
+                code = sig.get("code", "")
+                action = sig.get("action", "")
+                price = sig.get("price")
+                if price is None or (isinstance(price, (int, float)) and price <= 0):
+                    continue
+                # 去重
+                dedup_key = (code, action)
+                prev = account._recent_signals.get(dedup_key)
+                if prev:
+                    prev_ts, prev_price = prev
+                    price_close = abs(price - prev_price) / max(prev_price, 0.01) < account._dedup_price_threshold
+                    if now - prev_ts < account._dedup_window_seconds and price_close:
+                        continue
+                account._recent_signals[dedup_key] = (now, price)
+                bond = next((b for b in valid_bonds if b.code == code), None)
+                if not bond:
+                    continue
+                signals_to_execute.append({
+                    "code": code, "name": bond.name, "action": action,
+                    "price": price, "reason": sig.get("reason", ""),
+                    "confidence": sig.get("confidence", 0.0),
+                })
+
+            if not signals_to_execute:
+                return {"status": "no_signals", "message": "去重后无有效信号", "signals": []}
+
+            self._execute_signals(account, signals_to_execute)
+            self._save_account(account)
+            self._save_signals(account, signals_to_execute)
+            self._maybe_save_equity(account, now)
+
+            pos_list = []
+            for p in account.trade_engine.positions:
+                pos_list.append({
+                    "code": p.code, "name": p.name,
+                    "volume": p.volume,
+                    "cost_price": round(p.cost_price, 3) if p.cost_price else 0,
+                    "market_value": round(p.market_value, 2) if p.market_value else 0,
+                })
+
+            return {
+                "status": "ok",
+                "signals": signals_to_execute,
+                "positions": pos_list,
+            }
+        finally:
+            # ── 恢复原始状态 ──
+            account._sim_idx = original_idx
+            strategy._params['rebalance_days'] = original_strategy_rebalance
+            strategy._dates = original_dates
+            if hasattr(strategy, '_date_data_map') and today_str in strategy._date_data_map:
+                try:
+                    del strategy._date_data_map[today_str]
+                except Exception:
+                    pass
+            for key, value in saved_states.items():
+                setattr(strategy, key, value)
 
     # ── 数据查询 ──────────────────────────────────────
 
@@ -576,7 +764,8 @@ class PaperTradeManager:
                                         )
                         except Exception as supp_e:
                             logger.debug(f"[PaperTrade] _build_init_df supplement from quotes_history failed: {supp_e}")
-                    # 回退: daily_snapshots 无数据，从 quotes_history 加载
+                # 回退: daily_snapshots 无数据，从 quotes_history 加载
+                else:
                     date_cursor = self._storage.conn.execute("""
                         SELECT DISTINCT CAST(timestamp AS DATE) AS td
                         FROM quotes_history
@@ -630,6 +819,12 @@ class PaperTradeManager:
             return None
         
         df = pd.DataFrame(all_rows)
+        # 关键修复: 统一 date 列类型为 datetime.date，避免 str 和 datetime.date 混用导致 on_init 中 sorted() 失败
+        if "date" in df.columns:
+            try:
+                df["date"] = pd.to_datetime(df["date"], errors='coerce').dt.date
+            except Exception as e:
+                logger.warning(f"[PaperTrade] _build_init_df date conversion failed: {e}")
         # 确保日期列存在
         if "date" not in df.columns:
             df["date"] = df.get("timestamp", datetime.now()).apply(
@@ -727,6 +922,8 @@ class PaperTradeManager:
         today: str,
     ) -> None:
         """处理单个账户的策略运行和自动执行"""
+        from datetime import date
+        today_date = date.fromisoformat(today)
         try:
             # 更新交易日计数（跳过周末，A股不交易）
             if today != account._last_trade_date:
@@ -737,14 +934,18 @@ class PaperTradeManager:
                     if account.strategy is not None:
                         try:
                             strategy_dates = list(getattr(account.strategy, '_dates', []))
-                            if not any(str(d) == today for d in strategy_dates):
+                            # 关键修复: 统一比较时使用 date 类型，避免 str 和 datetime.date 混用导致匹配失败
+                            if not any(
+                                (isinstance(d, date) and d == today_date) or (str(d) == today)
+                                for d in strategy_dates
+                            ):
                                 account._sim_idx += 1
-                                strategy_dates.append(today)
+                                strategy_dates.append(today_date)
                                 account.strategy._dates = strategy_dates
                                 # 同步更新 _date_data_map
                                 if hasattr(account.strategy, '_date_data_map'):
                                     dmap = dict(account.strategy._date_data_map)
-                                    dmap[today] = df
+                                    dmap[today_date] = df
                                     account.strategy._date_data_map = dmap
                                 # 同步更新 _data（限制保留最近90天防止无限增长）
                                 if hasattr(account.strategy, '_data') and not df.empty:
@@ -760,18 +961,28 @@ class PaperTradeManager:
                                 f"[PaperTrade] Strategy date extension failed for {account.id}: {e}"
                             )
                 account._last_trade_date = today
+                # 同步 _sim_dates 确保与 _sim_idx 一致，并立即持久化防止进程崩溃后回退
+                if account.strategy is not None:
+                    account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
+                self._save_account(account)
 
             # 更新持仓价格
             account.trade_engine.update_prices(bonds)
 
             # 策略初始化（延迟初始化: start_account 时无行情数据的情况）
             if account.strategy is None:
+                logger.debug(f"[PaperTrade] Account {account.id} strategy is None, skipping")
                 return
 
             if getattr(account, '_needs_init', False) and account.strategy is not None:
                 try:
                     account.strategy.on_init(df)
                     account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    # 关键修复: 延迟初始化后也要对齐调仓日
+                    if hasattr(account.strategy, 'get_param'):
+                        rebalance_days = account.strategy.get_param('rebalance_days')
+                        if rebalance_days and rebalance_days > 0:
+                            account._sim_idx = (account._sim_idx // rebalance_days) * rebalance_days
                     account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                     account._needs_init = False
                     logger.info(
@@ -795,6 +1006,13 @@ class PaperTradeManager:
                     )
                     idx = max_idx
 
+            # 记录策略运行前的关键状态
+            rebalance_days = account.strategy.get_param('rebalance_days') if hasattr(account.strategy, 'get_param') else None
+            logger.info(
+                f"[PaperTrade] Running strategy {account.strategy_name} for account {account.id}, "
+                f"idx={idx}, rebalance_days={rebalance_days}, _dates_len={len(getattr(account.strategy, '_dates', []))}"
+            )
+
             # 运行策略（30 秒超时防止阻塞）
             try:
                 result = await asyncio.wait_for(
@@ -808,11 +1026,18 @@ class PaperTradeManager:
                 )
                 self._maybe_save_equity(account, now)
                 return
+            except Exception as e:
+                logger.exception(f"[PaperTrade] Strategy on_data error for account {account.id}: {e}")
+                self._maybe_save_equity(account, now)
+                return
 
             if not result:
+                logger.info(f"[PaperTrade] Strategy {account.strategy_name} returned no signals for account {account.id} (idx={idx})")
                 # 即使无信号也记录权益快照
                 self._maybe_save_equity(account, now)
                 return
+
+            logger.info(f"[PaperTrade] Strategy {account.strategy_name} returned {len(result)} raw signals for account {account.id}")
 
             # 处理信号
             signals_to_execute = []
@@ -891,7 +1116,12 @@ class PaperTradeManager:
                 continue
             try:
                 pos = next((p for p in trade_engine.positions if p.code == sig["code"]), None)
-                volume = pos.volume if pos else 10
+                if pos is None:
+                    logger.debug(
+                        f"[PaperTrade] Sell signal for {sig['code']} but no position held, skipping"
+                    )
+                    continue
+                volume = pos.volume
                 order = trade_engine.sell(
                     code=sig["code"], name=sig["name"],
                     price=sig["price"], volume=volume,

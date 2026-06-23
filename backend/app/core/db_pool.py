@@ -240,7 +240,8 @@ class DatabaseConnectionManager:
         try:
             conn.execute("SELECT 1")
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DBPool] connection validation failed: {e}")
             return False
 
     @contextmanager

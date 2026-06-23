@@ -1243,6 +1243,7 @@ class XibuSevenDimensionStrategy(Strategy):
                         'price': float(s['price']),
                         'reason': f'评分{s["total"]:.1f}，{reason}',
                         'score': s['total'], 'rank': rank,
+                        'confidence': s['total'],  # 添加 confidence 字段，避免被 _min_confidence 过滤
                     })
                     self._hold_since[code] = idx
 

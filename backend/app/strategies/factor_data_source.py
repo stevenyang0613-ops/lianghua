@@ -270,7 +270,8 @@ class FactorDataSource:
         try:
             from app.services.enrichment_finance import fetch_guarantee_ratio
             return fetch_guarantee_ratio(code)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[FactorDataSource] fetch_guarantee_ratio failed: {e}")
             return None
 
     # ==================== 财务指标 ====================
@@ -388,7 +389,8 @@ class FactorDataSource:
             if market_engine is not None:
                 try:
                     quotes = list(market_engine.get_quotes() or [])
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[FactorDataSource] market_engine.get_quotes failed: {e}")
                     quotes = []
             if not quotes:
                 return {

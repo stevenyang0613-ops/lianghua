@@ -94,6 +94,21 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # 双重保护：如果 pydantic-settings 从空环境变量读取了空值，
+        # 但 .env 文件中有有效值，则从 .env 回退读取（override=True 避免环境变量覆盖）
+        if _DEFAULT_ENV_FILE.exists():
+            try:
+                import dotenv
+                dotenv_values = dotenv.dotenv_values(str(_DEFAULT_ENV_FILE))
+                for field_name in self.model_fields:
+                    env_key = f"LH_{field_name.upper()}"
+                    current_val = getattr(self, field_name, "")
+                    # 仅当当前值为空且 .env 中有有效值时回退
+                    if not current_val and env_key in dotenv_values and dotenv_values[env_key]:
+                        setattr(self, field_name, dotenv_values[env_key])
+            except ImportError:
+                pass
+
         # JWT 密钥：如果未设置则自动生成并持久化
         if not self.JWT_SECRET_KEY:
             jwt_token_file = Path.home() / ".lianghua" / ".jwt_secret"

@@ -109,17 +109,36 @@ function startFrontendServer(): Promise<number> {
             PROXY_TIMEOUT_MS = 300000 // 5 min for backtest computation (2020-01-01 to present)
           }
 
+          // 移除 hop-by-hop headers，避免代理转发导致后端解析错误
+          const hopByHopHeaders = new Set([
+            'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+            'te', 'trailers', 'transfer-encoding', 'upgrade'
+          ])
+          const proxyHeaders: Record<string, string> = { host: `${BACKEND_HOST}:${BACKEND_PORT}` }
+          for (const [key, value] of Object.entries(req.headers)) {
+            if (hopByHopHeaders.has(key.toLowerCase())) continue
+            if (value !== undefined) {
+              proxyHeaders[key] = Array.isArray(value) ? value.join(', ') : String(value)
+            }
+          }
+
+          // 增强代理健壮性：使用 keep-alive agent 复用连接，减少后端重启时的连接失败
+          const proxyAgent = new http.Agent({
+            keepAlive: true,
+            maxSockets: 64,
+            maxFreeSockets: 10,
+            timeout: PROXY_TIMEOUT_MS,
+          })
+
           const proxyReq = http.request(
             {
               hostname: BACKEND_HOST,
               port: BACKEND_PORT,
               path: req.url,
               method: req.method,
-              headers: {
-                ...req.headers,
-                host: `${BACKEND_HOST}:${BACKEND_PORT}`,
-              },
+              headers: proxyHeaders,
               timeout: PROXY_TIMEOUT_MS,
+              agent: proxyAgent,
             },
             (proxyRes) => {
               res.writeHead(proxyRes.statusCode || 500, proxyRes.headers)
@@ -133,8 +152,47 @@ function startFrontendServer(): Promise<number> {
               proxyRes.pipe(res)
             }
           )
-          proxyReq.on('error', (err) => {
-            console.error(`[FrontendServer] Proxy error for ${req.url}: ${err.message}`)
+          proxyReq.on('error', (err: any) => {
+            console.error(`[FrontendServer] Proxy error for ${req.url}: ${err.code || err.message}`)
+            // 首次连接失败时自动重试一次（后端启动初期可能短暂不可用）
+            if ((err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') && !res.headersSent) {
+              console.log(`[FrontendServer] Retrying ${req.url} in 500ms...`)
+              setTimeout(() => {
+                const retryReq = http.request(
+                  {
+                    hostname: BACKEND_HOST,
+                    port: BACKEND_PORT,
+                    path: req.url,
+                    method: req.method,
+                    headers: proxyHeaders,
+                    timeout: PROXY_TIMEOUT_MS,
+                    agent: proxyAgent,
+                  },
+                  (retryRes) => {
+                    if (!res.headersSent) {
+                      res.writeHead(retryRes.statusCode || 500, retryRes.headers)
+                      retryRes.pipe(res)
+                    }
+                  }
+                )
+                retryReq.on('error', (retryErr) => {
+                  console.error(`[FrontendServer] Retry failed for ${req.url}: ${retryErr.message}`)
+                  if (!res.headersSent) {
+                    res.writeHead(502, { 'Content-Type': 'application/json' })
+                    res.end(JSON.stringify({ detail: 'Backend unavailable after retry' }))
+                  }
+                })
+                retryReq.on('timeout', () => {
+                  retryReq.destroy()
+                  if (!res.headersSent) {
+                    res.writeHead(504, { 'Content-Type': 'application/json' })
+                    res.end(JSON.stringify({ detail: 'Backend timeout' }))
+                  }
+                })
+                retryReq.end()
+              }, 500)
+              return
+            }
             if (!res.headersSent) {
               res.writeHead(502, { 'Content-Type': 'application/json' })
               res.end(JSON.stringify({ detail: 'Backend unavailable' }))
@@ -152,11 +210,21 @@ function startFrontendServer(): Promise<number> {
             proxyReq.destroy()
           })
           req.on('close', () => {
-            if (req.destroyed) {
+            // 正常结束时 req.complete 为 true，不应销毁 proxyReq
+            // 仅在请求被异常中断（如客户端断开）时销毁 proxyReq
+            if (!req.complete) {
               proxyReq.destroy()
             }
           })
-          req.pipe(proxyReq)
+          // 修复：GET/HEAD 请求不应使用 req.pipe(proxyReq)，
+          // 空 body 的 pipe 会导致 Node.js 内部 ECONNRESET（socket hang up），返回 502。
+          // 只有带 body 的请求（POST/PUT/PATCH）才需要 pipe。
+          const methodUpper = (req.method || 'GET').toUpperCase()
+          if (methodUpper === 'GET' || methodUpper === 'HEAD') {
+            proxyReq.end()
+          } else {
+            req.pipe(proxyReq)
+          }
           return
         }
 
@@ -1182,6 +1250,19 @@ function killPythonProcessGroup(child: import('child_process').ChildProcess): vo
 }
 
 function startPythonBackend() {
+  // 启动前清理 backend/app/**/__pycache__ 避免旧 .pyc 导致行为不一致 (AGENTS.md #50)
+  try {
+    const glob = require('glob');
+    const pycPaths = glob.sync('**/\.pyc', { cwd: getBackendDir(), absolute: true })
+      .concat(glob.sync('**/__pycache__', { cwd: getBackendDir(), absolute: true }));
+    for (const p of pycPaths) {
+      try { require('fs').rmSync(p, { recursive: true, force: true }); } catch (_) {}
+    }
+    if (pycPaths.length) console.log(`[Electron] Cleaned ${pycPaths.length} pycache items`);
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.log("[Electron] pycache cleanup skipped:", errMsg);
+  }
   if (_backendStarting) {
     console.log('[Electron] startPythonBackend already in progress, ignoring')
     return
@@ -1197,7 +1278,14 @@ function startPythonBackend() {
     : [path.join(backendDir, 'run_app.py'), '--host', BACKEND_HOST, '--port', String(BACKEND_PORT)]
 
   const sslEnv = getSSLCertEnv()
-  const spawnEnv = { ...process.env, ...(envPath ? { PATH: envPath } : {}), ...sslEnv }
+  const spawnEnv: Record<string, string | undefined> = { ...process.env, ...(envPath ? { PATH: envPath } : {}), ...sslEnv }
+  // 过滤掉值为空的 LH_* 环境变量，避免覆盖 .env 文件中的配置
+  // (pydantic-settings 优先读取环境变量，空的 LH_MX_APIKEY 会覆盖 .env 中的有效值)
+  for (const key of Object.keys(spawnEnv)) {
+    if (key.startsWith('LH_') && spawnEnv[key] === '') {
+      delete spawnEnv[key]
+    }
+  }
 
   console.log(`[Electron] startPythonBackend: cmd=${pythonCmd}, args=${JSON.stringify(args)}, cwd=${pyinstallerCwd}`)
   pythonProcess = spawn(pythonCmd, args, {
@@ -2021,13 +2109,15 @@ ipcMain.handle('export-diagnostic-logs', () => {
   try {
     try {
     fs.writeFileSync(logPath, JSON.stringify(diagnosticData, null, 2))
-  } catch (e: any) {
-    console.error('[Electron] Failed to export diagnostic logs:', e.message)
-    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + e.message }))
+  } catch (e) {
+    const err = e as any
+    console.error('[Electron] Failed to export diagnostic logs:', err.message)
+    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + err.message }))
   }
-  } catch (e: any) {
-    console.error('[Electron] Failed to export diagnostic logs:', e.message)
-    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + e.message }))
+  } catch (e) {
+    const err = e as any
+    console.error('[Electron] Failed to export diagnostic logs:', err.message)
+    fs.writeFileSync(logPath, JSON.stringify({ error: 'Export failed: ' + err.message }))
   }
   return { path: logPath }
 })

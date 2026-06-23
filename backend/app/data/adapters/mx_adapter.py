@@ -68,7 +68,7 @@ class MXAdapter(DataSourceAdapter):
                 query_text = ",".join(query.codes)
 
             mod = self._import_mx_module("mx-data")
-            client = mod.MXData()
+            client = mod.MXData(api_key=self._api_key)
             result = client.query(query_text)
             tables, _, total_rows, err = client.parse_result(result)
             if err:
@@ -118,7 +118,7 @@ class MXAdapter(DataSourceAdapter):
             if codes:
                 query_text = " ".join(codes[:10]) + " " + query_text
             mod = self._import_mx_module("mx-search")
-            client = mod.MXSearch()
+            client = mod.MXSearch(api_key=self._api_key)
             result = client.search(query_text)
             items = []
             for item in result.get("data", {}).get("items", []):
@@ -139,7 +139,7 @@ class MXAdapter(DataSourceAdapter):
     # ------------------------------------------------------------------
 
     async def health_check(self) -> Dict[str, Any]:
-        """检查MX服务状态 — 同时检查所有可能的skill安装路径"""
+        """检查MX服务状态 — 包含实际API连通性验证"""
         base = await super().health_check()
         degraded = getattr(self, '_degraded_mode', False)
         
@@ -159,8 +159,28 @@ class MXAdapter(DataSourceAdapter):
                     break
             skill_install_status[name] = found_anywhere
         
+        # 实际API连通性测试 — 发一个轻量级请求验证Key是否有效
+        api_key_valid = False
+        api_key_error = None
+        if self._api_key and not degraded:
+            try:
+                mod = self._import_mx_module("mx-data")
+                client = mod.MXData(api_key=self._api_key)
+                result = client.query("上证指数")
+                status = result.get("status")
+                if status == 0:
+                    api_key_valid = True
+                else:
+                    api_key_error = f"API返回状态码 {status}: {result.get('message', '未知错误')}"
+            except Exception as e:
+                api_key_error = str(e)
+                if "401" in str(e).lower() or "unauthorized" in str(e).lower():
+                    api_key_error = "API Key 无效或已过期，请重新配置"
+        
         base.update({
             "configured": bool(self._api_key),
+            "api_key_valid": api_key_valid,
+            "api_key_error": api_key_error,
             "degraded_mode": degraded,
             "api_key_prefix": "***" if self._api_key else "",
             "skills_installed": skill_install_status,
@@ -179,7 +199,7 @@ class MXAdapter(DataSourceAdapter):
         try:
             if data_type == "news":
                 mod = self._import_mx_module("mx-search")
-                client = mod.MXSearch()
+                client = mod.MXSearch(api_key=self._api_key)
                 result = client.search(query_text)
                 items = []
                 for item in result.get("data", {}).get("items", []):
@@ -193,7 +213,7 @@ class MXAdapter(DataSourceAdapter):
                 return {"success": True, "data": items, "total": len(items), "source": "mx_search"}
             else:
                 mod = self._import_mx_module("mx-data")
-                client = mod.MXData()
+                client = mod.MXData(api_key=self._api_key)
                 result = client.query(query_text)
                 tables, _, total_rows, err = client.parse_result(result)
                 if err:

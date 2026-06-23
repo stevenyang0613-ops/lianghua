@@ -56,7 +56,8 @@ class FeatureStore:
                 port=self.online_store_config.get('port', 6379),
                 db=self.online_store_config.get('db', 0)
             )
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[FeatureStore] redis init failed: {e}")
             self.redis = None
     
     def register_feature_group(self, group: FeatureGroup):

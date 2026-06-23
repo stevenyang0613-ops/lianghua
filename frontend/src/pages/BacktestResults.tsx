@@ -37,10 +37,14 @@ export default function BacktestResults() {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, BacktestResult>>({})
   const [activeKey, setActiveKey] = useState('xuanji_twelve')
+  const [loadingTip, setLoadingTip] = useState('加载回测结果...')
+  const [loadStartTime, setLoadStartTime] = useState<number | null>(null)
 
   const fetchResults = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setLoadingTip('加载回测结果...')
+    setLoadStartTime(Date.now())
     try {
       const res = await fetch('/api/v1/backtest-results/strategy-results')
       if (!res.ok) {
@@ -53,12 +57,30 @@ export default function BacktestResults() {
       setError(e.message || '加载回测结果失败')
     } finally {
       setLoading(false)
+      setLoadingTip('加载回测结果...')
+      setLoadStartTime(null)
     }
   }, [])
 
   useEffect(() => {
     fetchResults()
   }, [fetchResults])
+
+  // 动态更新加载提示：首次加载无缓存时可能需要3-5分钟
+  useEffect(() => {
+    if (!loading) return
+    const timers: ReturnType<typeof setTimeout>[] = []
+    timers.push(setTimeout(() => {
+      if (loading) setLoadingTip('正在计算回测数据，预计需要 1-2 分钟...')
+    }, 8000))
+    timers.push(setTimeout(() => {
+      if (loading) setLoadingTip('数据量较大，仍在计算中，请耐心等待（约 3-5 分钟）...')
+    }, 25000))
+    timers.push(setTimeout(() => {
+      if (loading) setLoadingTip('计算已持续较久，建议稍后刷新页面重试...')
+    }, 180000))
+    return () => { timers.forEach(clearTimeout) }
+  }, [loading])
 
   const renderResult = (result: BacktestResult | undefined) => {
     if (!result) {
@@ -197,7 +219,7 @@ export default function BacktestResults() {
         }
       >
         {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
-        <Spin spinning={loading} tip="加载回测结果...">
+        <Spin spinning={loading} tip={loadingTip}>
           <Tabs activeKey={activeKey} onChange={setActiveKey} items={items} />
         </Spin>
       </Card>

@@ -692,7 +692,8 @@ class GeneticFactorMiner:
                     # 适应度 = |IC均值| * ICIR - 换手率惩罚
                     fitness = abs(result.ic_mean) * abs(result.icir) - result.turnover * 0.1
                     fitness_scores.append(fitness)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[FactorMining] validator.test_factor failed: {e}")
                     fitness_scores.append(0)
 
             # 进化

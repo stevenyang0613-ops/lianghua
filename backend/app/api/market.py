@@ -987,7 +987,8 @@ async def get_stock_concepts(
     try:
         from app.engine.data_enrich import get_concept_sources
         source_map = get_concept_sources()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Market] get_concept_sources failed: {e}")
         source_map = {}
 
     # Build ALL stock map (bond-sourced + enrichment cache)
@@ -1302,7 +1303,8 @@ async def get_stock_industries(request: Request, fields: str = Query(None, descr
     # 裁剪过, 推荐计算需要全部字段, 所以传 raw rows 给 _build_recommendations.
     try:
         recommendations = _build_recommendations([_r for _r in _raw_industry_rows])
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Market] _build_recommendations failed: {e}")
         recommendations = {"short_term": [], "mid_term": [], "long_term": [], "generated_at": None}
 
     return {
@@ -1379,7 +1381,8 @@ async def get_recommendation_accuracy(
     try:
         full = await get_stock_industries(request, fields=None)
         industries = full.get("industries", [])
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Market] get_stock_industries failed: {e}")
         industries = []
 
     ind_map = {}

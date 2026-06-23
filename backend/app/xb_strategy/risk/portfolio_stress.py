@@ -650,7 +650,8 @@ class RiskBudgetAllocator:
             weights = inv_cov @ ones
             weights = weights / weights.sum()
             return weights
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[PortfolioStress] min_variance_weights failed: {e}")
             return np.ones(len(cov_matrix)) / len(cov_matrix)
 
 

@@ -115,17 +115,16 @@ ws_manager = WSManager()
 def broadcast_revision(record: dict):
     """从同步上下文广播转股价下修事件到 WebSocket 客户端"""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if loop.is_running():
-            loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(
-                    ws_manager.broadcast({"type": "revision", "data": record})
-                )
+            asyncio.run_coroutine_threadsafe(
+                ws_manager.broadcast({"type": "revision", "data": record}),
+                loop
             )
         else:
-            # loop 存在但不在运行（shutdown中），安全丢弃
             logger.debug("[WS] Skipping revision broadcast: event loop not running")
     except RuntimeError:
+        # 无线程循环（后台线程或 shutdown 后）
         logger.debug("[WS] No event loop available for revision broadcast")
 
 
@@ -199,12 +198,13 @@ async def verify_ws_auth(websocket: WebSocket) -> bool:
         await websocket.close(code=4001, reason="Unauthorized: invalid token")
         return False
 
-    total = active_market_connections + active_signal_connections
-    if total >= 50:
-        logger.warning("[WS] Connection limit reached: %d active", total)
-        _ws_stats["disconnect_reasons"]["connection_limit"] += 1
-        await websocket.close(code=1013, reason="Too many connections")
-        return False
+    async with _ws_conn_lock:
+        total = active_market_connections + active_signal_connections
+        if total >= 50:
+            logger.warning("[WS] Connection limit reached: %d active", total)
+            _ws_stats["disconnect_reasons"]["connection_limit"] += 1
+            await websocket.close(code=1013, reason="Too many connections")
+            return False
 
     return True
 
@@ -324,8 +324,9 @@ async def market_websocket(websocket: WebSocket):
                     _ws_stats["market_delta_messages"] += 1
                 else:
                     _ws_stats["market_full_messages"] += 1
-        except Exception:
+        except Exception as e:
             _ws_stats["disconnect_reasons"]["send_error"] += 1
+            logger.debug(f"[WS] Market update send failed: {e}")
 
     engine.subscribe(on_market_update)
 
@@ -354,8 +355,9 @@ async def market_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "ping"})
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as e:
                 _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
+                logger.debug(f"[WS] heartbeat failed: {e}")
                 break
 
     heartbeat_task = asyncio.create_task(heartbeat())
@@ -417,8 +419,9 @@ async def signals_websocket(websocket: WebSocket):
             sent_bytes = await _send_compressed(websocket, msg, "signal")
             _ws_stats["signal_messages_sent"] += 1
             _ws_stats["signal_bytes_sent"] += sent_bytes
-        except Exception:
+        except Exception as e:
             _ws_stats["disconnect_reasons"]["send_error"] += 1
+            logger.debug(f"[WS] signal send failed: {e}")
 
     signal_engine.subscribe(on_signal_update)
 
@@ -431,8 +434,9 @@ async def signals_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "ping"})
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as e:
                 _ws_stats["disconnect_reasons"]["heartbeat_timeout"] += 1
+                logger.debug(f"[WS] heartbeat failed: {e}")
                 break
 
     heartbeat_task = asyncio.create_task(heartbeat())

@@ -88,3 +88,29 @@ async def export_metrics_json() -> Dict[str, Any]:
         result[name]['stats'] = collector.get_histogram_stats(name)
 
     return result
+
+
+
+@router.get('/metrics/semaphore')
+async def semaphore_metrics() -> Dict[str, Any]:
+    """返回 AKShare semaphore 并发控制与超时统计指标。
+
+    用于监控面板观测级联故障和并发瓶颈。
+    """
+    try:
+        from app.engine.data_enrich import (
+            _akshare_semaphore_stats,
+            _akshare_max_concurrency,
+            _akshare_semaphore,
+        )
+        # threading.Semaphore 内部计数 (CPython 实现细节)
+        available = getattr(_akshare_semaphore, '_value', None)
+        return {
+            "semaphore": {
+                "max_concurrency": _akshare_max_concurrency,
+                "available": available,
+            },
+            "stats": dict(_akshare_semaphore_stats),
+        }
+    except Exception as e:
+        return {"error": str(e)}

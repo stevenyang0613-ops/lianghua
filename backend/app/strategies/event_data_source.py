@@ -296,7 +296,7 @@ class EventDataSource:
         try:
             from concurrent.futures import ThreadPoolExecutor
             today = datetime.now().strftime("%Y%m%d")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with ThreadPoolExecutor(max_workers=1) as ex:
                 df = await loop.run_in_executor(ex, lambda: ak.stock_notice_report(symbol='全部', date=today))
             if df is None or df.empty:

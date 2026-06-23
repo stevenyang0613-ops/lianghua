@@ -476,6 +476,10 @@ class XuanjiTwelveFactorStrategy(Strategy):
         if 'dual_low' not in day_data.columns:
             day_data['dual_low'] = day_data['price'] + day_data.get('premium_ratio', 15)
 
+        # 防御 zero-fill: gpm <= 0 视为缺失数据（zero-fill 标记，非真实毛利率）
+        if 'gpm' in day_data.columns:
+            day_data.loc[day_data['gpm'] <= 0, 'gpm'] = float('nan')
+
         # === 组合层面最大回撤止损 ===
         portfolio_stop_loss = self.get_param('portfolio_stop_loss')
         if self._prev_selected and portfolio_stop_loss < 0:

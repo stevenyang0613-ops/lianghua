@@ -134,7 +134,8 @@ class AkshareDataSource(DataSourceInterface):
                 'cb_index_change': float(latest['涨跌幅']),
                 'cb_index_ma20': float(index_df['收盘'].rolling(20).mean().iloc[-1]),
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DataAdapter] fetch_market_data failed: {e}")
             return {'cb_index_close': 400.0, 'cb_index_change': 0.0, 'cb_index_ma20': 400.0}
 
     def _parse_premium(self, val) -> float:
@@ -154,7 +155,8 @@ class AkshareDataSource(DataSourceInterface):
                 maturity = maturity_date
             delta = maturity - datetime.now()
             return max(0, delta.days / 365)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DataAdapter] _calc_remaining_years failed: {e}")
             return 3.0
 
     def _generate_mock_cb_data(self, n: int = 100) -> List[ConvertibleBondData]:
@@ -302,7 +304,8 @@ class WindDataSource(DataSourceInterface):
                 'cb_index_change': data.Data[1][-1] if len(data.Data) > 1 else 0,
                 'cb_index_ma20': np.mean(data.Data[0]) if data.Data[0] else 400,
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DataAdapter] WindDataSource fetch failed: {e}")
             return {'cb_index_close': 400.0, 'cb_index_change': 0.0, 'cb_index_ma20': 400.0}
 
     def _calc_remaining_years(self, maturity_date) -> float:
@@ -312,7 +315,8 @@ class WindDataSource(DataSourceInterface):
         try:
             delta = maturity_date - datetime.now()
             return max(0, delta.days / 365)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DataAdapter] WindDataSource _calc_remaining_years failed: {e}")
             return 3.0
 
 
@@ -704,7 +708,8 @@ class DataAdapter:
 
             delta = maturity - datetime.now()
             return max(0, delta.days / 365)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DataAdapter] RiceQuantDataSource _calc_remaining_years failed: {e}")
             return 3.0
 
     def _generate_mock_cb_data(self, n: int = 100) -> List[ConvertibleBondData]:
@@ -988,7 +993,8 @@ class DataSourceManager:
                     data = src.fetch_stock_data(stock_codes)
                     if data:
                         return data
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[DataAdapter] Fallback fetch_stock_data from {src_name} failed: {e}")
                     continue
 
         return {}
@@ -1008,7 +1014,8 @@ class DataSourceManager:
                     data = src.fetch_market_data()
                     if data:
                         return data
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[DataAdapter] Fallback fetch_market_data from {src_name} failed: {e}")
                     continue
 
         return {'cb_index_close': 400.0, 'cb_index_change': 0.0, 'cb_index_ma20': 400.0}
@@ -1025,7 +1032,8 @@ class DataSourceManager:
                 # 尝试获取少量数据测试连通性
                 data = source.fetch_all_cb_data()
                 status[name] = len(data) > 0
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[DataAdapter] get_source_status for {name} failed: {e}")
                 status[name] = False
         return status
 

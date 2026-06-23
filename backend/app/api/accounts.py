@@ -160,7 +160,8 @@ async def sync_balance(account_id: str, request: Request = None):
                     else:
                         profit_today += 0
                     profit_total += (current_price - cost_price) * qty
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Accounts] position calc failed: {e}")
                 continue
     else:
         market_value = sum(

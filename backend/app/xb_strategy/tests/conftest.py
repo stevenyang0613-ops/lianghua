@@ -471,7 +471,7 @@ def assert_coverage(module_path: str, min_coverage: float = 80.0):
 
 def run_async_test(coro):
     """运行异步测试"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return loop.run_until_complete(coro)
 
 

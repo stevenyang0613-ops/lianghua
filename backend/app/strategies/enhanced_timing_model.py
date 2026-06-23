@@ -385,6 +385,7 @@ def clean_numpy_types(obj):
    （JSON 规范不允许 NaN/Inf 值）。
 
     性能优化：模块级 numpy 导入 + 快速路径跳过常见纯 Python 类型。
+    TODO: 引入 orjson 的 OPT_SERIALIZE_NUMPY 可进一步加速高频 WebSocket 路径。
     """
     # 快速路径：最常见类型直接返回（int, str, bool 在 WebSocket 消息中占比 >90%）
     t = type(obj)
@@ -915,9 +916,8 @@ class EnhancedTimingModel:
         ))
         
         # 3.2 融资融券余额占比（均值回归：过低=情绪冰点=机会=高分，过高=过热=风险=低分）
-        # NOTE: math.isnan(mb_ratio) checks DATA FIELD availability; 0.0 treated as zero-fill missing
         mb_ratio = data.margin_buy_ratio
-        mb_ratio_available = not math.isnan(mb_ratio) and mb_ratio != 0.0
+        mb_ratio_available = not math.isnan(mb_ratio)
         if not mb_ratio_available:
             mb_chip_score = 50.0
             mb_chip_signal = "neutral"
@@ -1038,9 +1038,8 @@ class EnhancedTimingModel:
         ))
 
         # 4.3 北向资金净流入（聪明钱）
-        # 0.0 视为 zero-fill 缺失（真实北向净流入极少恰好为 0）
         north = data.north_bound_net_flow
-        north_available = not math.isnan(north) and north != 0.0
+        north_available = not math.isnan(north)
         north_score = sigmoid_score(north, 0, steepness=0.03) if north_available else 50.0
         north_signal = (
             "bullish" if north > 30 else "bearish" if north < -30 else "neutral"
@@ -1059,7 +1058,7 @@ class EnhancedTimingModel:
         
         # 4.4 融资余额变化（杠杆资金方向）
         margin = data.margin_balance_change
-        margin_available = not math.isnan(margin) and margin != 0.0  # 0 视为 zero-fill 缺失
+        margin_available = not math.isnan(margin)
         margin_score = sigmoid_score(margin, 0, steepness=0.025) if margin_available else 50.0
         margin_signal = (
             "bullish" if margin > 30 else "bearish" if margin < -30 else "neutral"
@@ -1571,9 +1570,8 @@ class EnhancedTimingModel:
         
         # 6.6 融资买入占比（均值回归：过高=过热=风险，过低=冷清=机会）
         # 使用 sigmoid_score，center=3.0 使正常2-5%得中性分
-        # 0.0 视为 zero-fill 缺失（与 new_accounts 一致）
         mb = data.margin_buy_ratio if not math.isnan(data.margin_buy_ratio) else float('nan')
-        mb_available = not math.isnan(mb) and mb != 0.0
+        mb_available = not math.isnan(mb)
         if mb_available:
             mb_score = sigmoid_score(mb, 3, steepness=0.3, invert=True)
             mb_signal = "bearish" if mb > 8 else "bullish" if mb < 2 else "neutral"
@@ -1630,9 +1628,8 @@ class EnhancedTimingModel:
         
         # 6.9 北向资金情绪（趋势跟踪：流入=看多，流出=看空）
         # 与资金面一致，使用 sigmoid_score 无 invert
-        # 0.0 视为 zero-fill 缺失（真实北向净流入极少恰好为 0）
         north = data.north_bound_net_flow
-        north_available = not math.isnan(north) and north != 0.0
+        north_available = not math.isnan(north)
         if north_available:
             north_score = sigmoid_score(north, 0, steepness=0.03)
             north_signal = "bullish" if north > 30 else "bearish" if north < -30 else "neutral"

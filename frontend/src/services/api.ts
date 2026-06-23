@@ -2913,6 +2913,9 @@ export async function deletePaperAccount(accountId: string): Promise<any> {
   return deleteJSON(`${getBase()}/paper-trade/accounts/${accountId}`)
 }
 
+export async function forceRebalancePaperAccount(accountId: string): Promise<{ status: string; message?: string; signals?: any[]; positions?: any[] }> {
+  return postJSON(`${getBase()}/paper-trade/accounts/${accountId}/force-rebalance`, {})
+}
 
 // -- Multi-source data source APIs (/data-sources-v2 and /extra)
 

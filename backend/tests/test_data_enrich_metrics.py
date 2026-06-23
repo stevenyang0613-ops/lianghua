@@ -296,13 +296,21 @@ class TestExtendedCacheRefresh:
 class TestBondOrFallbackCodes:
     """Verify _get_bond_or_fallback_codes() with the new lazy-load fallback."""
 
-    def teardown_method(self):
-        # Reset all caches
-        for attr in ("_bond_stock_codes", "_name_map"):
+    def setup_method(self):
+        # Clear all global caches that _get_bond_or_fallback_codes() might read
+        for attr in ("_bond_stock_codes", "_name_map", "_spot_map", "_fin_map"):
             v = getattr(de, attr, None)
             if isinstance(v, (set, dict)):
                 v.clear()
-        # Force _name_loaded to False to allow re-loading
+        if hasattr(de, "_name_loaded"):
+            de._name_loaded = False
+
+    def teardown_method(self):
+        # Reset all caches back to clean state
+        for attr in ("_bond_stock_codes", "_name_map", "_spot_map", "_fin_map"):
+            v = getattr(de, attr, None)
+            if isinstance(v, (set, dict)):
+                v.clear()
         if hasattr(de, "_name_loaded"):
             de._name_loaded = False
 
@@ -603,8 +611,12 @@ class TestBondOrFallbackCodes:
         """两者都为空时，返回空 frozenset（mock 掉磁盘回退）。"""
         saved_codes = de._bond_stock_codes
         saved_names = de._name_map
+        saved_spot = de._spot_map
+        saved_fin = de._fin_map
         de._bond_stock_codes = set()
         de._name_map = {}
+        de._spot_map = {}
+        de._fin_map = {}
         try:
             with patch.object(de, '_load_stock_name_cache', lambda: None):
                 codes = de._get_bond_or_fallback_codes()
@@ -612,4 +624,6 @@ class TestBondOrFallbackCodes:
         finally:
             de._bond_stock_codes = saved_codes
             de._name_map = saved_names
+            de._spot_map = saved_spot
+            de._fin_map = saved_fin
 

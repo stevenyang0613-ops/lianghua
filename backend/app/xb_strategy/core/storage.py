@@ -588,7 +588,8 @@ class ClickHouseStorage(DataStorage):
         try:
             self.client.execute('SELECT 1')
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[ClickHouse] health check failed: {e}")
             return False
 
     @contextmanager
@@ -1101,7 +1102,8 @@ class TimescaleDBStorage(DataStorage):
             cursor = conn.cursor()
             cursor.execute('SELECT 1')
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[SQLite] health check failed: {e}")
             return False
         finally:
             self._return_connection(conn)

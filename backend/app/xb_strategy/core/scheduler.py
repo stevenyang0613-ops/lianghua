@@ -317,7 +317,7 @@ class TaskScheduler:
         if asyncio.iscoroutinefunction(config.func):
             return await config.func(*config.args, **config.kwargs)
         else:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 lambda: config.func(*config.args, **config.kwargs)

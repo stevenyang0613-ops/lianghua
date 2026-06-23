@@ -464,7 +464,8 @@ def check_database_connection() -> bool:
     try:
         # 简化实现
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Health] database connection check failed: {e}")
         return False
 
 
@@ -474,7 +475,8 @@ def check_redis_connection() -> bool:
         from app.xb_strategy.core.cache import get_cache_manager
         cache = get_cache_manager()
         return cache.l2_cache.is_connected
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Health] redis connection check failed: {e}")
         return False
 
 
@@ -484,7 +486,8 @@ def check_storage_connection() -> bool:
         from app.xb_strategy.core.storage import get_storage_manager
         storage = get_storage_manager()
         return storage.health_check()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[Health] storage connection check failed: {e}")
         return False
 
 

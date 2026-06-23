@@ -61,7 +61,8 @@ class SectorRotationStrategy(Strategy):
                     return 0.5
                 poly = np.polyfit(np.log(lags[:len(tau)]), np.log(tau), 1)
                 return max(0.0, min(1.0, poly[0]))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[SectorRotation] _hurst failed: {e}")
                 return 0.5
         self._data["hurst"] = grouped["price"].transform(lambda x: x.rolling(63).apply(lambda y: _hurst(y.dropna()), raw=False))
         self._data["hurst"] = self._data["hurst"].fillna(0.5)

@@ -305,7 +305,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             response: Response = await call_next(request)
             status = response.status_code
             return response
-        except Exception:
+        except Exception as e:
             status = 500
             raise
         finally:

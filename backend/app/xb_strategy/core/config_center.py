@@ -348,7 +348,8 @@ class ConfigCenter:
                     # 尝试解析值类型
                     try:
                         value = json.loads(env_value)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[ConfigCenter] json.loads failed for {env_key}: {e}")
                         value = env_value
 
                     self.set(config_key, value, "env_loader", "从环境变量加载")

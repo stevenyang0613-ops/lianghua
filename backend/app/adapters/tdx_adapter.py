@@ -122,7 +122,8 @@ class TdxAdapter:
             return None
         try:
             return fn(*args, **kwargs)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TDXAdapter] API call {method} failed: {e}")
             raise
 
     # ── 实时行情 ──

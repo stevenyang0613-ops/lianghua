@@ -92,7 +92,8 @@ def fetch_ths_financial_single(code: str) -> dict:
                 result["cagr"] = round(cagr * 100, 2)
         
         return result
-    except Exception:
+    except Exception as e:
+        logger.debug(f"[DataEnrich] _calc_cagr failed: {e}")
         return {}
 
 

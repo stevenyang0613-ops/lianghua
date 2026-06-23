@@ -217,7 +217,8 @@ class LogstashHandler(Handler):
                 # 获取日志
                 try:
                     log_entry = self._buffer.get(timeout=1.0)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[LogCenter] Buffer get failed: {e}")
                     continue
 
                 # 发送
@@ -252,7 +253,8 @@ class LogstashHandler(Handler):
         try:
             log_entry = self.format(record)
             self._buffer.put_nowait(log_entry)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[LogCenter] emit failed: {e}")
             self.handleError(record)
 
     def close(self):
@@ -390,7 +392,8 @@ class AlertLogHandler(Handler):
                 except Exception as e:
                     print(f"Alert callback error: {e}")
 
-        except Exception:
+        except Exception as e:
+            print(f"[LogCenter] emit failed: {e}")
             self.handleError(record)
 
 

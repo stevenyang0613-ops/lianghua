@@ -36,8 +36,13 @@ _STRATEGY_NAMES = {
 
 
 def _week_start(d: date) -> date:
-    """将日期对齐到所在周的周一（周对齐缓存 key）"""
-    return d - timedelta(days=d.weekday())
+    """将日期对齐到 ISO 周起始（周一），使用 isocalendar 确保跨周一致性。
+
+    原 weekday() 方案（周一=0）对同一自然周的不同日期会产生相同 key，
+    但跨周时边界不一致；isocalendar 的 year-week 始终从周一开始，更稳定。
+    """
+    y, w, _ = d.isocalendar()
+    return date.fromisocalendar(y, w, 1)
 
 
 def _cache_path(strategy_key: str, start_date: date, end_date: date) -> str:
@@ -245,3 +250,47 @@ async def _run_single_backtest(request: Request, strategy_key: str, start: date,
         "n_dates": n_dates,
         "result": result_dict,
     }
+
+
+# 改进 (2026-06-23): 回测状态/预估接口，供前端首次加载时展示 Skeleton + 进度提示
+@router.get("/status")
+async def get_backtest_status(
+    start_date: str = "2020-01-01",
+    end_date: str = None,
+):
+    """查询三大策略回测缓存状态，用于前端首次加载时的进度/Skeleton 展示。
+
+    Returns:
+        {
+            "cached": {"xuanji_twelve": true, ...},
+            "estimated_seconds": 600,  // 无缓存时的预估耗时（秒）
+            "all_ready": false,
+            "date_range": {"start": "2020-01-01", "end": "2024-06-23"}
+        }
+    """
+    try:
+        start = date.fromisoformat(start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid start_date: {start_date}")
+    if end_date:
+        try:
+            end = date.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid end_date: {end_date}")
+    else:
+        end = date.today()
+
+    cached = {}
+    for key in _STRATEGY_KEYS:
+        cached[key] = _load_cache(key, start, end) is not None
+
+    all_ready = all(cached.values())
+    # 预估耗时：单策略约 3-5 分钟（数据构建 + 回测），三策略串行约 8-12 分钟
+    estimated_seconds = 0 if all_ready else (8 * 60)
+
+    return JSONResponse(content={
+        "cached": cached,
+        "estimated_seconds": estimated_seconds,
+        "all_ready": all_ready,
+        "date_range": {"start": start.isoformat(), "end": end.isoformat()},
+    })

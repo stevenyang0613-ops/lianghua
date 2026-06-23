@@ -440,7 +440,8 @@ class QualityMonitor:
                 if isinstance(value, str) and 'date' in key.lower():
                     try:
                         datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[DataGovernance] date format check failed for {key}={value}: {e}")
                         is_valid = False
                         break
 
@@ -641,7 +642,8 @@ class AnomalyDetector:
                 if isinstance(date_value, str):
                     try:
                         date_value = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[DataGovernance] date parse failed: {e}")
                         continue
 
                 if date_value < cutoff:
@@ -753,14 +755,14 @@ class DataLifecycleManager:
                 if isinstance(date_value, str):
                     try:
                         date_value = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[DataGovernance] date parse failed: {e}")
                         continue
 
                 if date_value < cutoff:
                     expired.append(record)
 
         return expired
-
     def archive_data(
         self,
         table_name: str,

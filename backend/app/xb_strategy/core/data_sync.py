@@ -510,7 +510,7 @@ class SyncScheduler:
         codes: List[str] = None,
     ) -> SyncResult:
         """异步执行同步"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: self.run_sync(task_name, sync_type, start_date, end_date, codes),

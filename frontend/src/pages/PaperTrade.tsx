@@ -6,7 +6,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { fetchPaperAccounts, createPaperAccount, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount, fetchStrategies } from '../services/api'
+import { fetchPaperAccounts, createPaperAccount, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount, forceRebalancePaperAccount, fetchStrategies } from '../services/api'
 import { useEverRun } from '../hooks/useEverRun'
 import { useElectron } from '../hooks/useElectron'
 
@@ -21,13 +21,6 @@ interface PositionData { code: string; name: string; volume: number; cost_price:
 interface OrderData { id: string; code: string; name: string; side: string; price: number; volume: number; filled_volume: number; status: string; created_at: string; reject_reason: string }
 interface EquityPoint { ts: string; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number }
 interface SignalData { id: string; code: string; name: string; action: string; price: number; reason: string; confidence: number; ts: string; executed: boolean }
-
-const STRATEGY_LABELS: Record<string, string> = {
-  'xuanji_12_factor': '璇玑十二因子',
-  'xibu_seven_dimension': '西部七维',
-  'hybrid': '融合策略',
-}
-const STRATEGY_IDS = Object.keys(STRATEGY_LABELS)
 
 function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; accounts: PaperAccountData[]; onRefresh: () => void }) {
   const account = accounts.find(a => a.strategy_id === strategyId)
@@ -87,6 +80,23 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
     if (!accountId) return
     try { await resetPaperAccount(accountId); message.success('账户已重置'); onRefresh(); loadData() }
     catch (e: unknown) { message.error('重置失败: ' + (e instanceof Error ? e.message : String(e))) }
+  }
+  const handleForceRebalance = async () => {
+    if (!accountId) return
+    try {
+      const result = await forceRebalancePaperAccount(accountId)
+      if (result.status === 'ok') {
+        const posCount = result.positions?.length || 0
+        const sigCount = result.signals?.length || 0
+        message.success(`立即调仓成功！产生 ${sigCount} 个信号，买入 ${posCount} 只债券`)
+        onRefresh()
+        loadData()
+      } else {
+        message.info(`立即调仓：${result.message || '策略未产生买入信号'}`)
+      }
+    } catch (e: unknown) {
+      message.error('调仓失败: ' + (e instanceof Error ? e.message : String(e)))
+    }
   }
   const handleDelete = async () => {
     if (!accountId) return
@@ -265,6 +275,8 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
                 <Button size="small" icon={<PauseCircleOutlined />} onClick={handleStop} danger>停止</Button>
               )}
               <Button size="small" icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
+              <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={handleForceRebalance}
+                style={{ background: '#fa8c16', borderColor: '#fa8c16' }}>立即调仓</Button>
               <Popconfirm title="确定删除该模拟交易账户？" onConfirm={handleDelete} okText="确定" cancelText="取消">
                 <Button size="small" icon={<DeleteOutlined />} danger>删除</Button>
               </Popconfirm>
@@ -297,6 +309,13 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
                     const d = (rd - ((account.trade_day_count || 0) % rd)) % rd
                     return d <= 1 ? '⚡ 距离调仓还有 1 个交易日' : `⏳ 距离调仓还有 ${d} 个交易日`
                   })()}
+                </span>
+              </div>
+            )}
+            {account.is_running && positions.length === 0 && orders.length === 0 && (
+              <div style={{ marginTop: 6, padding: '4px 8px', background: '#e6f7ff', borderRadius: 4, border: '1px solid #91d5ff' }}>
+                <span style={{ color: '#1890ff', fontSize: 12 }}>
+                  💡 策略采用周频调仓，启动后会自动对齐到最近的调仓日。首次调仓通常需要等待 1~{account.rebalance_days || account.params?.rebalance_days || 7} 个交易日
                 </span>
               </div>
             )}
@@ -366,6 +385,11 @@ export default function PaperTrade() {
   // 不能加入 useCallback deps（否则无限循环），用 ref 避免 stale closure
   const warningShownRef = useRef(warningShownAt)
   warningShownRef.current = warningShownAt
+  // loadAccounts 失败防抖：首次网络抖动不弹错误，连续失败 >=2 次才提示
+  // 用 sessionStorage 持久化，避免页面刷新后重置
+  const loadFailCountRef = useRef((() => {
+    try { return Number(sessionStorage.getItem('lianghua_load_fail_count') || 0) } catch { return 0 }
+  })())
   const { isElectron, showNotification, restartBackend } = useElectron()
 
   // setState 函数是稳定引用，无需列入 useCallback 依赖
@@ -459,10 +483,15 @@ export default function PaperTrade() {
       if (newFailCount >= 5 && warningShownRef.current === null) {
         setWarningShownAt(Date.now())
       }
-      // 警告恢复由 useEffect 的 setTimeout 统一管理（最小显示 10 秒）
+      // 成功加载，重置失败计数
+      loadFailCountRef.current = 0
+      try { sessionStorage.setItem('lianghua_load_fail_count', '0') } catch { /* ignore */ }
     } catch (e: unknown) {
       console.warn('Load paper accounts failed:', e)
-      if (isMountedRef.current) {
+      loadFailCountRef.current += 1
+      try { sessionStorage.setItem('lianghua_load_fail_count', String(loadFailCountRef.current)) } catch { /* ignore */ }
+      // 首次失败不弹错误（避免网络抖动），连续失败 >=2 次才提示
+      if (isMountedRef.current && loadFailCountRef.current >= 2) {
         message.error('加载账户失败，请检查网络连接')
       }
     }

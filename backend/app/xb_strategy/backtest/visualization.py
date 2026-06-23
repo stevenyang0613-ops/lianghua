@@ -149,7 +149,8 @@ class ChartGenerator:
         if MATPLOTLIB_AVAILABLE:
             try:
                 plt.style.use(self.style)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[Visualization] style '{self.style}' not found: {e}")
                 plt.style.use('seaborn-v0_8-whitegrid')
             plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
             plt.rcParams['axes.unicode_minus'] = False

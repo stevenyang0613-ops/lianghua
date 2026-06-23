@@ -111,7 +111,8 @@ class JsonFormatter(logging.Formatter):
                 "line": record.lineno,
             }
             return json.dumps(log_entry, ensure_ascii=False)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Strategy] JSONFormatter failed: {e}")
             return super().format(record)
 
 

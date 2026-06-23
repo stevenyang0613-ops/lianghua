@@ -159,10 +159,10 @@ class MarketEngine:
                     self._last_cache_date = today
                     self._storage.save_quotes_batch(bonds)
                     self._storage.save_daily_snapshot(bonds)
-                    self._last_periodic_save = asyncio.get_event_loop().time()
+                    self._last_periodic_save = asyncio.get_running_loop().time()
                 else:
                     # Periodic save every 5 minutes to capture enrichment updates
-                    now = asyncio.get_event_loop().time()
+                    now = asyncio.get_running_loop().time()
                     if now - self._last_periodic_save >= self._PERIODIC_SAVE_INTERVAL:
                         self._storage.save_quotes_batch(bonds)
                         self._last_periodic_save = now

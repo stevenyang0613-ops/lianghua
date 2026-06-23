@@ -132,11 +132,18 @@ export default function DetailPanel() {
               {bond.roe !== undefined && (
                 <Descriptions.Item label="ROE">{fmt(bond.roe)}%</Descriptions.Item>
               )}
-              {bond.gpm !== undefined && bond.gpm !== -1 && (
-                <Descriptions.Item label="毛利率">
-                  {bond.gpm > 0 ? `${fmt(bond.gpm)}%` : bond.gpm === 0 ? '0%' : '银行(无毛利率)'}
-                </Descriptions.Item>
-              )}
+              {(() => {
+                const gpm = Number(bond.gpm)
+                const isBankNoGPM = Math.abs(gpm - (-1)) < 0.01
+                if (isBankNoGPM) return null
+                const gpmVal = isNaN(gpm) ? null : gpm
+                if (gpmVal === null || gpmVal === undefined) return null
+                return (
+                  <Descriptions.Item label="毛利率">
+                    {gpmVal > 0 ? `${fmt(gpmVal)}%` : gpmVal === 0 ? '0%' : gpmVal < 0 ? '数据异常' : '银行(无毛利率)'}
+                  </Descriptions.Item>
+                )
+              })()}
               {bond.debt_ratio !== undefined && (
                 <Descriptions.Item label="资产负债率">{fmt(bond.debt_ratio)}%</Descriptions.Item>
               )}

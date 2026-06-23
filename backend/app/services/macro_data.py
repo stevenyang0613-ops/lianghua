@@ -708,8 +708,13 @@ class MacroDataService:
         try:
             # 优先使用 data_enrich 的 north_map 缓存
             if _de._north_map:
-                total = sum(v.get("net", 0) for v in _de._north_map.values() if isinstance(v, dict))
-                return round(total / 1e8, 2)  # 元 -> 亿元
+                # 防御：区分"有数据但净值为0"与"无net字段"
+                entries_with_net = [v for v in _de._north_map.values()
+                                    if isinstance(v, dict) and v.get("net") is not None]
+                if entries_with_net:
+                    total = sum(v.get("net", 0) for v in entries_with_net)
+                    return round(total / 1e8, 2)  # 元 -> 亿元
+                # _north_map 存在但无 net 字段 → 数据缺失，不返回 0
         except Exception as e:
             logger.debug(f"[MacroData] north_map fallback failed: {e}")
         # 降级到 AKShare
@@ -906,6 +911,10 @@ class MacroDataService:
             total_balance = current_balance + sz_balance
             total_prev = prev_balance + sz_prev_balance
             change = total_balance - total_prev
+            # 防御 zero-fill: 如果所有数据源都失败（余额保持为0），返回 NaN 而非 0
+            if total_balance == 0 and total_prev == 0 and buy_amount == 0 and sz_buy == 0:
+                # 确认没有任何一个数据源成功获取过数据
+                return float('nan'), float('nan'), float('nan')
             buy_ratio = 0.0
             if total_balance > 0:
                 buy_ratio = (buy_amount + sz_buy) / total_balance * 100

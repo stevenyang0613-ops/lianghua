@@ -633,6 +633,7 @@ async def lifespan(app: FastAPI):
             # 仅把最高风险的 spot / vol / fund_flow / bond_price 放在 runner 中，
             # 其余缓存由主进程 start_background_refresh 负责，避免重复刷新和 metrics 丢失。
             _enrich_procs: list[subprocess.Popen] = []
+            _enrich_log = None
             try:
                 import subprocess, sys
                 runner_script = str(Path(__file__).parent / "engine" / "data_enrich_runner.py")
@@ -659,6 +660,8 @@ async def lifespan(app: FastAPI):
                 app.state.enrich_log = _enrich_log
                 logger.info("[Startup] DataEnrich runner subprocess started (spot/vol/fund-flow/bond-price)")
             except Exception as e:
+                if _enrich_log is not None and not _enrich_log.closed:
+                    _enrich_log.close()
                 logger.warning(f"[Startup] DataEnrich runner subprocess start failed: {e}")
 
             # 延迟刷新模拟盘持仓价格（轮询等待 MarketEngine 有行情数据后再刷新）
@@ -703,6 +706,102 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"[Startup] Score history snapshot failed (will retry at 16:00): {e}")
 
             logger.info("Background data loading completed")
+            # 后台预计算回测：启动后检查缓存，如缺失则预热三大策略回测结果
+            async def _precompute_backtests():
+                import json as _json
+                from datetime import datetime as _dt
+                _status_path = os.path.join(os.path.expanduser("~"), ".lianghua", "backtest_cache", ".precompute_status.json")
+                os.makedirs(os.path.dirname(_status_path), exist_ok=True)
+                def _write_status(status: str, current: str = "", completed: list = None, failed: list = None, total_est: int = 0):
+                    try:
+                        with open(_status_path, "w", encoding="utf-8") as f:
+                            _json.dump({
+                                "status": status,
+                                "started_at": _dt.now().isoformat(),
+                                "current_strategy": current,
+                                "completed_strategies": completed or [],
+                                "failed_strategies": failed or [],
+                                "total_strategies": len(_STRATEGY_KEYS),
+                                "estimated_seconds_remaining": total_est,
+                            }, f, ensure_ascii=False, default=str)
+                    except Exception as e:
+                        logger.debug(f"[Precompute] status write failed: {e}")
+                try:
+                    from app.api.backtest_results import _load_cache, _save_cache, _STRATEGY_KEYS, _STRATEGY_NAMES
+                    from app.strategies import get_strategy
+                    from app.engine.backtest import BacktestEngine
+                    from app.models.backtest import BacktestConfig
+                    from datetime import date
+                    import asyncio
+                    end = date.today()
+                    start = date(2020, 1, 1)
+                    _completed = []
+                    _failed = []
+                    _write_status("running", current=_STRATEGY_KEYS[0] if _STRATEGY_KEYS else "", completed=_completed, failed=_failed, total_est=8*60)
+                    for key in _STRATEGY_KEYS:
+                        try:
+                            # 先检查缓存是否已存在，避免重复计算
+                            cached = _load_cache(key, start, end)
+                            if cached:
+                                logger.info(f"[Precompute] Cache hit for {key}, skipping")
+                                continue
+                            logger.info(f"[Precompute] Cache miss for {key}, running backtest...")
+                            # 获取策略类和最优参数
+                            strategy_cls = get_strategy(key)
+                            from app.engine.paper_trade_manager import PaperTradeManager
+                            optimal_params = PaperTradeManager.get_optimal_params(key)
+                            strategy = strategy_cls(**optimal_params)
+                            # 使用 HistoricalDataLoader 从 storage 获取历史数据（无需 Request 对象）
+                            from app.engine.historical import HistoricalDataLoader
+                            loader = HistoricalDataLoader(storage)
+                            full_data = await asyncio.to_thread(loader.get_cached_history, start, end)
+                            if full_data is None or full_data.empty:
+                                logger.warning(f"[Precompute] No historical data for {key}, skipping")
+                                continue
+                            # 运行回测
+                            config = BacktestConfig(
+                                initial_cash=100_000_000.0,
+                                commission_pct=0.0001,
+                                slippage_pct=0.001,
+                            )
+                            engine = BacktestEngine(config=config)
+                            result = await asyncio.to_thread(engine.run, strategy, full_data)
+                            # 转换为前端需要的格式并缓存
+                            raw_dict = result.model_dump(mode="json") if hasattr(result, "model_dump") else result.to_dict()
+                            metrics = raw_dict.get("metrics", {}) or {}
+                            bm_metrics = raw_dict.get("benchmark_metrics", {}) or {}
+                            ex_metrics = raw_dict.get("excess_metrics", {}) or {}
+                            result_dict = {
+                                "returns": metrics.get("total_return_pct", 0),
+                                "benchmark_returns": bm_metrics.get("total_return_pct", 0),
+                                "excess_returns": ex_metrics.get("total_return_pct", 0),
+                                "max_drawdown": metrics.get("max_drawdown_pct", 0),
+                                "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+                                "win_rate": metrics.get("win_rate", 0),
+                                "trade_count": metrics.get("total_trades", 0),
+                                "total_cost": raw_dict.get("total_cost", 0),
+                                "turnover_rate": 0,
+                                "daily_values": [],
+                                "trades": [],
+                                "_raw": raw_dict,
+                            }
+                            cache_data = {
+                                "strategy_id": key,
+                                "strategy_name": _STRATEGY_NAMES[key],
+                                "optimal_params": optimal_params,
+                                "data_source": "precomputed_at_startup",
+                                "total_rows": len(full_data),
+                                "n_dates": full_data["date"].nunique() if "date" in full_data.columns else 0,
+                                "result": result_dict,
+                            }
+                            _save_cache(key, start, end, cache_data)
+                            logger.info(f"[Precompute] Backtest {key} completed and cached")
+                        except Exception as e:
+                            logger.warning(f"[Precompute] Backtest {key} failed: {e}")
+                except Exception as e:
+                    logger.warning(f"[Precompute] Backtest precompute failed: {e}")
+            asyncio.create_task(_precompute_backtests())
+
         except Exception as e:
             import traceback
             logger.error(f"[Startup] Background start failed: {e}")
@@ -770,8 +869,8 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     logger.debug(f"Suppressed: {e}")
                     pass
-            # Wait briefly then SIGKILL if still alive
-            await asyncio.sleep(0.5)
+            # 等待 3 秒让子进程完成缓存写入（原来 0.5s 太短，可能导致 JSON 截断）
+            await asyncio.sleep(3.0)
             for p in enrich_procs:
                 if p.poll() is None:
                     try:

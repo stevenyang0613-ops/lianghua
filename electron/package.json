@@ -17,8 +17,9 @@
     "clean:pycache": "node scripts/clean-pycache.js",
     "sync:dev": "node scripts/sync-backend.js --dev",
     "sync:prod": "node scripts/sync-backend.js --prod",
-    "build:dev": "npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --dir --mac -c.directories.output=release-dev && npm run sync:dev",
-    "build:prod": "npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --mac -c.directories.output=release && npm run sync:prod"
+    "build:dev": "npm run prepare:pytdx && npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --dir --mac -c.directories.output=release-dev && npm run sync:dev",
+    "build:prod": "npm run prepare:pytdx && npm run clean:pycache && cd ../frontend && npm run build && cd ../electron && tsc && electron-builder --mac -c.directories.output=release && npm run sync:prod",
+    "prepare:pytdx": "node scripts/prepare-pytdx.js"
   },
   "build": {
     "appId": "com.lianghua.quant",
@@ -45,6 +46,7 @@
         "from": "../backend",
         "to": "backend",
         "filter": [
+          "**/*",
           "!dist/**",
           "!**/__pycache__/**",
           "!**/*.pyc",
@@ -61,18 +63,23 @@
           "!deploy/**",
           "!sdk/**",
           "!lianghua_backend.egg-info/**",
-          "!*.pyc",
           "!.env",
           "!.env.*",
           "!.env.example",
           "!Dockerfile",
           "!docker-compose.yml",
           "!pyproject.toml",
-          "requirements.txt",
           "!prometheus.yml",
           "!alembic.ini",
           "!alembic/**",
           "!lianghua-backend.spec"
+        ]
+      },
+      {
+        "from": "backend/pytdx",
+        "to": "backend/pytdx",
+        "filter": [
+          "**/*"
         ]
       }
     ],

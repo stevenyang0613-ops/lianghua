@@ -218,6 +218,13 @@ _akshare_semaphore = threading.Semaphore(_akshare_max_concurrency)
 # semaphore 短超时（5s）：如果并发已满，等 5s 还拿不到 token 就放弃
 # 避免被外层 join(timeout) 长时间阻塞，分离"排队"和"网络"超时
 _akshare_semaphore_timeout = float(_os.getenv("LH_AKSHARE_SEM_TIMEOUT", "10.0"))
+# 改进 (2026-06-23): semaphore 计数器指标，用于监控级联故障和并发瓶颈
+_akshare_semaphore_stats = {
+    "acquired_ok": 0,
+    "acquired_timeout": 0,
+    "fn_timeout": 0,
+    "reaper_triggered": 0,
+}
 
 # 各接口的超时分级（按接口历史响应时间，AGENTS.md #39 推荐）
 # fast: 已知稳定 < 10s；medium: 10-30s；slow: > 30s
@@ -226,25 +233,33 @@ _TIMEOUT_MEDIUM = 30.0   # 普通接口（fund_flow, fin, debt）
 _TIMEOUT_SLOW = 60.0     # 慢接口（lhb 统计, stock_holder, margin）
 
 
-def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: str = "", quiet_errors: bool = False):
+def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: str = "", quiet_errors: bool = False, use_default_for_none: bool = True):
     """在 daemon 线程中执行阻塞调用 fn(*args)，超时强制返回 default。
     目的：防止 akshare 网络调用 hang 死整个线程（导致后端进程无响应）。
     使用全局 semaphore 限制并发数，避免触发 akshare 频率限制。
     semaphore 释放通过 _release_done Event 确保：超时后外层立即返回，
     但 _runner 在 fn 完成（或异常）后一定会 release semaphore，避免泄漏。
 
+    改进 (2026-06-23): 当 fn 合法返回 None（接口无数据）时，若 use_default_for_none=False
+    则返回 None，让调用方区分"无数据"与"超时/失败"。
+
+    改进 (2026-06-23): 超时后启动回收守护线程，避免因网络挂死而永远占用的 semaphore
+    导致级联故障（后续所有调用在 semaphore.acquire 处排队超时）。
+
     Args:
         fn: 要执行的同步函数（async def 会被拒绝，防止 coroutine 对象泄漏）
         timeout: 超时秒数（默认 30s）
-        default: 超时后返回值（默认 None）
+        default: 超时或失败后的返回值（默认 None）
+        use_default_for_none: 当 fn 返回 None 时是否返回 default（默认 True）
         op_name: 操作名称，用于日志
-        quiet_errors: 已知易失败的接口（如 East Money 单股查询）报异常时降低日志级别为 DEBUG
+        quiet_errors: 已知易失败的接口报异常时降低日志级别
     """
     # AGENTS.md #51: 防御 async def 传入 _run_with_timeout
     if asyncio.iscoroutinefunction(fn):
         logger.error(f"[DataEnrich] {op_name or fn.__name__} is async def, cannot run in _run_with_timeout")
         return default
-    result_box = [default]
+    _UNSET = object()  # 哨兵对象：区分"尚未赋值"与"返回 None"
+    result_box = [_UNSET]
     error_box = [None]
     tb_box = [None]
     _release_done = threading.Event()
@@ -253,14 +268,17 @@ def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: s
         # semaphore 超时与 fn 超时分开：semaphore.acquire 用 5s 短超时，
         # 排队过长立即放弃，避免与外层 join(timeout) 30s 混淆
         acquired = _akshare_semaphore.acquire(timeout=_akshare_semaphore_timeout)
+        if acquired:
+            _akshare_semaphore_stats["acquired_ok"] += 1
         if not acquired:
             logger.warning(f"[DataEnrich] {op_name or fn.__name__} semaphore 排队超时 "
                            f"{_akshare_semaphore_timeout}s（并发={_akshare_max_concurrency}）")
             _release_done.set()
+            _akshare_semaphore_stats["acquired_timeout"] += 1
             return
         try:
             _result = fn(*args)
-            if _result is None:
+            if _result is None and use_default_for_none:
                 result_box[0] = default
             else:
                 result_box[0] = _result
@@ -276,9 +294,20 @@ def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: s
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
+        _akshare_semaphore_stats["fn_timeout"] += 1
         logger.warning(f"[DataEnrich] {op_name or fn.__name__} 超时 {timeout}s, 返回 default")
-        # 注意：不能 t.join() 阻塞等 fn 完成。semaphore release 由 daemon 线程
-        # 完成后自己负责。daemon=True 保证主进程退出时不会泄漏线程。
+        # 超时后启动回收守护线程：如果 _runner 因网络挂死永远无法完成，
+        # 后台监控线程在 2*timeout 后强制释放 semaphore，避免级联故障。
+        def _reaper():
+            if not _release_done.wait(timeout=timeout * 2):
+                _akshare_semaphore_stats["reaper_triggered"] += 1
+                logger.error(f"[DataEnrich] {op_name or fn.__name__} semaphore 回收超时，"
+                             f"强制释放以避免级联故障")
+                try:
+                    _akshare_semaphore.release()
+                except Exception:
+                    pass
+        threading.Thread(target=_reaper, daemon=True).start()
         return default
     if error_box[0] is not None:
         log_fn = logger.debug if quiet_errors else logger.warning
@@ -286,6 +315,9 @@ def _run_with_timeout(fn, *args, timeout: float = 30.0, default=None, op_name: s
             f"[DataEnrich] {op_name or fn.__name__} 失败: {type(error_box[0]).__name__}: {error_box[0]}\n"
             f"{tb_box[0] or '(traceback unavailable)'}"
         )
+        return default
+    # 如果 result_box 仍为 _UNSET，说明 semaphore 获取失败但线程在 join 前已结束
+    if result_box[0] is _UNSET:
         return default
     return result_box[0]
 
@@ -471,6 +503,17 @@ def _get_bond_or_fallback_codes() -> frozenset:
                 k for k in _name_map.keys()
                 if k and len(k) == 6 and k.isdigit()
             )
+    # 回退 3：从 _spot_map 或 _fin_map 的键中提取代码（确保 zero-fill 始终有目标集合）
+    fallback_codes = set()
+    for m in (_spot_map, _fin_map):
+        if m:
+            for k in m.keys():
+                if isinstance(k, str) and len(k) == 6 and k.isdigit():
+                    fallback_codes.add(k)
+    if fallback_codes:
+        logger.warning(f"[DataEnrich] _get_bond_or_fallback_codes 回退到 spot/fin map，{len(fallback_codes)} codes")
+        return frozenset(fallback_codes)
+    logger.warning("[DataEnrich] _get_bond_or_fallback_codes 返回空集合，所有 zero-fill 将跳过")
     return frozenset()
 
 
@@ -825,29 +868,39 @@ def _build_industry_cache():
         if df is not None and hasattr(df, '__len__') and len(df) > 0:
             count = 0
             total = len(df)
-            for _, board in df.iterrows():
-                bcode = str(board.get("板块代码", "")).strip()
-                bname = str(board.get("板块名称", "")).strip()
-                if not bcode or not bname:
-                    continue
+            # 改进 (2026-06-23): 使用 ThreadPoolExecutor 并发调用 industry_cons，
+            # 避免 500+ 次串行请求耗时过长。并发数 = _akshare_max_concurrency，
+            # 与 _run_with_timeout 内部的 semaphore 对齐，避免双重排队。
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            boards = [(str(r.get("板块代码", "")).strip(), str(r.get("板块名称", "")).strip())
+                      for _, r in df.iterrows()]
+            boards = [(b, n) for b, n in boards if b and n]
+            total = len(boards)
+
+            def _fetch_board(bcode_bname):
+                bcode, bname = bcode_bname
                 try:
                     cons = _run_with_timeout(
                         partial(ak.stock_board_industry_cons_em, symbol=bcode),
                         timeout=30, default=None, op_name=f"industry_cons_{bcode}",
-                        quiet_errors=True,  # 批量调用单点失败是预期内，降级日志级别
+                        quiet_errors=True,
                     )
-                    if cons is None:
-                        continue
-                    for _, c in cons.iterrows():
-                        scode = str(c.get("代码", "")).strip()
+                    if cons is None or not hasattr(cons, '__len__') or len(cons) == 0:
+                        return []
+                    return [(str(c.get("代码", "")).strip(), bname) for _, c in cons.iterrows() if str(c.get("代码", "")).strip()]
+                except Exception as e:
+                    logger.debug(f"[DataEnrich] industry cons failed for {bcode}: {e}")
+                    return []
+
+            with ThreadPoolExecutor(max_workers=_akshare_max_concurrency, thread_name_prefix="industry_cons") as pool:
+                futures = {pool.submit(_fetch_board, b): i for i, b in enumerate(boards)}
+                for future in as_completed(futures):
+                    for scode, bname in future.result():
                         if scode:
                             result[scode] = bname
                     count += 1
-                    if count % 100 == 0:
+                    if count % 100 == 0 or count == total:
                         logger.info(f"[DataEnrich] Industry: {count}/{total} boards")
-                except Exception as e:
-                    logger.debug(f"[DataEnrich] industry cons failed for {bcode}: {e}")
-                    continue
             _set_global_map("_industry_map", result, replace=True)
             _save_cache(_INDUSTRY_CACHE, result)
             logger.info(f"[DataEnrich] Industry built: {len(result)} stocks")
@@ -4071,7 +4124,7 @@ async def enrich_quotes(bonds: list) -> list:
 
     # Cache-specific TTLs (in seconds). Each extended cache has its own schedule.
     # Values: 300 (5 min) for high-frequency, 3600 (1h) for mid, 86400 (24h+) for stable.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for _ext_name, _ext_loader, _ext_ttl, _ext_min in (
         ("spot", _load_spot_cache, 300, 1000),
         ("industry", _load_industry_cache, 3600, 100),
@@ -4725,7 +4778,7 @@ async def start_background_refresh():
     if not asyncio.iscoroutinefunction(start_background_refresh):
         # 这种情况只会在 reload/动态替换后发生,防御即可。
         raise RuntimeError("start_background_refresh must remain async")
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # 0. 急切加载可转债正股代码，确保所有刷新函数聚焦在目标范围内
     # 修复：将 _ensure_bond_stock_codes 放到后台线程中执行，避免在事件循环中直接持有 threading.RLock
@@ -4853,7 +4906,7 @@ async def start_background_refresh():
         if _prev_handler not in (_signal.SIG_DFL, _signal.SIG_IGN, _sigusr1_handler):
             _signal.signal(_signal.SIGUSR1, _prev_handler)
             logger.debug("[LHBE_STARTUP] SIGUSR1 already has custom handler, skipping")
-    except ValueError:
+    except (ValueError, AttributeError):
         pass
 
     def _refresh_extended_batch():
@@ -5055,7 +5108,7 @@ async def start_background_refresh():
                             flags = sorted({_field_to_flag[f] for f in still_low if f in _field_to_flag})
                             if flags:
                                 cmd = [_sys.executable, runner_script] + flags
-                                loop = asyncio.get_event_loop()
+                                loop = asyncio.get_running_loop()
                                 proc = await loop.run_in_executor(
                                     None,
                                     lambda: subprocess.run(cmd, cwd=str(Path(__file__).parent.parent), capture_output=True, timeout=600)
@@ -5119,12 +5172,23 @@ async def start_background_refresh():
                 try:
                     import subprocess as _sp
                     _sp.run(['pkill', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=5)
-                    # 轮询等待旧进程完全终止，避免竞态条件（最多等 5 秒）
-                    for _wait in range(10):
+                    # 轮询等待旧进程完全终止，避免竞态条件（最多等 10 秒）
+                    for _wait in range(20):
                         chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
                         if chk.returncode != 0 or not chk.stdout.strip():
                             break
                         await asyncio.sleep(0.5)
+                    else:
+                        # 轮询超时后，精确获取 PID 再 SIGKILL，避免误杀其他 Python 进程
+                        pid_chk = _sp.run(['pgrep', '-f', 'data_enrich_runner.py'], capture_output=True, text=True, timeout=2)
+                        if pid_chk.returncode == 0 and pid_chk.stdout.strip():
+                            pids = [p.strip() for p in pid_chk.stdout.strip().split('\n') if p.strip()]
+                            logger.warning(f"[DataEnrich] data_enrich_runner.py 未在 10 秒内退出，精确 SIGKILL PIDs: {pids}")
+                            for pid in pids:
+                                try:
+                                    _sp.run(['kill', '-9', pid], capture_output=True, text=True, timeout=3)
+                                except Exception:
+                                    pass
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -5149,7 +5213,7 @@ async def start_background_refresh():
                     )
                     logger.info("[PeriodicRunner] Started runner subprocess (PID %d) for ext caches", proc.pid)
                     # 非阻塞等待子进程完成（最多 10 分钟），避免阻塞事件循环
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     try:
                         await asyncio.wait_for(
                             loop.run_in_executor(None, proc.wait),
@@ -5877,7 +5941,8 @@ def _refresh_margin_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "margin_balance": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
+                    "margin_balance": 0,  # TODO: zero-fill 应改为 float('nan') 以区分"非融资融券标的"(真实0)与"数据缺失"
+                    # 当前 enrich_quotes 中"非融资融券标的"也设为 0，需全链路修改后迁移
                     "_data_source": "zero_fill",
                 }
 
@@ -6361,7 +6426,8 @@ def _refresh_margin_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "margin_balance": 0,  # 零填充统一用 0，enrich_quotes 用 .get(..., 0) 处理
+                    "margin_balance": 0,  # TODO: zero-fill 应改为 float('nan') 以区分"非融资融券标的"(真实0)与"数据缺失"
+                    # 当前 enrich_quotes 中"非融资融券标的"也设为 0，需全链路修改后迁移
                     "_data_source": "zero_fill",
                 }
 

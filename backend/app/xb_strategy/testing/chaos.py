@@ -442,7 +442,8 @@ class SteadyStateChecker:
             import requests
             response = requests.get(f"{base_url}/health", timeout=5)
             return response.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[ChaosEngine] API health check failed: {e}")
             return False
 
     @staticmethod
@@ -457,7 +458,8 @@ class SteadyStateChecker:
             elapsed = (time.time() - start) * 1000
 
             return response.status_code == 200 and elapsed < max_ms
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[ChaosEngine] Response time check failed: {e}")
             return False
 
     @staticmethod

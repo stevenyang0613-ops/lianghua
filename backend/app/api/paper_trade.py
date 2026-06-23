@@ -154,3 +154,18 @@ async def update_params(account_id: str, req: UpdateParamsRequest, request: Requ
         raise HTTPException(status_code=404, detail="账户不存在")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/accounts/{account_id}/force-rebalance")
+async def force_rebalance(account_id: str, request: Request):
+    """强制策略立即调仓（无视调仓间隔天数限制）"""
+    manager = _get_manager(request)
+    try:
+        result = manager.force_rebalance(account_id)
+        return result
+    except KeyError:
+        raise HTTPException(status_code=404, detail="账户不存在")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
