@@ -51,8 +51,9 @@ def _is_data_sufficient(df: pd.DataFrame, start_date: date, end_date: date) -> t
     基准阈值:
     - 总行数 > 100
     - 交易日数 >= 5
-    - 债券数量 >= 30
+    - 债券数量 >= 30 (检查总体)
     - 每只债券平均数据天数 >= 20
+    - 有足够覆盖(>=20天)的债券数量 >= 30 (捕获双峰分布:少量债券全量+大量债券1天)
     - 数据覆盖回测区间比例 >= 30% (否则警告但不阻止)
 
     Args:
@@ -93,6 +94,16 @@ def _is_data_sufficient(df: pd.DataFrame, start_date: date, end_date: date) -> t
             f"每只债券平均数据天数过低：{avg_days_per_bond} 天/只 "
             f"(总行数 {total_rows} / {n_bonds} 只债券)。"
             f"建议补充历史数据或缩短回测区间"
+        )
+
+    # 有效覆盖债券数量检查（捕获双峰分布：225只仅1天+37只全量）
+    bond_day_counts = df.groupby('code').size()
+    well_covered_bonds = (bond_day_counts >= 20).sum()
+    if well_covered_bonds < 30:
+        return False, (
+            f"有足够历史数据的债券仅 {well_covered_bonds} 只（需要至少 30 只）。"
+            f"总债券 {n_bonds} 只，但其中 {(bond_day_counts < 20).sum()} 只不足 20 天数据。"
+            f"建议补充历史数据"
         )
 
     # 覆盖率检查（警告但不阻止）

@@ -332,6 +332,29 @@ class TestDataSufficiency:
         assert ok
         assert warn is None
 
+    def test_bimodal_distribution_fails(self):
+        """双峰分布：29只全量 + 大量债券仅1天 → 应失败（29 < 30阈值）"""
+        records = []
+        for ci in range(29):
+            code = f"12{ci:04d}"
+            for di in range(200):
+                d = date(2024, 1, 1) + timedelta(days=di)
+                records.append({'code': code, 'date': d, 'price': 100.0})
+        for ci in range(29, 229):
+            code = f"12{ci:04d}"
+            records.append({'code': code, 'date': date(2024, 1, 1), 'price': 100.0})
+        df = pd.DataFrame(records)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 7, 1))
+        assert not ok
+        assert warn is not None
+        assert '不足' in warn
+
+    def test_barely_sufficient_passes(self):
+        """恰好满足最低阈值：30只×21天=630行 → 应通过"""
+        df = self._make_df(n_bonds=30, n_days=21)
+        ok, warn = _is_data_sufficient(df, date(2024, 1, 1), date(2024, 1, 21))
+        assert ok
+
 
 class TestDayDataOptimization:
     """验证 on_data 接收 day_data（当天数据子集）时，
