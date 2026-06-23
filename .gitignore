@@ -63,6 +63,9 @@ builder-effective-config.yaml
 electron/release-dev/
 electron/release/
 
+# Desktop app bundles copied by build scripts
+/Desktop/
+
 # Playwright MCP
 .playwright-mcp/
 
