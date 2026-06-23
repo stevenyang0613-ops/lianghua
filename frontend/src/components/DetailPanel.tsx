@@ -43,6 +43,19 @@ export default function DetailPanel() {
     )
   }
 
+  const gpmRender = useMemo(() => {
+    const gpm = Number(bond.gpm)
+    const isBankNoGPM = Math.abs(gpm - (-1)) < 0.01
+    if (isBankNoGPM) return null
+    const gpmVal = isNaN(gpm) ? null : gpm
+    if (gpmVal === null || gpmVal === undefined) return null
+    return (
+      <Descriptions.Item label="毛利率">
+        {gpmVal > 0 ? `${fmt(gpmVal)}%` : gpmVal === 0 ? '0%' : gpmVal < 0 ? '数据异常' : '银行(无毛利率)'}
+      </Descriptions.Item>
+    )
+  }, [bond.gpm])
+
   const priceColor = (bond.change_pct ?? 0) > 0 ? '#cf1322' : (bond.change_pct ?? 0) < 0 ? '#389e0d' : undefined
   const premiumColor = (bond.premium_ratio ?? 0) < 0 ? '#52c41a' : (bond.premium_ratio ?? 0) > 50 ? '#faad14' : undefined
   const dualLowColor = (bond.dual_low ?? 0) < 130 ? '#52c41a' : (bond.dual_low ?? 0) > 180 ? '#f5222d' : '#faad14'
@@ -132,19 +145,7 @@ export default function DetailPanel() {
               {bond.roe !== undefined && (
                 <Descriptions.Item label="ROE">{fmt(bond.roe)}%</Descriptions.Item>
               )}
-  // 从已缓存的 bond 中解析 gpm（避免每次重渲染重新计算）
-  const gpmRender = useMemo(() => {
-    const gpm = Number(bond.gpm)
-    const isBankNoGPM = Math.abs(gpm - (-1)) < 0.01
-    if (isBankNoGPM) return null
-    const gpmVal = isNaN(gpm) ? null : gpm
-    if (gpmVal === null || gpmVal === undefined) return null
-    return (
-      <Descriptions.Item label="毛利率">
-        {gpmVal > 0 ? `${fmt(gpmVal)}%` : gpmVal === 0 ? '0%' : gpmVal < 0 ? '数据异常' : '银行(无毛利率)'}
-      </Descriptions.Item>
-    )
-  }, [bond.gpm])
+              {gpmRender}
               {bond.debt_ratio !== undefined && (
                 <Descriptions.Item label="资产负债率">{fmt(bond.debt_ratio)}%</Descriptions.Item>
               )}
