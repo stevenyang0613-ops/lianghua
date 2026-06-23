@@ -134,8 +134,11 @@ class XuanjiTwelveFactorStrategy(Strategy):
 
     def _estimate_credit_score(self, row: pd.Series) -> float:
         """估算信用评分"""
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时返回中性评分，避免默认100造成误判
+            return 50.0
         score = 100.0
-        price = row.get('price', 100)
         premium = row.get('premium_ratio', 0)
         ytm = row.get('ytm', 0)
         dual_low = row.get('dual_low', 150)

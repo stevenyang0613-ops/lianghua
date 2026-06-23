@@ -191,6 +191,9 @@ class PaperTradeManager:
         strategy_cls = STRATEGY_REGISTRY[strategy_id]
         strategy_name = getattr(strategy_cls, 'name', strategy_id)
         account_id = uuid.uuid4().hex[:12]
+        # 默认使用最优参数，避免用户未传参时策略使用非最优默认参数导致空仓/异常
+        if params is None:
+            params = self.get_optimal_params(strategy_id)
         params = params or {}
 
         broker = SimBroker(initial_cash=initial_cash)
@@ -649,9 +652,6 @@ class PaperTradeManager:
 
         account._sim_idx = today_idx
 
-        print(f"[DBG] force_rebalance {account_id[:8]}: calling on_data "
-              f"strategy={type(strategy).__name__} input_shape={on_data_input.shape} "
-              f"today_idx={today_idx} dates_len={len(original_dates)} valid_bonds={len(valid_bonds)}", flush=True)
         logger.info(
             f"[PaperTrade] force_rebalance {account_id[:8]}: calling on_data "
             f"strategy={type(strategy).__name__} input_shape={on_data_input.shape} "
@@ -664,9 +664,9 @@ class PaperTradeManager:
                 logger.exception(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
                 return {"status": "no_signals", "message": f"策略执行异常: {e}", "signals": []}
 
+            _res_info = 'None' if result is None else f'type={type(result).__name__} len={len(result)}'
             logger.info(
-                f"[PaperTrade] force_rebalance {account_id[:8]}: on_data returned "
-                f"{'None' if result is None else f'type={type(result).__name__} len={len(result)}'}"
+                f"[PaperTrade] force_rebalance {account_id[:8]}: on_data returned {_res_info}"
             )
 
             if not result:
@@ -674,7 +674,7 @@ class PaperTradeManager:
                 ddm_keys = sorted(str(d) for d in ddm.keys())[:5]
                 logger.info(
                     f"[PaperTrade] force_rebalance {account_id[:8]}: no signals from strategy. "
-                    f"_dates={list(strategy._dates)[:5]}... len={len(strategy._dates)} "
+                    f"_dates={list(getattr(strategy,'_dates',[]))[:5]}... "
                     f"_date_data_map has {len(ddm)} keys: {ddm_keys}"
                 )
                 return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}

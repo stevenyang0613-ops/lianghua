@@ -4236,7 +4236,7 @@ async def enrich_quotes(bonds: list) -> list:
     spot_ref = _spot_map.copy() if _spot_map else {}
     industry_ref = _industry_map.copy() if _industry_map else {}
     fin_ref = _fin_map.copy() if _fin_map else {}
-    fund_flow_ref = _fund_flow_map.copy() if _fund_flow_map else {}
+    fund_flow_ref = globals().get('_fund_flow_map', {}).copy() if globals().get('_fund_flow_map') else {}
     debt_ref = _debt_map.copy() if _debt_map else {}
     momentum_ref = _momentum_map.copy() if _momentum_map else {}
     event_ref = _event_map.copy() if _event_map else {}
@@ -4249,12 +4249,12 @@ async def enrich_quotes(bonds: list) -> list:
     buyback_ref = _buyback_map.copy() if _buyback_map else {}
     mgmt_ref = _mgmt_map.copy() if _mgmt_map else {}
     bond_price_ref = _bond_price_map.copy() if _bond_price_map else {}
-    north_ref = _north_map.copy() if _north_map else {}
+    north_ref = globals().get('_north_map', {}).copy() if globals().get('_north_map') else {}
     margin_ref = _margin_map.copy() if _margin_map else {}
-    lhb_ref = _lhb_map.copy() if _lhb_map else {}
+    lhb_ref = globals().get('_lhb_map', {}).copy() if globals().get('_lhb_map') else {}
     block_trade_ref = _block_trade_map.copy() if _block_trade_map else {}
     holder_num_ref = _holder_num_map.copy() if _holder_num_map else {}
-    earnings_forecast_ref = _earnings_forecast_map.copy() if _earnings_forecast_map else {}
+    earnings_forecast_ref = globals().get('_earnings_forecast_map', {}).copy() if globals().get('_earnings_forecast_map') else {}
     earnings_express_ref = _earnings_express_map.copy() if _earnings_express_map else {}
     restricted_release_ref = _restricted_release_map.copy() if _restricted_release_map else {}
     main_biz_ref = _main_biz_map.copy() if _main_biz_map else {}
@@ -6117,13 +6117,14 @@ def _refresh_lhb_cache():
         # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
         # 0 在 zero_valid 中算有效数据，覆盖率显示为 100%
         # 保留旧缓存中的真实数据，避免 API 失败时 zero-fill 覆盖旧数据
+        # 重置 _delta=0（本次刷新无变化），避免历史增量值失去时效性
         prev = _lhb_map if isinstance(_lhb_map, dict) else {}
         for code, entry in prev.items():
             if code.startswith("_"):
                 continue
             if isinstance(entry, dict) and entry.get("_data_source") not in (None, "zero_fill"):
                 if code not in result:
-                    result[code] = entry
+                    result[code] = {**entry, "_delta": 0}
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {

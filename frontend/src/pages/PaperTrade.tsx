@@ -400,7 +400,8 @@ export default function PaperTrade() {
       return id
     } catch (e) {
       // QuotaExceededError 时生成随机 tabId（不持久化），避免所有标签页共享固定值
-      if (e instanceof Error && e.name === 'QuotaExceededError') {
+      // Safari 可能使用 e.code === 22 而非 e.name
+      if (e instanceof Error && (e.name === 'QuotaExceededError' || (e as any).code === 22)) {
         return 'tab_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6)
       }
       return 'tab_default'

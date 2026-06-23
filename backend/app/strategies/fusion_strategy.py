@@ -58,7 +58,10 @@ class FusionStrategy(Strategy):
 
     def _estimate_credit_score(self, row):
         score = 100.0
-        price = row.get('price', 100)
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时返回中性评分，避免默认100造成误判
+            return 50.0
         premium = row.get('premium_ratio', 0)
         ytm = row.get('ytm', 0)
         if price < 80: score -= (80 - price) * 2

@@ -323,8 +323,11 @@ class XibuSevenDimensionStrategy(Strategy):
         估算信用评分（简化版KMV模型）
         基于价格隐含违约概率
         """
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时返回中性评分，避免默认100造成误判
+            return 50.0
         score = 100.0
-        price = row.get('price', 100)
         premium_ratio = row.get('premium_ratio', 0)
         ytm = row.get('ytm', 0)
         dual_low = row.get('dual_low', 150)
@@ -409,7 +412,10 @@ class XibuSevenDimensionStrategy(Strategy):
         技术面评分（满分9.9分）
         基于价格位置和双低值判断
         """
-        price = row.get('price', 100)
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时不应默认100, 返回最低分
+            return 1.0
         dual_low = row.get('dual_low', 150)
 
         score = 0.0
@@ -444,7 +450,10 @@ class XibuSevenDimensionStrategy(Strategy):
         简化版：基于成交量和价格位置判断筹码集中度
         """
         volume = row.get('volume', 0)
-        price = row.get('price', 100)
+        price = row.get('price')
+        if price is None or not np.isfinite(price):
+            # 价格缺失时不应默认100, 仅基于成交量评分
+            price = None
 
         # 成交量适中为佳（过小说明关注度低，过大说明分歧大）
         score = 3.3  # 基础分
