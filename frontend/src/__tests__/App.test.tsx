@@ -55,6 +55,8 @@ vi.mock('../utils/wsInstances', () => ({
   refreshWsToken: vi.fn(),
   cancelRefreshWsToken: vi.fn(),
   destroyWsInstances: vi.fn(),
+  startTokenRefreshTimer: vi.fn(),
+  stopTokenRefreshTimer: vi.fn(),
 }))
 vi.mock('../utils/routePreload', () => ({
   preloadByPriority: vi.fn(),
