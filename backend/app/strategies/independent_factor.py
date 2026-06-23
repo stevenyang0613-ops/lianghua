@@ -94,7 +94,7 @@ class UsdcnyFactorStub:
     当前 akshare.fx_spot_quote() 仅返回当前快照数据，无历史序列。
     要真正实现该因子需要：
     1. 接入 Wind/iFinD/通联数据等专业数据源
-    2. 或使用 ak.macro_china_fx_reserves（已不可用）的替代品
+    2. 或使用 ak.macro_china_fx_reserves_yearly（原 macro_china_fx_reserves 已移除）
     3. 或从中央银行/外管局爬取中间价历史
 
     临时方案：使用 USDCNY 日度快照对当日择时仓位做 +- 5% 微调

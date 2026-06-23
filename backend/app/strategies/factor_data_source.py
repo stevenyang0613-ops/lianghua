@@ -267,9 +267,9 @@ class FactorDataSource:
     def get_guarantee_ratio(self, code: str) -> Optional[float]:
         """
         获取对外担保比例(%)
-        数据来源：上市公司临时公告(ak.stock_company_notice_report_em)
+        数据来源：上市公司临时公告(ak.stock_individual_notice_report — 原 stock_company_notice_report_em 已移除)
         """
-        if not code or not ak or not hasattr(ak, 'stock_company_notice_report_em'):
+        if not code or not ak or not hasattr(ak, 'stock_individual_notice_report'):
             return None
         try:
             from app.services.enrichment_finance import fetch_guarantee_ratio

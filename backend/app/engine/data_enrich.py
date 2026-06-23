@@ -647,6 +647,12 @@ def _with_metrics(fn):
                         if zero_fill_count > 0:
                             extra["zero_fill_count"] = zero_fill_count
                             extra["zero_fill_pct"] = round(zero_fill_count / max(count, 1), 3)
+                        # 新增：首次真实观测标记计数
+                        first_real_obs_count = sum(1 for v in m.values()
+                                                   if isinstance(v, dict) and v.get("_first_real_obs") == True)
+                        if first_real_obs_count > 0:
+                            extra["first_real_obs_count"] = first_real_obs_count
+                            extra["first_real_obs_pct"] = round(first_real_obs_count / max(count, 1), 3)
             _record_refresh_metric(name, elapsed, count or 0, status=status, extra=extra)
             return result
         except Exception as e:
@@ -4594,8 +4600,10 @@ async def enrich_quotes(bonds: list) -> list:
             if lhb is not None:
                 if isinstance(lhb, dict):
                     b.lhb_count = lhb.get("lhb_count")
+                    b.lhb_first_real_obs = bool(lhb.get("_first_real_obs", False))
                 else:
                     b.lhb_count = lhb
+                    b.lhb_first_real_obs = False
             else:
                 b.lhb_count = None
 
@@ -5991,38 +5999,15 @@ def _refresh_margin_cache():
                     "_data_source": "zero_fill",
                 }
 
-        # Source 2 fallback: stock_margin_underlying_em
-        real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_"))]
-        if len(real_entries) < 500:
-            try:
-                df_underlying = _run_with_timeout(
-                    ak.stock_margin_underlying_em,
-                    timeout=60, default=None, op_name="margin_underlying_em",
-                )
-                if df_underlying is not None and len(df_underlying) > 0:
-                    count_underlying = 0
-                    for _, r in df_underlying.iterrows():
-                        code = str(r.get("证券代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result and not result[code].get("_summary") and result[code].get("margin_balance") is not None:
-                            continue
-                        balance = _sf(r.get("融资余额"))
-                        if balance is None:
-                            balance = _sf(r.get("融资融券余额"))
-                        if balance is not None:
-                            result[code] = {
-                                "margin_balance": balance,
-                                "_data_source": "underlying_em",
-                            }
-                            count_underlying += 1
-                    logger.info(f"[DataEnrich] Margin: stock_margin_underlying_em added {count_underlying} stocks")
-            except Exception as e_underlying:
-                logger.warning(f"[DataEnrich] Margin stock_margin_underlying_em fallback failed: {e_underlying}")
-
+        # Source 2 fallback: stock_margin_underlying_em 已在 akshare 1.18.x 中移除，
+        # stock_margin_underlying_info_szse 仅返回标的列表（无余额数据），故不再作为 fallback。
+        # 主数据源 stock_margin_detail_sse / stock_margin_detail_szse 已覆盖绝大多数融资融券标的。
         if result:
             # Add summary with total margin balance stats
             real_entries = [v for v in result.values() if isinstance(v, dict) and v.get("_data_source", "").startswith(("szse_", "sse_", "underlying_"))]
+            if len(real_entries) < 500:
+                logger.warning(f"[DataEnrich] Margin: only {len(real_entries)} real entries, "
+                               f"stock_margin_underlying_em removed in akshare 1.18.x, no equivalent fallback available")
             total_balance = sum(v.get("margin_balance", 0) or 0 for v in real_entries)
             result["_summary"] = {
                 "total_balance": round(total_balance, 2),

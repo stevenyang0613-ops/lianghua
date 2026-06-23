@@ -418,7 +418,7 @@ class XuanjiV8Strategy(Strategy):
             (day_data['price'] <= max_p) &
             (day_data['premium_ratio'] <= max_prem) &
             (day_data['premium_ratio'] >= -10) &
-            (day_data['volume'] >= min_vol * 10000 if min_vol > 0 else True) &
+            (day_data['volume'] >= min_vol if min_vol > 0 else True) &
             (day_data['remaining_years'] > 0.1)
         )
 

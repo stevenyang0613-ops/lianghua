@@ -82,6 +82,7 @@ class ConvertibleQuote(BaseModel):
     north_net: Optional[float] = Field(None, description="北向资金持股(万股)")
     margin_balance: Optional[float] = Field(None, description="融资余额(亿元)")
     lhb_count: Optional[int] = Field(None, description="近5日龙虎榜次数")
+    lhb_first_real_obs: bool = Field(False, description="是否为首次真实龙虎榜观测（区分 zero-fill 与首次真实数据）")
     block_trade_amount: Optional[float] = Field(None, description="近5日大宗交易额(万元)")
     holder_num_change: Optional[float] = Field(None, description="股东户数变化率(%)")
     eps_forecast: Optional[float] = Field(None, description="一致预期EPS")

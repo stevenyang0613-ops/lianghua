@@ -3437,36 +3437,15 @@ def _refresh_margin_cache():
                         est_count += 1
             logger.info(f"[Margin] Estimated rzye: {est_count} stocks")
 
-        # Source 2 fallback: stock_margin_underlying_em
+        # Source 2 fallback: stock_margin_underlying_em 已在 akshare 1.18.x 中移除，
+        # stock_margin_underlying_info_szse 仅返回标的列表（无余额数据），故不再作为 fallback。
+        # 主数据源 stock_margin_detail_sse / stock_margin_detail_szse 已覆盖绝大多数融资融券标的。
         _with_rzye = sum(1 for k, v in result.items()
                         if len(k) == 6 and k.isdigit() and isinstance(v, dict)
                         and v.get("rzye") is not None and v["rzye"] > 0)
         if _with_rzye < 500:
-            try:
-                import akshare as ak
-                df_underlying = getattr(ak, "stock_margin_underlying_em", lambda: pd.DataFrame())()
-                if df_underlying is not None and len(df_underlying) > 0:
-                    count_underlying = 0
-                    for _, r in df_underlying.iterrows():
-                        code = str(r.get("证券代码", "")).strip()
-                        if not code or len(code) != 6 or not code.isdigit():
-                            continue
-                        if code in result and isinstance(result.get(code), dict) and result[code].get("rzye") is not None:
-                            continue
-                        balance = _safe_float(r.get("融资余额"))
-                        if balance is None:
-                            balance = _safe_float(r.get("融资融券余额"))
-                        if balance is not None:
-                            result[code] = {
-                                "code": code,
-                                "name": str(r.get("证券简称", "")).strip(),
-                                "rzye": balance,
-                                "date": str(r.get("日期", "")).strip(),
-                            }
-                            count_underlying += 1
-                    logger.info(f"[Margin] stock_margin_underlying_em: {count_underlying} stocks added")
-            except Exception as e_underlying:
-                logger.warning(f"[Margin] stock_margin_underlying_em fallback failed: {e_underlying}")
+            logger.warning(f"[Margin] Only {_with_rzye} real entries, "
+                           f"stock_margin_underlying_em removed in akshare 1.18.x, no equivalent fallback available")
 
         if result:
             _save_cache(cache_path, result)

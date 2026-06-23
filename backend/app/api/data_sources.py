@@ -34,6 +34,30 @@ _bg = get_registry()
 # 妙想 MX 配置
 _MX_PE_PB_BATCH_SIZE = 20     # 每批查询股票数
 _MX_PE_PB_TIMEOUT = 60        # 整体超时(秒)
+_MX_WARN_COOLDOWN_SEC = 60    # 降级日志冷却时间(秒)
+_MX_WARN_LAST_TS = 0.0         # 上次降级日志时间戳
+
+
+def _mx_warn(msg: str):
+    """妙想 MX 降级日志节流 — 60 秒内只 warn 一次"""
+    global _MX_WARN_LAST_TS
+    now = _time.time()
+    if now - _MX_WARN_LAST_TS >= _MX_WARN_COOLDOWN_SEC:
+        logger.warning(msg)
+        _MX_WARN_LAST_TS = now
+    else:
+        logger.debug(msg)
+
+
+def _mx_validate_pe(v: float) -> bool:
+    """PE 合理性校验"""
+    return 0.0 < v < 10000.0
+
+
+def _mx_validate_pb(v: float) -> bool:
+    """PB 合理性校验"""
+    return 0.0 < v < 1000.0
+
 
 data_source_manager = get_data_source_manager()
 
@@ -334,14 +358,14 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
         mx = MXAdapter(DataSourceConfig(name="mx"))
         connected = await mx.connect()
         if not connected:
-            logger.warning("[MX] PE/PB: 连接失败")
+            _mx_warn("[MX] PE/PB: 连接失败")
             return {}
         # 降级模式检测
         if getattr(mx, '_degraded_mode', False):
-            logger.warning("[MX] PE/PB: 处于降级模式(无有效API Key), 自然语言查询PE/PB可能失败")
+            _mx_warn("[MX] PE/PB: 降级模式(无有效API Key), 自然语言查询PE/PB可能失败")
             return {}
         if not settings.MX_APIKEY:
-            logger.warning("[MX] PE/PB: MX_APIKEY 未配置, 跳过MX兜底")
+            _mx_warn("[MX] PE/PB: MX_APIKEY 未配置, 跳过MX兜底")
             return {}
         results = {}
         for i in range(0, len(codes), _MX_PE_PB_BATCH_SIZE):

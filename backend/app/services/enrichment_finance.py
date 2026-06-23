@@ -1,7 +1,7 @@
 """
 可转债财务数据扩展模块
-- 对外担保比例(ak.stock_company_notice_report_em)
-- 大股东减持(ak.stock_share_holders_change_em)
+- 对外担保比例(ak.stock_individual_notice_report — 原 stock_company_notice_report_em 已移除)
+- 大股东减持(ak.stock_shareholder_change_ths — 原 stock_share_holders_change_em 已移除)
 - 解禁数据(ak.stock_restricted_release_queue_em)
 - 回购数据(ak.stock_repurchase_em)
 """
@@ -57,6 +57,7 @@ def _ensure_loaded():
 def fetch_guarantee_ratio(code: str) -> float | None:
     """
     拉取单一股票的对外担保比例(占净资产%).
+    使用 ak.stock_individual_notice_report 替代已移除的 stock_company_notice_report_em。
     失败返回 None (调用方应回退到默认保守估计).
     """
     if not code:
@@ -66,10 +67,13 @@ def fetch_guarantee_ratio(code: str) -> float | None:
     if clean in _guarantee_map:
         return _guarantee_map[clean]
 
-    if not hasattr(ak, "stock_company_notice_report_em"):
+    if not hasattr(ak, "stock_individual_notice_report"):
         return None
     try:
-        df = ak.stock_company_notice_report_em(symbol=clean)
+        from datetime import datetime, timedelta
+        end_date = datetime.now().strftime("%Y%m%d")
+        begin_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+        df = ak.stock_individual_notice_report(security=clean, begin_date=begin_date, end_date=end_date)
         if df is None or df.empty:
             return None
         keyword = "对外担保"

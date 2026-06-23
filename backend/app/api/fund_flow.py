@@ -23,8 +23,9 @@ from typing import Optional, List
 import asyncio
 import logging
 import time
-from datetime import datetime
+
 from app.engine.data_enrich_utils import safe_float, safe_int
+from app.utils.data_source import DataSource
 
 router = APIRouter(prefix="/fund_flow", tags=["fund_flow"])
 logger = logging.getLogger(__name__)
@@ -64,6 +65,21 @@ def _get_cached(key: str):
 
 def _set_cached(key: str, data):
     _cache[key] = {"data": data, "ts": time.time()}
+
+
+def _tag(data, source: str = DataSource.REAL.value):
+    """为响应附加 data_source 标签
+
+    list  → {"items": list, "data_source": source}
+    dict  → 加 data_source 键
+    其他  → 原样返回
+    """
+    if isinstance(data, list):
+        return {"items": data, "data_source": source}
+    if isinstance(data, dict):
+        data["data_source"] = source
+        return data
+    return data
 
 
 async def _get_individual_df():
@@ -217,19 +233,19 @@ async def get_individual_fund_flow(
     """
     cached = _get_cached("individual")
     if cached:
-        return {"stocks": cached[:limit], "total": len(cached[:limit])}
+        return _tag({"stocks": cached[:limit], "total": len(cached[:limit])})
 
     try:
         df = await _get_individual_df()
         if df.empty:
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
         df = _normalize_individual_df(df)
         df = df.sort_values("net_inflow", ascending=False)
 
         result = [IndividualFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("individual", result)
-        return {"stocks": result[:limit], "total": len(result[:limit])}
+        return _tag({"stocks": result[:limit], "total": len(result[:limit])})
 
     except asyncio.CancelledError:
         raise
@@ -266,10 +282,10 @@ async def get_individual_fund_flow(
                 ))
             result.sort(key=lambda x: x.net_inflow or 0, reverse=True)
             _set_cached("individual", result)
-            return {"stocks": result[:limit], "total": len(result[:limit])}
+            return _tag({"stocks": result[:limit], "total": len(result[:limit])})
         except Exception as e2:
             logger.error(f"Failed to get individual fund flow from cache: {e2}")
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
 
 @router.get("/industry", response_model=List[IndustryFundFlow])
@@ -332,19 +348,19 @@ async def get_main_fund_flow(
     """
     cached = _get_cached("main")
     if cached:
-        return {"stocks": cached[:limit], "total": len(cached[:limit])}
+        return _tag({"stocks": cached[:limit], "total": len(cached[:limit])})
 
     # 1) 尝试真实拆分数据
     real_data = await _try_real_fund_flow_rank(limit)
     if real_data is not None:
         _set_cached("main", real_data)
-        return {"stocks": real_data[:limit], "total": len(real_data[:limit])}
+        return _tag({"stocks": real_data[:limit], "total": len(real_data[:limit])})
 
     # 2) 降级：共享个股数据 + 估算
     try:
         df = await _get_individual_df()
         if df.empty:
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
         df = _normalize_individual_df(df)
 
@@ -363,7 +379,7 @@ async def get_main_fund_flow(
 
         result = [MainFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("main", result)
-        return {"stocks": result[:limit], "total": len(result[:limit])}
+        return _tag({"stocks": result[:limit], "total": len(result[:limit])})
 
     except asyncio.CancelledError:
         raise
@@ -405,10 +421,10 @@ async def get_main_fund_flow(
                 ))
             result.sort(key=lambda x: abs(x.main_net_inflow or 0), reverse=True)
             _set_cached("main", result)
-            return {"stocks": result[:limit], "total": len(result[:limit])}
+            return _tag({"stocks": result[:limit], "total": len(result[:limit])})
         except Exception as e2:
             logger.error(f"Failed to get main fund flow from cache: {e2}")
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
 
 @router.get("/turnover_rank", response_model=TurnoverRankResponse)
@@ -422,19 +438,19 @@ async def get_turnover_rank(
     """
     cached = _get_cached("turnover")
     if cached:
-        return {"stocks": cached[:limit], "total": len(cached[:limit])}
+        return _tag({"stocks": cached[:limit], "total": len(cached[:limit])})
 
     try:
         df = await _get_individual_df()
         if df.empty:
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
         df = _normalize_individual_df(df)
         df = df.sort_values("turnover_rate", ascending=False)
 
         result = [TurnoverRank(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached("turnover", result)
-        return {"stocks": result[:limit], "total": len(result[:limit])}
+        return _tag({"stocks": result[:limit], "total": len(result[:limit])})
 
     except asyncio.CancelledError:
         raise
@@ -460,10 +476,10 @@ async def get_turnover_rank(
                 ))
             result.sort(key=lambda x: x.turnover_rate, reverse=True)
             _set_cached("turnover", result)
-            return {"stocks": result[:limit], "total": len(result[:limit])}
+            return _tag({"stocks": result[:limit], "total": len(result[:limit])})
         except Exception as e2:
             logger.error(f"Failed to get turnover rank from cache: {e2}")
-            return {"stocks": [], "total": 0}
+            return _tag({"stocks": [], "total": 0}, source=DataSource.MISSING.value)
 
 
 @router.get("/hsgt", response_model=List[HsgtFundFlow])
