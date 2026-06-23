@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from app.strategies import list_strategies
+from app.utils.data_source import DataSource
 
 router = APIRouter()
 
@@ -10,11 +11,12 @@ router = APIRouter()
 async def get_signals(request: Request):
     engine = getattr(request.app.state, "signal_engine", None)
     if not engine:
-        return {"signals": [], "active_strategies": [], "total": 0}
+        return {"signals": [], "active_strategies": [], "total": 0, "data_source": DataSource.MISSING.value}
     return {
         "signals": engine.current_signals,
         "active_strategies": engine.active_strategies,
         "total": len(engine.current_signals),
+        "data_source": DataSource.REAL.value,
     }
 
 
@@ -28,17 +30,20 @@ async def get_signal_history(
 ):
     storage = getattr(request.app.state, "storage", None)
     if not storage:
-        return {"signals": [], "total": 0}
+        return {"signals": [], "total": 0, "data_source": DataSource.MISSING.value}
     signals, total = storage.get_signal_history(strategy=strategy, code=code, limit=limit, offset=offset)
-    return {"signals": signals, "total": total}
+    return {"signals": signals, "total": total, "data_source": DataSource.REAL.value}
 
 
 @router.get("/signals/stats")
 async def get_signal_stats(request: Request):
     storage = getattr(request.app.state, "storage", None)
     if not storage:
-        return {"total": 0, "executed": 0, "strategy_stats": []}
-    return storage.get_signal_stats()
+        return {"total": 0, "executed": 0, "strategy_stats": [], "data_source": DataSource.MISSING.value}
+    result = storage.get_signal_stats()
+    if isinstance(result, dict):
+        result["data_source"] = DataSource.REAL.value
+    return result
 
 
 @router.get("/signals/export-csv")
@@ -83,9 +88,9 @@ async def get_executed_positions(
 ):
     storage = getattr(request.app.state, "storage", None)
     if not storage:
-        return {"positions": [], "total": 0}
+        return {"positions": [], "total": 0, "data_source": DataSource.MISSING.value}
     positions = storage.get_executed_positions(limit=limit, offset=offset)
-    return {"positions": positions, "total": len(positions)}
+    return {"positions": positions, "total": len(positions), "data_source": DataSource.REAL.value}
 
 
 @router.delete("/signals/executed-positions")
@@ -116,7 +121,7 @@ async def set_active_strategies(req: StrategiesRequest, request: Request):
 
 @router.get("/signals/available-strategies")
 async def get_available_strategies():
-    return {"strategies": list_strategies()}
+    return {"strategies": list_strategies(), "data_source": DataSource.REAL.value}
 
 
 class AutoExecuteConfig(BaseModel):

@@ -10,6 +10,7 @@ import time
 import hashlib
 import logging
 from app.engine.data_enrich_utils import safe_float, safe_int
+from app.utils.data_source import DataSource
 
 router = APIRouter(prefix="/xuanji", tags=["璇玑十二因子"])
 logger = logging.getLogger(__name__)
@@ -26,6 +27,20 @@ def _lru_touch(key: str):
     if key in _cache:
         entry = _cache.pop(key)
         _cache[key] = entry
+
+
+def _tag(data, source: str = DataSource.REAL.value):
+    """为响应附加 data_source 标签
+
+    list  → {"items": list, "data_source": source}
+    dict  → 加 data_source 键
+    """
+    if isinstance(data, list):
+        return {"items": data, "data_source": source}
+    if isinstance(data, dict):
+        data["data_source"] = source
+        return data
+    return data
 
 
 def _get_cache_key(prefix: str, **kwargs) -> str:
@@ -400,7 +415,7 @@ async def get_xuanji_ranking(
         bonds = await engine.get_all_quotes()
 
         if not bonds:
-            return {"total": 0, "items": [], "market_state_detected": "neutral"}
+            return {"total": 0, "items": [], "market_state_detected": "neutral", "data_source": DataSource.MISSING.value}
 
         rows = [_build_row_from_bond(b) for b in bonds]
 
@@ -507,6 +522,7 @@ async def get_xuanji_ranking(
             },
             "items": items,
             "cached": False,
+            "data_source": DataSource.REAL.value,
         }
 
         _set_cache(cache_key, result)
@@ -621,6 +637,7 @@ async def get_xuanji_single(
                 "outstanding_scale": getattr(target, 'outstanding_scale', None),
             },
             "greeks": greeks,
+            "data_source": DataSource.REAL.value,
         }
     except HTTPException:
         raise
@@ -760,6 +777,7 @@ async def get_delta_candidates(
                 "premium_low": premium_low,
                 "premium_high": premium_high,
             },
+            "data_source": DataSource.REAL.value,
         }
     except Exception as e:
         logger.exception("Delta候选计算失败")
@@ -805,6 +823,7 @@ async def get_greeks_summary(request: Request):
                 "mid_delta": mid_delta,
                 "low_delta": low_delta,
             },
+            "data_source": DataSource.REAL.value,
         }
         _set_cache(cache_key, result, _LONG_CACHE_TTL)
         return result
@@ -953,7 +972,7 @@ async def get_alpha_sources(request: Request):
 
 @router.get("/health")
 def xuanji_health():
-    return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "4.0"}
+    return {"status": "ok", "strategy": "xuanji_twelve_factor", "version": "4.0", "data_source": DataSource.REAL.value}
 
 
 @router.get("/stress-test")
@@ -1864,7 +1883,8 @@ async def data_source_health(request: Request):
                 "avg_coverage_pct": round(
                     sum(s["coverage_pct"] for s in sources_status) / max(len(sources_status), 1), 1
                 ),
-            }
+            },
+            "data_source": DataSource.REAL.value,
         }
     except Exception as e:
         logger.warning(f"[data-source-health] Error: {e}")

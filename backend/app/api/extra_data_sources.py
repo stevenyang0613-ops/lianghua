@@ -37,11 +37,55 @@ router = APIRouter()
 _bg = get_registry()
 
 # ============================================================
-# 妙想 MX 全局配置
+# 妙想 MX 全局配置与工具函数
 # ============================================================
 _MX_TIMEOUT_SINGLE = 15       # 单只查询超时(秒): 行业/财务单只
 _MX_TIMEOUT_BATCH = 30        # 批量查询超时(秒): 财务批量兜底
 _MX_MAX_BATCH_SIZE = 30       # 批量兜底最大只数
+_MX_WARN_COOLDOWN_SEC = 60    # 降级日志冷却时间(秒)
+_MX_WARN_LAST_TS = 0.0        # 上次降级日志时间戳
+
+
+def _mx_warn(msg: str):
+    """妙想 MX 降级日志节流 — 60 秒内只 warn 一次"""
+    global _MX_WARN_LAST_TS
+    now = _time.time()
+    if now - _MX_WARN_LAST_TS >= _MX_WARN_COOLDOWN_SEC:
+        logger.warning(msg)
+        _MX_WARN_LAST_TS = now
+    else:
+        logger.debug(msg)
+
+
+def _mx_validate_value(v: float, name: str) -> bool:
+    """MX 返回数值合理性校验
+    
+    校验范围:
+      PE: 0~10000, PB: 0~1000, ROE: -50%~50%, 
+      毛利率: 0~100%, 资产负债率: 0~100%,
+      EPS: 0~1000, BPS: 0~1000, 净利率: -100%~100%
+    """
+    if np.isnan(v) or np.isinf(v):
+        return False
+    if name == "pe":
+        return 0.0 < v < 10000.0
+    if name == "pb":
+        return 0.0 < v < 1000.0
+    if name == "roe":
+        return -50.0 < v < 50.0
+    if name in ("gpm", "npm"):
+        return -10.0 < v < 100.0
+    if name == "debt_ratio":
+        return 0.0 < v < 100.0
+    if name == "eps":
+        return 0.0 < v < 1000.0
+    if name == "bps":
+        return 0.0 < v < 1000.0
+    if name == "revenue":
+        return 0.0 < v < 1e9
+    if name == "turnover":
+        return 0.0 < v < 100.0
+    return True
 
 
 class ValueAnalysisRequest(BaseModel):
@@ -557,10 +601,10 @@ def _fetch_industry_mx_single(code: str) -> Optional[str]:
             mx = MXAdapter(DataSourceConfig(name="mx"))
             await mx.connect()
             if getattr(mx, '_degraded_mode', False):
-                logger.warning(f"[MX Industry] {code}: 降级模式(无API Key), 跳过")
+                _mx_warn(f"[MX Industry] {code}: 降级模式(无API Key), 跳过")
                 return None
             if not settings.MX_APIKEY:
-                logger.warning(f"[MX Industry] {code}: MX_APIKEY 未配置")
+                _mx_warn(f"[MX Industry] {code}: MX_APIKEY 未配置")
                 return None
             query_text = f"{code} 所属行业"
             resp = await mx.query_natural(query_text, "financial")
@@ -784,10 +828,10 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
             mx = MXAdapter(DataSourceConfig(name="mx"))
             await mx.connect()
             if getattr(mx, '_degraded_mode', False):
-                logger.warning("[MX Financial] 降级模式(无API Key), 跳过批量财务兜底")
+                _mx_warn("[MX Financial] 降级模式(无API Key), 跳过批量财务兜底")
                 return {}
             if not settings.MX_APIKEY:
-                logger.warning("[MX Financial] MX_APIKEY 未配置, 跳过")
+                _mx_warn("[MX Financial] MX_APIKEY 未配置, 跳过")
                 return {}
             results = {}
             for code in codes:
@@ -804,7 +848,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "roe"):
                                 entry["roe"] = v
                                 break
                         except (ValueError, TypeError):
@@ -813,7 +857,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "gpm"):
                                 entry["gpm"] = v
                                 break
                         except (ValueError, TypeError):
@@ -822,7 +866,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "debt_ratio"):
                                 entry["debt_ratio"] = v
                                 break
                         except (ValueError, TypeError):
@@ -831,7 +875,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "eps"):
                                 entry["eps"] = v
                                 break
                         except (ValueError, TypeError):
@@ -840,7 +884,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "bps"):
                                 entry["bps"] = v
                                 break
                         except (ValueError, TypeError):
@@ -849,7 +893,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "npm"):
                                 entry["npm"] = v
                                 break
                         except (ValueError, TypeError):
@@ -858,7 +902,7 @@ def _fetch_financial_mx_batch(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if not (np.isnan(v) or np.isinf(v)):
+                            if _mx_validate_value(v, "revenue"):
                                 entry["revenue"] = v
                                 break
                         except (ValueError, TypeError):

@@ -301,13 +301,13 @@ async def get_industry_fund_flow(
     """
     cached = _get_cached(f"industry_{indicator}")
     if cached:
-        return cached
+        return _tag(cached)
 
     try:
         import akshare as ak
         df = await asyncio.to_thread(ak.stock_fund_flow_industry)
         if df.empty:
-            return []
+            return _tag([], source=DataSource.MISSING.value)
 
         col_map = {
             "序号": "rank", "行业": "industry", "行业指数": "industry_index",
@@ -327,13 +327,13 @@ async def get_industry_fund_flow(
 
         result = [IndustryFundFlow(**row.to_dict()) for _, row in df.iterrows()]
         _set_cached(f"industry_{indicator}", result)
-        return result
+        return _tag(result)
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"Failed to get industry fund flow: {e}")
-        return []
+        return _tag([], source=DataSource.MISSING.value)
 
 
 @router.get("/main", response_model=MainFundFlowResponse)
@@ -492,13 +492,13 @@ async def get_hsgt_fund_flow():
     """
     cached = _get_cached("hsgt")
     if cached:
-        return cached
+        return _tag(cached)
 
     try:
         import akshare as ak
         df = await asyncio.to_thread(ak.stock_hsgt_fund_flow_summary_em)
         if df.empty:
-            return []
+            return _tag([], source=DataSource.MISSING.value)
 
         col_map = {
             "交易日": "date", "类型": "type", "板块": "plate",
@@ -538,13 +538,13 @@ async def get_hsgt_fund_flow():
             result.append(HsgtFundFlow(**r))
 
         _set_cached("hsgt", result)
-        return result
+        return _tag(result)
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"Failed to get HSGT fund flow: {e}")
-        return []
+        return _tag([], source=DataSource.MISSING.value)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

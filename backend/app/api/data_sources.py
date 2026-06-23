@@ -392,7 +392,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if 0 < v < 10000:
+                            if _mx_validate_pe(v):
                                 entry["pe"] = v
                                 break
                         except (ValueError, TypeError):
@@ -401,7 +401,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
                     if k in row and row[k] is not None:
                         try:
                             v = float(row[k])
-                            if 0 < v < 1000:
+                            if _mx_validate_pb(v):
                                 entry["pb"] = v
                                 break
                         except (ValueError, TypeError):
@@ -425,7 +425,7 @@ def fetch_pe_pb_mx(codes: list[str]) -> dict[str, dict]:
         t.start()
         t.join(timeout=_MX_PE_PB_TIMEOUT)
         if t.is_alive():
-            logger.warning(f"[MX] PE/PB 查询超时({_MX_PE_PB_TIMEOUT}s)")
+            _mx_warn(f"[MX] PE/PB 查询超时({_MX_PE_PB_TIMEOUT}s)")
             return {}
         return result_holder.get("data", {})
     except Exception as e:
