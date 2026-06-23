@@ -39,10 +39,30 @@ class DualLowStrategy(Strategy):
         day_data = self._date_data_map.get(current_date, pd.DataFrame()).copy()
 
         # 过滤
-        day_data = day_data[
+        filter_mask = (
             (day_data['dual_low'] <= self.get_param('max_dual_low')) &
             (day_data['premium_ratio'] <= self.get_param('max_premium'))
-        ]
+        )
+
+        # 添加条款过滤: 排除已公告强赎/即将强赎的转债
+        if 'is_called' in day_data.columns:
+            filter_mask = filter_mask & (~day_data['is_called'].fillna(False))
+        if 'call_status' in day_data.columns:
+            status_mask = day_data['call_status'].fillna('').str.contains('强赎|赎回', na=False)
+            filter_mask = filter_mask & (~status_mask)
+        if 'forced_call_days' in day_data.columns:
+            # 强赎倒计时不足 3 日视为不可交易
+            call_days = day_data['forced_call_days'].fillna(999)
+            filter_mask = filter_mask & ((call_days >= 3) | (call_days > 900))
+        # 排查可交换债
+        if 'code' in day_data.columns:
+            eb_codes = day_data['code'].str.match(r'^(EB|132|133)', na=False)
+            filter_mask = filter_mask & (~eb_codes)
+        if 'name' in day_data.columns:
+            eb_names = day_data['name'].str.contains('可交换债', na=False)
+            filter_mask = filter_mask & (~eb_names)
+
+        day_data = day_data[filter_mask]
 
         if day_data.empty:
             return None
