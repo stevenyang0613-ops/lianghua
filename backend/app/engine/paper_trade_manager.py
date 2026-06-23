@@ -659,6 +659,11 @@ class PaperTradeManager:
 
         account._sim_idx = today_idx
 
+        logger.info(
+            f"[PaperTrade] force_rebalance {account_id[:8]}: calling on_data "
+            f"strategy={type(strategy).__name__} input_shape={on_data_input.shape} "
+            f"today_idx={today_idx} dates_len={len(original_dates)} valid_bonds={len(valid_bonds)}"
+        )
         try:
             try:
                 result = strategy.on_data(on_data_input, today_idx)
@@ -666,7 +671,18 @@ class PaperTradeManager:
                 logger.warning(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
                 return {"status": "no_signals", "message": f"策略执行异常: {e}", "signals": []}
 
+            logger.info(
+                f"[PaperTrade] force_rebalance {account_id[:8]}: on_data returned "
+                f"{'None' if result is None else f'type={type(result).__name__} len={len(result)}'}"
+            )
+
             if not result:
+                # 检查策略内部 on_data 是否生成了空列表
+                logger.info(
+                    f"[PaperTrade] force_rebalance {account_id[:8]}: no signals from strategy. "
+                    f"Check strategy._data keys={list(getattr(strategy,'_data',{}).keys())[:3]} "
+                    f"_date_data_map keys={list(getattr(strategy,'_date_data_map',{}).keys())[:3]}"
+                )
                 return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}
 
             now = time_mod.time()

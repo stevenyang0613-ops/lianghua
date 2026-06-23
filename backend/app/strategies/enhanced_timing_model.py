@@ -2133,9 +2133,10 @@ class EnhancedTimingModel:
         # 1. 截断后的仓位走正常平滑流程，不锁定 _last_position_ratio
         # 2. 波动率恢复正常后，raw_position 自然回到正常值
         # 3. 平滑机制自然处理过渡，无需额外恢复逻辑
-        # 目标 25%（HS300 长期 ~17%，仅在波动率聚集期间触发约 15-20% 的时间）
+        # 目标 28%（HS300 长期 ~17%，仅在极端波动时触发 < 5% 的时间）
         # ═══════════════════════════════════════════════════════════════
-        TARGET_ANNUAL_VOL = 0.25
+        TARGET_ANNUAL_VOL = 0.28
+        vol_cap_applied = False
         if not math.isnan(data.stock_index_change):
             self._daily_returns.append(data.stock_index_change)
         if len(self._daily_returns) >= 10:
@@ -2144,12 +2145,25 @@ class EnhancedTimingModel:
             if realized_ann_vol > TARGET_ANNUAL_VOL:
                 vol_cap = TARGET_ANNUAL_VOL / realized_ann_vol
                 capped_raw = raw_position * vol_cap
+                vol_cap_applied = True
                 if capped_raw < raw_position:
                     logger.debug(
-                        f"[VolTarget] 年化波动率{realized_ann_vol:.1%} > 目标{TARGET_ANNUAL_VOL:.0%}，"
-                        f"raw 仓位从{raw_position*100:.0f}%降至{capped_raw*100:.0f}%"
+                        f"[VolTarget] vol={realized_ann_vol:.1%} target={TARGET_ANNUAL_VOL:.0%} "
+                        f"cap={vol_cap:.3f} raw={raw_position:.3f}→{capped_raw:.3f}"
                     )
                     raw_position = max(0.05, min(1.0, capped_raw))
+                else:
+                    logger.debug(
+                        f"[VolTarget] vol={realized_ann_vol:.1%} > target but cap={vol_cap:.3f} "
+                        f"capped={capped_raw:.3f} >= raw={raw_position:.3f}, no change"
+                    )
+        if not vol_cap_applied and len(self._daily_returns) >= 10:
+            realized_daily_vol = pd.Series(list(self._daily_returns)).std()
+            realized_ann_vol = realized_daily_vol * math.sqrt(252)
+            logger.debug(
+                f"[VolTargetSkip] vol={realized_ann_vol:.1%} <= target={TARGET_ANNUAL_VOL:.0%}, "
+                f"daily_std={realized_daily_vol:.4f} deque_len={len(self._daily_returns)}"
+            )
         
         # 信号平滑：基于仓位档位的连续2日确认机制
         # 核心问题：得分在45-55之间波动，导致仓位在50%和70%之间频繁切换
