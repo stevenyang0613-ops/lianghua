@@ -604,10 +604,20 @@ class PaperTradeManager:
         original_strategy_rebalance = strategy._params.get('rebalance_days', 7)
         saved_states: dict = {}
 
-        if hasattr(strategy, '_last_rebalance_idx'):
-            saved_states['_last_rebalance_idx'] = strategy._last_rebalance_idx
-        if hasattr(strategy, '_portfolio_stop_trigger_idx'):
-            saved_states['_portfolio_stop_trigger_idx'] = strategy._portfolio_stop_trigger_idx
+        # 保存策略内部交易状态（on_data 会修改这些属性）
+        _STRATEGY_STATE_ATTRS = [
+            '_last_rebalance_idx', '_portfolio_stop_trigger_idx',
+            '_prev_selected', '_buy_prices', '_peak_prices',
+            '_buffer_tracker', '_portfolio_stopped', '_portfolio_peak',
+            '_ic_history',
+        ]
+        for attr in _STRATEGY_STATE_ATTRS:
+            if hasattr(strategy, attr):
+                val = getattr(strategy, attr)
+                if isinstance(val, (set, dict)):
+                    saved_states[attr] = val.copy() if hasattr(val, 'copy') else val
+                else:
+                    saved_states[attr] = val
 
         # ── 确保今天在策略 _dates 和 _date_data_map 中 ──
         if today_str not in original_dates:
@@ -620,7 +630,6 @@ class PaperTradeManager:
         #    缺少某些关键列（stock_change_pct、conversion_price 等）。
         strategy_df = None
         if hasattr(strategy, '_date_data_map') and strategy._date_data_map:
-            # 找最新日期
             all_dates = sorted(strategy._date_data_map.keys())
             latest_strategy_date = all_dates[-1] if all_dates else None
             if latest_strategy_date:
@@ -641,9 +650,12 @@ class PaperTradeManager:
         # ── 临时设置：rebalance_days=1 → 每次都是调仓日 ──
         strategy._params['rebalance_days'] = 1
         if hasattr(strategy, '_last_rebalance_idx'):
-            strategy._last_rebalance_idx = -999  # (idx - (-999)) >= 1 永远成立
+            strategy._last_rebalance_idx = -999
         if hasattr(strategy, '_portfolio_stop_trigger_idx'):
-            strategy._portfolio_stop_trigger_idx = -1  # 清除止损触发
+            strategy._portfolio_stop_trigger_idx = -1
+        # 清除组合止损标记，确保首次能买入
+        if hasattr(strategy, '_portfolio_stopped'):
+            strategy._portfolio_stopped = False
 
         account._sim_idx = today_idx
 
@@ -657,7 +669,6 @@ class PaperTradeManager:
             if not result:
                 return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}
 
-            # ── 构建信号（去重逻辑同 _process_account） ──
             now = time_mod.time()
             signals_to_execute = []
             for sig in result:
@@ -666,7 +677,6 @@ class PaperTradeManager:
                 price = sig.get("price")
                 if price is None or (isinstance(price, (int, float)) and price <= 0):
                     continue
-                # 去重
                 dedup_key = (code, action)
                 prev = account._recent_signals.get(dedup_key)
                 if prev:
@@ -681,7 +691,7 @@ class PaperTradeManager:
                 signals_to_execute.append({
                     "code": code, "name": bond.name, "action": action,
                     "price": price, "reason": sig.get("reason", ""),
-                    "confidence": sig.get("confidence", 0.0),
+                    "confidence": sig.get("confidence", sig.get("score", 1.0)),
                 })
 
             if not signals_to_execute:
@@ -716,8 +726,12 @@ class PaperTradeManager:
                     del strategy._date_data_map[today_str]
                 except Exception:
                     pass
+            # 恢复策略内部交易状态
             for key, value in saved_states.items():
-                setattr(strategy, key, value)
+                try:
+                    setattr(strategy, key, value)
+                except Exception:
+                    pass
 
     # ── 数据查询 ──────────────────────────────────────
 

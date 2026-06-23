@@ -2124,6 +2124,9 @@ class EnhancedTimingModel:
         # 计算原始建议仓位（未经平滑）
         raw_position = self._get_position_ratio(total_score, trend_boost)
         
+        # P1-3 DEBUG: trace raw_position before/after vol target
+        _debug_raw_before = raw_position
+        
         # ═══════════════════════════════════════════════════════════════
         # 波动率目标仓位保护（P1-3）— 在 raw_position 层面截断
         # 设计要点：在仓位平滑/确认之前应用，这样：
@@ -2184,6 +2187,15 @@ class EnhancedTimingModel:
                                    self._last_position_ratio - max_change)
         else:
             position_ratio = base_position
+        
+        # P1-3 DEBUG: if position drops below 0.10, log why
+        if position_ratio < 0.10 and len(self._history) % 10 == 0:
+            logger.info(
+                f"[DEBUG-POS] date={data.date} score={total_score:.1f} raw_before={_debug_raw_before:.3f} "
+                f"raw_after={raw_position:.3f} conf={self._confirmed_position:.3f} "
+                f"last={self._last_position_ratio:.3f} pending_days={self._pending_days} "
+                f"regime_confirm={self._regime_confirm_count} final_pos={position_ratio:.3f}"
+            )
         
         self._last_position_ratio = position_ratio
         
