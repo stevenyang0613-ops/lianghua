@@ -386,7 +386,7 @@ class XuanjiV8Strategy(Strategy):
                     day_data[c] = day_data[c].fillna(med)
 
     def _apply_filters(self, day_data: pd.DataFrame) -> pd.DataFrame:
-        """前置过滤: 价格/溢价率/流动性/纯债价值比"""
+        """前置过滤: 价格/溢价率/流动性/纯债价值比 + 条款过滤"""
         min_vol = self.get_param('min_volume')
         max_prem = self.get_param('max_premium')
         min_p = self.get_param('min_price')
@@ -407,6 +407,24 @@ class XuanjiV8Strategy(Strategy):
             bv = day_data['bond_value'].fillna(0)
             price_to_bv = day_data['price'] / bv.replace(0, np.nan)
             mask = mask & (price_to_bv.fillna(1.5) <= max_p2cbv)
+
+        # 条款过滤: 排除已公告强赎的转债
+        if 'is_called' in day_data.columns:
+            mask = mask & (~day_data['is_called'].fillna(False))
+        if 'call_status' in day_data.columns:
+            status_mask = day_data['call_status'].fillna('').str.contains('强赎|赎回', na=False)
+            mask = mask & (~status_mask)
+        if 'forced_call_days' in day_data.columns:
+            call_days = day_data['forced_call_days'].fillna(999)
+            mask = mask & ((call_days >= 3) | (call_days > 900))
+
+        # 排除可交换债（代码 132/133/EB 开头或名称含"可交换债"）
+        if 'code' in day_data.columns:
+            eb_codes = day_data['code'].str.match(r'^(EB|132|133)', na=False)
+            mask = mask & (~eb_codes)
+        if 'name' in day_data.columns:
+            eb_names = day_data['name'].str.contains('可交换债', na=False)
+            mask = mask & (~eb_names)
         
         return day_data[mask].copy()
 
