@@ -94,7 +94,11 @@ class HotkeyManager {
           event.stopPropagation()
         }
 
-        definition.handler(event)
+        try {
+          definition.handler(event)
+        } catch (error) {
+          console.error('[Hotkeys] Handler error for', definition.id, error)
+        }
         return
       }
     }

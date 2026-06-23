@@ -260,10 +260,15 @@ export function useFileDrop(options: UseFileDropOptions = {}) {
     }
   }, [handleDragEnter, handleDragLeave, handleDragOver, handleDrop])
 
+  const filesRef = useRef<DroppedFile[]>([])
+  useEffect(() => {
+    filesRef.current = files
+  }, [files])
+
   // 清理预览 URL
   useEffect(() => {
     return () => {
-      files.forEach(file => {
+      filesRef.current.forEach(file => {
         if (file.preview) {
           URL.revokeObjectURL(file.preview)
         }

@@ -90,9 +90,6 @@ interface NetworkLog {
   size?: number
 }
 
-// Module-level override counter to handle concurrent fetch overrides safely
-let _fetchOverrideDepth = 0
-
 export default function PerformanceMonitor() {
   const { enabled } = usePerformanceStore()
   const [metrics, setMetrics] = useState<PerformanceMetrics>({
@@ -105,10 +102,6 @@ export default function PerformanceMonitor() {
   const [visible, setVisible] = useState(false)
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([])
   const [fpsHistory, setFpsHistory] = useState<number[]>(new Array(60).fill(60))
-
-  // Refs to track fetch override state for safe cleanup on unmount / crash
-  const originalFetchRef = useRef<typeof window.fetch | null>(null)
-  const overrideActiveRef = useRef(false)
 
   // Electron 特有功能状态
   const [crashReports, setCrashReports] = useState<CrashReport[]>([])
@@ -174,82 +167,6 @@ export default function PerformanceMonitor() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [])
-
-  // 网络监控 — 仅在启用时拦截 fetch
-  useEffect(() => {
-    if (!enabled) return
-
-    // Only capture the original fetch once; restore via ref on cleanup
-    if (!originalFetchRef.current) {
-      originalFetchRef.current = window.fetch
-    }
-    let requestCount = 0
-    let failureCount = 0
-
-    _fetchOverrideDepth++
-    overrideActiveRef.current = true
-
-    const wrappedFetch = async (...args: Parameters<typeof window.fetch>) => {
-      const startTime = performance.now()
-      requestCount++
-
-      try {
-        const response = await originalFetchRef.current!(...args)
-        const duration = performance.now() - startTime
-
-        const log: NetworkLog = {
-          timestamp: Date.now(),
-          url: args[0] as string,
-          method: 'GET',
-          status: response.status,
-          duration: Math.round(duration),
-        }
-
-        setNetworkLogs(prev => [log, ...prev].slice(0, 100))
-
-        if (!response.ok) {
-          failureCount++
-        }
-
-        setMetrics(prev => ({
-          ...prev,
-          network: {
-            ...prev.network,
-            latency: Math.round(duration),
-            requests: requestCount,
-            failures: failureCount,
-          },
-        }))
-
-        return response
-      } catch (error) {
-        failureCount++
-        throw error
-      }
-    }
-
-    window.fetch = wrappedFetch as typeof window.fetch
-
-    return () => {
-      _fetchOverrideDepth--
-      if (_fetchOverrideDepth <= 0 && originalFetchRef.current) {
-        window.fetch = originalFetchRef.current
-        overrideActiveRef.current = false
-        _fetchOverrideDepth = 0
-      }
-    }
-  }, [enabled])
-
-  // Safety net: always restore original fetch on unmount, even if the component crashed
-  useEffect(() => {
-    return () => {
-      if (overrideActiveRef.current && originalFetchRef.current) {
-        window.fetch = originalFetchRef.current
-        overrideActiveRef.current = false
-        _fetchOverrideDepth = 0
-      }
-    }
   }, [])
 
   // Electron 性能监控

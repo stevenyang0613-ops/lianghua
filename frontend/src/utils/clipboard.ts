@@ -51,6 +51,10 @@ class ClipboardManager {
   async copyImage(imageUrl: string): Promise<boolean> {
     try {
       const response = await fetch(imageUrl)
+      if (!response.ok) {
+        console.error('Failed to fetch image:', response.status)
+        return false
+      }
       const blob = await response.blob()
 
       if (blob.type.startsWith('image/')) {

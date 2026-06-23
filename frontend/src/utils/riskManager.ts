@@ -97,11 +97,13 @@ const DEFAULT_RULES: RiskRule[] = [
 
 // 获取风控规则
 export function getRiskRules(): RiskRule[] {
-  const saved = localStorage.getItem(RISK_RULES_KEY)
-  if (saved) {
-    try { return JSON.parse(saved) } catch { /* fall through */ }
-  }
-  localStorage.setItem(RISK_RULES_KEY, JSON.stringify(DEFAULT_RULES))
+  try {
+    const saved = localStorage.getItem(RISK_RULES_KEY)
+    if (saved) {
+      try { return JSON.parse(saved) } catch { /* fall through */ }
+    }
+    try { localStorage.setItem(RISK_RULES_KEY, JSON.stringify(DEFAULT_RULES)) } catch { /* silent fail */ }
+  } catch { /* localStorage unavailable */ }
   return DEFAULT_RULES
 }
 
@@ -112,13 +114,13 @@ export function updateRiskRule(id: string, updates: Partial<RiskRule>): RiskRule
   if (index === -1) return null
 
   rules[index] = { ...rules[index], ...updates }
-  localStorage.setItem(RISK_RULES_KEY, JSON.stringify(rules))
+  try { localStorage.setItem(RISK_RULES_KEY, JSON.stringify(rules)) } catch { /* silent fail */ }
   return rules[index]
 }
 
 // 重置风控规则
 export function resetRiskRules(): void {
-  localStorage.setItem(RISK_RULES_KEY, JSON.stringify(DEFAULT_RULES))
+  try { localStorage.setItem(RISK_RULES_KEY, JSON.stringify(DEFAULT_RULES)) } catch { /* silent fail */ }
 }
 
 // 检查风控状态
@@ -171,7 +173,7 @@ export function checkRiskStatus(portfolio: PortfolioRisk): RiskStatus {
   })
 
   // 保存更新后的规则
-  localStorage.setItem(RISK_RULES_KEY, JSON.stringify(rules))
+  try { localStorage.setItem(RISK_RULES_KEY, JSON.stringify(rules)) } catch { /* silent fail */ }
 
   // 记录风控历史
   addRiskHistory({
@@ -202,14 +204,16 @@ function addRiskHistory(item: RiskHistoryItem): void {
   if (history.length > 100) {
     history.splice(0, history.length - 100)
   }
-  localStorage.setItem(RISK_HISTORY_KEY, JSON.stringify(history))
+  try { localStorage.setItem(RISK_HISTORY_KEY, JSON.stringify(history)) } catch { /* silent fail */ }
 }
 
 export function getRiskHistory(): RiskHistoryItem[] {
-  const saved = localStorage.getItem(RISK_HISTORY_KEY)
-  if (saved) {
-    try { return JSON.parse(saved) } catch { /* ignore corrupt data */ }
-  }
+  try {
+    const saved = localStorage.getItem(RISK_HISTORY_KEY)
+    if (saved) {
+      try { return JSON.parse(saved) } catch { /* ignore corrupt data */ }
+    }
+  } catch { /* localStorage unavailable */ }
   return []
 }
 

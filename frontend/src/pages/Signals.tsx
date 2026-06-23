@@ -53,7 +53,8 @@ export default function Signals() {
   useEffect(() => { loadingRef.current = loading }, [loading])
 
   const handleWsReconnect = useCallback(() => {
-    refreshWsToken()
+    // 只重连 signals WS，避免 refreshWsToken 同时重置 market 连接
+    signalsWs.reset()
     signalsWs.connect()
   }, [])
 

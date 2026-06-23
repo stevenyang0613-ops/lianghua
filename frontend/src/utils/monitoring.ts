@@ -143,12 +143,15 @@ class MonitoringService {
     // 发送数据
     if (payload.errors.length > 0 || payload.performance.length > 0 || payload.actions.length > 0) {
       try {
-        await fetch(this.endpoint, {
+        const response = await fetch(this.endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           keepalive: true,
         })
+        if (!response.ok) {
+          console.error('[Monitoring] Server returned error:', response.status, response.statusText)
+        }
       } catch (error) {
         console.error('[Monitoring] Failed to flush:', error)
       }
@@ -234,9 +237,12 @@ export function useErrorBoundary() {
 
 /**
  * 追踪 Web Vitals
+ * @returns cleanup 函数，用于 disconnect 所有 PerformanceObserver
  */
-export function trackWebVitals(): void {
-  if (typeof PerformanceObserver === 'undefined') return
+export function trackWebVitals(): (() => void) {
+  if (typeof PerformanceObserver === 'undefined') return () => {}
+
+  const observers: PerformanceObserver[] = []
 
   // LCP
   try {
@@ -250,6 +256,7 @@ export function trackWebVitals(): void {
       })
     })
     lcpObserver.observe({ type: 'largest-contentful-paint', buffered: true })
+    observers.push(lcpObserver)
   } catch (e) {
     // 不支持
   }
@@ -269,6 +276,7 @@ export function trackWebVitals(): void {
       })
     })
     fidObserver.observe({ type: 'first-input', buffered: true })
+    observers.push(fidObserver)
   } catch (e) {
     // 不支持
   }
@@ -290,8 +298,15 @@ export function trackWebVitals(): void {
       })
     })
     clsObserver.observe({ type: 'layout-shift', buffered: true })
+    observers.push(clsObserver)
   } catch (e) {
     // 不支持
+  }
+
+  return () => {
+    observers.forEach(obs => {
+      try { obs.disconnect() } catch { /* ignore */ }
+    })
   }
 }
 

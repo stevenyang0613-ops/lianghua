@@ -60,7 +60,7 @@ const BacktestResultsPanel = memo(function BacktestResultsPanel({
     {
       title: '收益率', dataIndex: 'profit_pct', width: 80,
       render: (v: number) => (
-        <Text style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{fmt(v)}%</Text>
+        <Text style={{ color: v == null ? undefined : (v >= 0 ? '#cf1322' : '#389e0d') }}>{fmt(v)}%</Text>
       ),
     },
     { title: '持有天数', dataIndex: 'hold_days', width: 80 },

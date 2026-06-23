@@ -84,24 +84,28 @@ function openDB(): Promise<IDBDatabase> {
 // 启用离线模式
 export function enableOfflineMode(): void {
   offlineState.enabled = true
-  localStorage.setItem('offline_mode', 'true')
+  try { localStorage.setItem('offline_mode', 'true') } catch { /* silent fail */ }
   console.log('[Offline] Mode enabled')
 }
 
 // 禁用离线模式
 export function disableOfflineMode(): void {
   offlineState.enabled = false
-  localStorage.setItem('offline_mode', 'false')
+  try { localStorage.setItem('offline_mode', 'false') } catch { /* silent fail */ }
   console.log('[Offline] Mode disabled')
 }
 
 // 检查是否处于离线模式
 export function isOfflineMode(): boolean {
-  // Electron 环境下忽略 navigator.onLine（可能误判），只看显式设置
-  if (window.electronAPI?.httpRequest) {
-    return offlineState.enabled || localStorage.getItem('offline_mode') === 'true'
+  try {
+    // Electron 环境下忽略 navigator.onLine（可能误判），只看显式设置
+    if (window.electronAPI?.httpRequest) {
+      return offlineState.enabled || localStorage.getItem('offline_mode') === 'true'
+    }
+    return offlineState.enabled || localStorage.getItem('offline_mode') === 'true' || !navigator.onLine
+  } catch {
+    return offlineState.enabled || !navigator.onLine
   }
-  return offlineState.enabled || localStorage.getItem('offline_mode') === 'true' || !navigator.onLine
 }
 
 // 检查网络状态
@@ -305,6 +309,9 @@ async function executePreload(): Promise<void> {
   }
 }
 
+// Debounced cache_time update to avoid localStorage hammering during batch saves
+let _cacheTimeTimer: ReturnType<typeof setTimeout> | null = null
+
 // 保存数据到缓存
 export async function saveToCache(key: string, data: unknown, ttlMs: number = 24 * 60 * 60 * 1000): Promise<void> {
   try {
@@ -321,14 +328,16 @@ export async function saveToCache(key: string, data: unknown, ttlMs: number = 24
 
     store.put(entry)
 
-    // 仅将 cache_time 写入 localStorage（轻量），
-    // 避免每支债券都写 cache_${key} 造成高频同步 I/O 压力。
-    // IndexedDB 已作为持久层，无需 localStorage 冗余备份。
-    try {
-      localStorage.setItem('cache_time', new Date().toLocaleString('zh-CN'))
-    } catch {
-      // localStorage 可能满了
-    }
+    // Debounce cache_time localStorage write (500ms) to reduce sync I/O under batch saves
+    if (_cacheTimeTimer) clearTimeout(_cacheTimeTimer)
+    _cacheTimeTimer = setTimeout(() => {
+      _cacheTimeTimer = null
+      try {
+        localStorage.setItem('cache_time', new Date().toLocaleString('zh-CN'))
+      } catch {
+        // localStorage may be full
+      }
+    }, 500)
   } catch (error) {
     console.error('[Cache] Failed to save:', error)
   }
@@ -384,16 +393,22 @@ export async function getCacheEntry(key: string): Promise<{ timestamp: number; e
 
 // 迁移并清理旧 localStorage 缓存条目
 export async function migrateLocalStorageCache(): Promise<void> {
-  const keysToRemove: string[] = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    if (key?.startsWith('cache_')) {
-      keysToRemove.push(key)
+  try {
+    const keysToRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key?.startsWith('cache_')) {
+        keysToRemove.push(key)
+      }
     }
-  }
-  keysToRemove.forEach(key => localStorage.removeItem(key))
-  if (keysToRemove.length > 0) {
-    console.log(`[Cache] Migrated ${keysToRemove.length} localStorage cache entries to IndexedDB`)
+    keysToRemove.forEach(key => {
+      try { localStorage.removeItem(key) } catch { /* silent fail */ }
+    })
+    if (keysToRemove.length > 0) {
+      console.log(`[Cache] Migrated ${keysToRemove.length} localStorage cache entries to IndexedDB`)
+    }
+  } catch {
+    // localStorage may be unavailable
   }
 }
 
@@ -431,13 +446,16 @@ export async function getCacheStats(): Promise<{ count: number; oldestTime: stri
     return new Promise((resolve) => {
       countRequest.onsuccess = () => {
         const count = countRequest.result
-        const oldestTime = localStorage.getItem('cache_time')
+        let oldestTime: string | null = null
+        try { oldestTime = localStorage.getItem('cache_time') } catch { /* localStorage unavailable */ }
         resolve({ count, oldestTime })
       }
       countRequest.onerror = () => resolve({ count: 0, oldestTime: null })
     })
   } catch {
-    return { count: 0, oldestTime: localStorage.getItem('cache_time') }
+    let oldestTime: string | null = null
+    try { oldestTime = localStorage.getItem('cache_time') } catch { /* localStorage unavailable */ }
+    return { count: 0, oldestTime }
   }
 }
 
@@ -457,8 +475,10 @@ export async function clearAllCache(): Promise<void> {
         keysToRemove.push(key)
       }
     }
-    keysToRemove.forEach(key => localStorage.removeItem(key))
-    localStorage.removeItem('cache_time')
+    for (const key of keysToRemove) {
+      try { localStorage.removeItem(key) } catch { /* silent fail */ }
+    }
+    try { localStorage.removeItem('cache_time') } catch { /* silent fail */ }
   } catch (error) {
     console.error('[Cache] Failed to clear all:', error)
   }
@@ -528,7 +548,11 @@ export async function warmupCache(): Promise<{ success: boolean; loadedKeys: str
   const result = { success: true, loadedKeys: [] as string[], errors: [] as string[] }
 
   // 检查是否启用预热
-  if (localStorage.getItem('preload_data') !== 'true') {
+  try {
+    if (localStorage.getItem('preload_data') !== 'true') {
+      return result
+    }
+  } catch {
     return result
   }
 

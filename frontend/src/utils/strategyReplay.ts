@@ -45,6 +45,7 @@ class StrategyReplayEngine {
   private stateListeners: Set<(state: ReplayState) => void> = new Set()
 
   loadSteps(steps: ReplayStep[]): void {
+    this.stop() // 先停止播放，避免旧 interval 继续运行
     this.steps = steps
     this.currentIndex = 0
     this.notifyStateListeners()
@@ -152,6 +153,14 @@ class StrategyReplayEngine {
     this.stateListeners.forEach(l => l(state))
   }
 
+  destroy(): void {
+    this.stop()
+    this.listeners.clear()
+    this.stateListeners.clear()
+    this.steps = []
+    this.currentIndex = 0
+  }
+
   // 导出回放记录
   exportReplay(): string {
     return JSON.stringify({
@@ -213,6 +222,70 @@ export function generateMockReplayData(config: ReplayConfig): ReplayStep[] {
 
   let step = 0
 
+  // 策略信号理由映射
+  const strategySignals: Record<string, { buy: string[]; sell: string[] }> = {
+    macd_cross: {
+      buy: ['MACD金叉，买入信号'],
+      sell: ['MACD死叉，止盈卖出'],
+    },
+    ma_cross: {
+      buy: ['均线多头排列，买入信号'],
+      sell: ['均线死叉，止盈卖出'],
+    },
+    rsi_reversal: {
+      buy: ['RSI超卖反转，买入信号'],
+      sell: ['RSI超买反转，止盈卖出'],
+    },
+    bollinger: {
+      buy: ['触及布林带下轨，买入信号'],
+      sell: ['触及布林带上轨，止盈卖出'],
+    },
+    xuanji_twelve_factor: {
+      buy: [
+        '十二因子综合评分进入前20，买入',
+        'ICIR动态加权得分排名前20，买入',
+        '行业中性分层后评分提升，买入',
+        '波动率管理信号触发，买入',
+      ],
+      sell: [
+        '十二因子评分跌出前40，止盈卖出',
+        '追踪止损触发(-5%)，卖出',
+        '一票否决制触发，风险卖出',
+        '缓冲带观察期满，轮换卖出',
+      ],
+    },
+    xibu_seven_dimension: {
+      buy: [
+        '七维打分进入前15，买入',
+        '正股维度评分提升，买入',
+        '转债自身评分进入前20，买入',
+        '市场环境牛市，动态加仓',
+      ],
+      sell: [
+        '七维打分跌出前30，止盈卖出',
+        '一票否决触发(信用不达标)，卖出',
+        '缓冲带机制轮换，卖出',
+        '市场环境转熊，动态减仓',
+      ],
+    },
+    fusion_strategy: {
+      buy: [
+        '璇玑×西部共识最强，交集买入',
+        '双策略同时入选前20，买入',
+        '西部风控通过+璇玑高分，买入',
+        '共识增强信号，加仓',
+      ],
+      sell: [
+        '共识减弱，跌出交集，卖出',
+        '璇玑或西部任一策略退出，卖出',
+        '追踪止损触发，融合卖出',
+        '缓冲带轮换期满，卖出',
+      ],
+    },
+  }
+
+  const signals = strategySignals[config.strategy] || strategySignals.macd_cross
+
   while (currentDate <= endDate) {
     const price = 100 + Math.random() * 50
     const action: 'buy' | 'sell' | 'hold' = Math.random() > 0.8 ? (Math.random() > 0.5 ? 'buy' : 'sell') : 'hold'
@@ -234,6 +307,9 @@ export function generateMockReplayData(config: ReplayConfig): ReplayStep[] {
     const profit = totalValue - config.initialCash
     const profitPct = (profit / config.initialCash) * 100
 
+    const buyReason = signals.buy[Math.floor(Math.random() * signals.buy.length)]
+    const sellReason = signals.sell[Math.floor(Math.random() * signals.sell.length)]
+
     steps.push({
       step: step++,
       date: currentDate.toISOString().slice(0, 10),
@@ -247,7 +323,7 @@ export function generateMockReplayData(config: ReplayConfig): ReplayStep[] {
       totalValue: Math.round(totalValue * 100) / 100,
       profit: Math.round(profit * 100) / 100,
       profitPct: Math.round(profitPct * 100) / 100,
-      reason: action === 'buy' ? 'MACD金叉，买入信号' : action === 'sell' ? '止盈卖出' : '',
+      reason: action === 'buy' ? buyReason : action === 'sell' ? sellReason : '',
       indicators: {
         MA5: price * (0.98 + Math.random() * 0.04),
         MA10: price * (0.95 + Math.random() * 0.1),

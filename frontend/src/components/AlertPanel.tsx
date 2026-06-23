@@ -82,6 +82,7 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
         if (result.ok) setAlerts(result.data?.alerts || [])
       } else {
         const resp = await fetch(`${baseUrl}/api/v1/alerts`)
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         const data = await resp.json()
         setAlerts(data.alerts || [])
       }
@@ -96,7 +97,7 @@ export default function AlertPanel({ visible, onClose, selectedCode, selectedNam
       setLoading(true)
 
       const alert: AlertCondition = {
-        code: values.code,
+        code: String(values.code),
         name: values.name || '',
         alert_type: values.alert_type,
         threshold: values.threshold,

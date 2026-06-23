@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { fetchExchangeableBonds } from '../services/api'
+import type { ConvertibleQuote } from '../types'
 
 interface ExchangeableState {
-  data: any[]
+  data: ConvertibleQuote[]
   total: number
   loading: boolean
   loadedAt: number

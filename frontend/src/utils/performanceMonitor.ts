@@ -31,10 +31,12 @@ let config: PerformanceConfig = loadConfig()
 let records: PerformanceRecord[] = loadRecords()
 
 function loadConfig(): PerformanceConfig {
-  const saved = localStorage.getItem(CONFIG_KEY)
-  if (saved) {
-    try { return JSON.parse(saved) } catch { /* fall through */ }
-  }
+  try {
+    const saved = localStorage.getItem(CONFIG_KEY)
+    if (saved) {
+      try { return JSON.parse(saved) } catch { /* fall through */ }
+    }
+  } catch { /* localStorage unavailable */ }
   return {
     warningThreshold: DEFAULT_THRESHOLDS.warning,
     criticalThreshold: DEFAULT_THRESHOLDS.critical,
@@ -45,14 +47,16 @@ function loadConfig(): PerformanceConfig {
 }
 
 function saveConfig(): void {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)) } catch { /* silent fail */ }
 }
 
 function loadRecords(): PerformanceRecord[] {
-  const saved = localStorage.getItem(RECORDS_KEY)
-  if (saved) {
-    try { return JSON.parse(saved) } catch { /* fall through */ }
-  }
+  try {
+    const saved = localStorage.getItem(RECORDS_KEY)
+    if (saved) {
+      try { return JSON.parse(saved) } catch { /* fall through */ }
+    }
+  } catch { /* localStorage unavailable */ }
   return []
 }
 
@@ -64,7 +68,7 @@ function saveRecords(): void {
   // Debounce localStorage writes to avoid performance issues with high-frequency API calls
   if (saveRecordsTimer) clearTimeout(saveRecordsTimer)
   saveRecordsTimer = setTimeout(() => {
-    localStorage.setItem(RECORDS_KEY, JSON.stringify(records))
+    try { localStorage.setItem(RECORDS_KEY, JSON.stringify(records)) } catch { /* silent fail */ }
     saveRecordsTimer = null
   }, 500)
 }
@@ -172,7 +176,7 @@ async function sendNotification(title: string, body: string): Promise<void> {
 // 清除记录
 export function clearRecords(): void {
   records = []
-  localStorage.removeItem(RECORDS_KEY)
+  try { localStorage.removeItem(RECORDS_KEY) } catch { /* silent fail */ }
 }
 
 // 导出报告
@@ -187,6 +191,19 @@ export function exportReport(): string {
   return JSON.stringify(report, null, 2)
 }
 
+export function destroyPerformanceMonitor(): void {
+  if (saveRecordsTimer) {
+    clearTimeout(saveRecordsTimer)
+    saveRecordsTimer = null
+  }
+  // Flush any pending records
+  if (records.length > 0) {
+    try {
+      localStorage.setItem(RECORDS_KEY, JSON.stringify(records.slice(-100)))
+    } catch { /* ignore */ }
+  }
+}
+
 export default {
   getConfig,
   updateConfig,
@@ -196,4 +213,5 @@ export default {
   withPerformanceTracking,
   clearRecords,
   exportReport,
+  destroyPerformanceMonitor,
 }

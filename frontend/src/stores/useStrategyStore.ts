@@ -14,7 +14,7 @@ interface StrategyState {
   statsLoadedAt: number
 
   loadStrategies: () => Promise<void>
-  selectStrategy: (strategy: StrategyInfo) => void
+  selectStrategy: (strategy: StrategyInfo) => Promise<void>
   loadSignalHistory: (strategyId: string, limit?: number) => Promise<void>
   loadStats: () => Promise<void>
   invalidate: () => void
@@ -44,15 +44,16 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       const list = await fetchStrategies()
       const selected = state.selectedStrategy || (list.length > 0 ? list[0] : null)
       set({ strategies: list, selectedStrategy: selected, loading: false, loadedAt: Date.now() })
-    } catch {
+    } catch (e) {
+      console.error('[StrategyStore] loadStrategies failed:', e)
       set({ loading: false })
     }
   },
 
-  selectStrategy: (strategy) => {
+  selectStrategy: async (strategy) => {
     set({ selectedStrategy: strategy })
     // Load history for the selected strategy
-    get().loadSignalHistory(strategy.id, 50)
+    await get().loadSignalHistory(strategy.id, 50)
   },
 
   loadSignalHistory: async (strategyId, limit = 50) => {
@@ -60,7 +61,8 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     try {
       const data = await fetchSignalHistory(strategyId, undefined, limit)
       set({ signalHistory: data.signals || [], signalHistoryLoading: false })
-    } catch {
+    } catch (e) {
+      console.error('[StrategyStore] loadSignalHistory failed:', e)
       set({ signalHistoryLoading: false })
     }
   },
@@ -71,7 +73,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     try {
       const data = await fetchSignalStats()
       set({ signalStats: data, statsLoadedAt: Date.now() })
-    } catch { /* non-critical */ }
+    } catch (e) { console.error('[StrategyStore] loadStats failed:', e) }
   },
 
   invalidate: () => {

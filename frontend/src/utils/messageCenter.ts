@@ -66,7 +66,10 @@ export function getMessages(options?: {
   starred?: boolean
   limit?: number
 }): Message[] {
-  const saved = localStorage.getItem(MESSAGES_KEY)
+  let saved = null
+  try {
+    saved = localStorage.getItem(MESSAGES_KEY)
+  } catch { /* localStorage unavailable */ }
   let messages: Message[] = safeJsonParse<Message[]>(saved, [])
   if (messages.length === 0) {
     // Seed default messages on first use so the UI is never empty
@@ -202,7 +205,9 @@ export function deleteMessage(id: string): boolean {
   const filtered = messages.filter(m => m.id !== id)
   if (filtered.length === messages.length) return false
 
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(filtered))
+  try {
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(filtered))
+  } catch { /* localStorage unavailable */ }
   return true
 }
 
@@ -212,7 +217,9 @@ export function clearMessages(type?: Message['type']): number {
   const filtered = type ? messages.filter(m => m.type !== type) : []
   const removed = messages.length - filtered.length
 
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(filtered))
+  try {
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(filtered))
+  } catch { /* localStorage unavailable */ }
   return removed
 }
 

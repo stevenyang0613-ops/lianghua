@@ -40,6 +40,12 @@ class PrefetchManager {
    * 注册预取规则
    */
   registerRule(rule: PrefetchRule): void {
+    // Guard: dedupe by rule pattern string
+    const patternStr = rule.pattern instanceof RegExp ? rule.pattern.source : rule.pattern
+    const exists = this.rules.some(
+      r => (r.pattern instanceof RegExp ? r.pattern.source : r.pattern) === patternStr
+    )
+    if (exists) return
     this.rules.push(rule)
   }
 

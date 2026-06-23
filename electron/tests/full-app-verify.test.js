@@ -1,11 +1,14 @@
 const http=require('http');const fs=require('fs');const path=require('path');const{spawn}=require('child_process')
 const P='\x1b[32mPASS\x1b[0m',F='\x1b[31mFAIL\x1b[0m';let p=0,f=0
 function a(c,m){if(c){console.log(`  ${P} ${m}`);p++}else{console.log(`  ${F} ${m}`);f++}}
-const APP='/Users/stevenyang/Desktop/LiangHua.app'
+const APP=process.env.LIANGHUA_APP_PATH || path.join(__dirname, '..', '..', 'release', 'mac', 'LiangHua.app')
 const R=path.join(APP,'Contents','Resources')
 async function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 async function healthCheck(port){try{return await new Promise((resolve)=>{http.get(`http://127.0.0.1:${port}/api/v1/health`,(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>resolve(JSON.parse(d)))}).on('error',()=>resolve(null))})}catch{return null}}
-async function run(){console.log('\n=== TDD: 完整 App 启动验证 ===')
+async function run(){
+// Skip if app not built
+if(!fs.existsSync(APP)){console.log(`\n=== TDD: 完整 App 启动验证 (SKIPPED: ${APP} not found) ===`);console.log(`设置 LIANGHUA_APP_PATH 环境变量指向已打包的 .app 路径`);return}
+console.log('\n=== TDD: 完整 App 启动验证 ===')
 console.log('\n[测试1] App 结构完整性')
 a(fs.existsSync(path.join(R,'frontend','index.html')),'frontend/index.html 存在')
 a(fs.existsSync(path.join(R,'backend','dist','lianghua-backend')),'backend/dist/lianghua-backend 存在')

@@ -60,8 +60,10 @@ function shouldReportError(fingerprint: string): boolean {
 }
 
 let _errorDedupInterval: ReturnType<typeof setInterval> | null = null
+let _errorDedupRefCount = 0
 
 function startErrorDedupCleanup() {
+  _errorDedupRefCount++
   if (_errorDedupInterval) return
   _errorDedupInterval = setInterval(() => {
     const now = Date.now()
@@ -74,9 +76,11 @@ function startErrorDedupCleanup() {
 }
 
 function stopErrorDedupCleanup() {
-  if (_errorDedupInterval) {
+  _errorDedupRefCount--
+  if (_errorDedupRefCount <= 0 && _errorDedupInterval) {
     clearInterval(_errorDedupInterval)
     _errorDedupInterval = null
+    _errorDedupRefCount = 0
   }
 }
 // DEPRECATED: This global singleton guard is no longer used.
@@ -98,6 +102,7 @@ export { setupRejectionGuard }
 
 export default class ErrorBoundary extends Component<Props, State> {
   private rejectionHandler: ((event: PromiseRejectionEvent) => void) | null = null
+  private hashChangeHandler: (() => void) | null = null
 
   constructor(props: Props) {
     super(props)
@@ -118,6 +123,19 @@ export default class ErrorBoundary extends Component<Props, State> {
       event.preventDefault()
     }
     window.addEventListener('unhandledrejection', this.rejectionHandler)
+
+    // 监听 hash 路由变化，路由切换时自动重置错误状态（确保用户切到其他页面再回来看到的是正常页面）
+    let lastHash = window.location.hash
+    this.hashChangeHandler = () => {
+      if (window.location.hash !== lastHash) {
+        lastHash = window.location.hash
+        // 路由变化时重置错误状态（但保留 retryCount 以防无限循环）
+        if (this.state.hasError) {
+          this.setState({ hasError: false, error: null, errorInfo: null })
+        }
+      }
+    }
+    window.addEventListener('hashchange', this.hashChangeHandler)
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -191,8 +209,17 @@ export default class ErrorBoundary extends Component<Props, State> {
       if (navigator.onLine) {
         // 发送到后端 /api/v1/logs/report
         try {
+          const port = window.location.port || '8765'
+          const reportUrl = `http://localhost:${port}/api/v1/logs/report`
+          // 验证 URL 合法性，避免 file:// 等场景下构造无效地址
+          try {
+            new URL(reportUrl)
+          } catch {
+            console.warn('[ErrorBoundary] Invalid report URL, skipping:', reportUrl)
+            return
+          }
           if (window.electronAPI?.httpRequest) {
-            await window.electronAPI.httpRequest('POST', `http://localhost:${window.location.port || 8765}/api/v1/logs/report`, errorReport)
+            await window.electronAPI.httpRequest('POST', reportUrl, errorReport)
           } else {
             fetch('/api/v1/logs/report', {
               method: 'POST',
@@ -215,7 +242,12 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   handleGoHome = (): void => {
-    window.location.href = '/'
+    // 使用 HashRouter 正确的首页路径，避免 hash 导航异常
+    window.location.hash = '#'
+    // 如果已有 hash 路由，先清除再导航到根路径，确保 React Router 正确匹配
+    if (window.location.hash !== '#') {
+      window.location.hash = '#'
+    }
   }
 
   handleRetry = (): void => {
@@ -252,6 +284,11 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.rejectionHandler) {
       window.removeEventListener('unhandledrejection', this.rejectionHandler)
       this.rejectionHandler = null
+    }
+    // 清理 hashchange 监听器
+    if (this.hashChangeHandler) {
+      window.removeEventListener('hashchange', this.hashChangeHandler)
+      this.hashChangeHandler = null
     }
     stopErrorDedupCleanup()
   }

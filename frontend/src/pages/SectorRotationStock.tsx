@@ -360,7 +360,11 @@ export default function SectorRotationStock() {
       const horizonLabel = horizon==='short_term'?'短期(1周内)':horizon==='mid_term'?'中期(2周)':'长期(1月)'
       const question = '请用2-3句简洁中文分析"'+industry+'"行业在'+horizonLabel+'的投资机会和风险。'
       const resp = await fetchAIInsight({type:'market',context:{industry,horizon,metrics},question,language:'zh'})
-      const text = resp.summary || (resp.insights||[]).join('；') || (resp.recommendations||[]).join('；') || JSON.stringify(resp)
+      // 合并 summary + insights + recommendations，结构更完整
+      const parts: string[] = [resp.summary || '']
+      if (resp.insights?.length) parts.push(resp.insights.join('；'))
+      if (resp.recommendations?.length) parts.push(resp.recommendations.join('；'))
+      const text = parts.filter(Boolean).join(' | ')
       setAiInsight(prev=>({...prev,[key]:text}))
     }catch(e:any){setAiInsight(prev=>({...prev,[key]:'AI解读暂不可用: '+e.message}))}
     finally{setAiLoading(null)}
@@ -593,7 +597,7 @@ export default function SectorRotationStock() {
   // 5. Fund flow chart — prefer AKShare industry fund flow API data
   const flowChartOption=useMemo(()=>{
     // Use industry fund flow API data if available (real-time from 东方财富)
-    if(industryFundFlowData && industryFundFlowData.industries.length>0){
+    if(industryFundFlowData && industryFundFlowData.industries?.length>0){
       const top=[...industryFundFlowData.industries].sort((a,b)=>Math.abs(b.net_inflow??0)-Math.abs(a.net_inflow??0)).slice(0,15)
       return {
         tooltip:{trigger:'axis',valueFormatter:(v:any)=>{const val=v?.value??v;return fmtFlow(typeof val==='number'?val:0)}},
@@ -618,7 +622,7 @@ export default function SectorRotationStock() {
   // 6. Super/Big flow breakdown — prefer AKShare main fund flow API
   const flowBreakdownOption=useMemo(()=>{
     // Use industry fund flow API data if available
-    if(industryFundFlowData && industryFundFlowData.industries.length>0){
+    if(industryFundFlowData && industryFundFlowData.industries?.length>0){
       const top=[...industryFundFlowData.industries].sort((a,b)=>Math.abs(b.net_inflow??0)-Math.abs(a.net_inflow??0)).slice(0,12)
       return {
         tooltip:{trigger:'axis',valueFormatter:(v:any)=>fmtFlow(v)},
@@ -648,7 +652,7 @@ export default function SectorRotationStock() {
 
   // 6b. Main fund flow chart (主力资金拆分 — 超大单/大单/中单/小单)
   const mainFundFlowChartOption=useMemo(()=>{
-    if(!mainFundFlowData || mainFundFlowData.stocks.length===0) return null
+    if(!mainFundFlowData || mainFundFlowData.stocks?.length===0) return null
     const top20=mainFundFlowData.stocks.slice(0,20)
     const isEstimated = mainFundFlowData.stocks[0]?.is_estimated !== false
     const subtext = isEstimated ? '数据源: 东方财富 (比例估算)' : '数据源: 东方财富 (真实拆分)'
@@ -671,7 +675,7 @@ export default function SectorRotationStock() {
   // 7. Turnover rate chart — prefer AKShare individual fund flow API
   const turnoverChartOption=useMemo(()=>{
     // Use turnover rank API data if available (individual stock level)
-    if(turnoverRankData && turnoverRankData.stocks.length>0){
+    if(turnoverRankData && turnoverRankData.stocks?.length>0){
       const top=turnoverRankData.stocks.slice(0,25)
       return {
         tooltip:{trigger:'axis',valueFormatter:(v:any)=>v+'%'},
@@ -1282,7 +1286,7 @@ export default function SectorRotationStock() {
                   </Card>
                 </Col>
               </Row>
-              {individualFundFlowData && individualFundFlowData.stocks.length>0 && (
+              {individualFundFlowData && individualFundFlowData.stocks?.length>0 && (
               <Row gutter={[12,12]}>
                 <Col span={24}>
                   <Card size='small' title={<span><StockOutlined/> 个股资金流向 TOP100 <Tag color='blue'>东方财富</Tag></span>} extra={<Button size='small' icon={<ReloadOutlined/>} loading={individualFundFlowLoading} onClick={loadIndividualFundFlow}>刷新</Button>} styles={{body:{padding:0}}}>
@@ -1303,7 +1307,7 @@ export default function SectorRotationStock() {
                 </Col>
               </Row>
               )}
-              {hsgtFundFlowData && hsgtFundFlowData.flows.length>0 && (
+              {hsgtFundFlowData && hsgtFundFlowData.flows?.length>0 && (
               <Row gutter={[12,12]}>
                 <Col span={24}>
                   <Card size='small' title={<span><BankOutlined/> 沪深港通资金流向 <Tag color='green'>实时</Tag></span>} extra={<Button size='small' icon={<ReloadOutlined/>} loading={hsgtFundFlowLoading} onClick={loadHsgtFundFlow}>刷新</Button>} styles={{body:{padding:0}}}>

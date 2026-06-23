@@ -238,29 +238,35 @@ export function printTable<T extends Record<string, unknown>>(
   columns: Array<{ key: string; title: string; render?: (value: unknown, row: T) => string }>,
   options: PrintOptions = {}
 ): void {
-  const tableHtml = `
-<table>
-  <thead>
-    <tr>
-      ${columns.map(col => `<th>${col.title}</th>`).join('')}
-    </tr>
-  </thead>
-  <tbody>
-    ${data.map(row => `
-      <tr>
-        ${columns.map(col => {
-          const value = row[col.key]
-          const displayValue = col.render ? col.render(value, row) : String(value ?? '')
-          return `<td>${displayValue}</td>`
-        }).join('')}
-      </tr>
-    `).join('')}
-  </tbody>
-</table>
-`
+  // 使用 DOM API 构建表格，避免 innerHTML 带来的 XSS 风险
+  const table = document.createElement('table')
+
+  const thead = document.createElement('thead')
+  const headerRow = document.createElement('tr')
+  for (const col of columns) {
+    const th = document.createElement('th')
+    th.textContent = col.title
+    headerRow.appendChild(th)
+  }
+  thead.appendChild(headerRow)
+  table.appendChild(thead)
+
+  const tbody = document.createElement('tbody')
+  for (const row of data) {
+    const tr = document.createElement('tr')
+    for (const col of columns) {
+      const value = row[col.key]
+      const displayValue = col.render ? col.render(value, row) : String(value ?? '')
+      const td = document.createElement('td')
+      td.textContent = displayValue
+      tr.appendChild(td)
+    }
+    tbody.appendChild(tr)
+  }
+  table.appendChild(tbody)
 
   const container = document.createElement('div')
-  container.innerHTML = tableHtml
+  container.appendChild(table)
   document.body.appendChild(container)
 
   printElement(container, options).finally(() => {

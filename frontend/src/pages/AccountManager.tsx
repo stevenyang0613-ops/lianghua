@@ -124,27 +124,31 @@ export default function AccountManager() {
       title: '总资产',
       dataIndex: 'balance',
       width: 120,
-      render: (v: number, record) => `¥${((v ?? 0) + (record.marketValue ?? 0)).toLocaleString()}`,
+      render: (v: number, record) => {
+        const balance = v ?? 0
+        const mv = record.marketValue ?? 0
+        return `¥${(balance + mv).toLocaleString()}`
+      },
     },
     {
       title: '可用资金',
       dataIndex: 'available',
       width: 120,
-      render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
+      render: (v: number) => `¥${v == null ? '-' : v.toLocaleString()}`,
     },
     {
       title: '市值',
       dataIndex: 'marketValue',
       width: 120,
-      render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
+      render: (v: number) => `¥${v == null ? '-' : v.toLocaleString()}`,
     },
     {
       title: '今日盈亏',
       dataIndex: 'todayProfit',
       width: 100,
       render: (v: number) => (
-        <Text style={{ color: (v ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
-          {(v ?? 0) >= 0 ? '+' : ''}¥{(v ?? 0).toLocaleString()}
+        <Text style={{ color: v == null ? undefined : (v >= 0 ? '#52c41a' : '#ff4d4f') }}>
+          {v == null ? '-' : (v >= 0 ? '+' : '')}¥{v == null ? '-' : v.toLocaleString()}
         </Text>
       ),
     },

@@ -20,7 +20,7 @@ export interface SyncStatus {
 }
 
 const syncStatus: SyncStatus = {
-  lastSyncTime: localStorage.getItem(LAST_SYNC_KEY),
+  lastSyncTime: (() => { try { return localStorage.getItem(LAST_SYNC_KEY) } catch { return null } })(),
   nextSyncTime: null,
   isRunning: false,
   error: null,
@@ -43,12 +43,14 @@ export function getSyncStatus(): SyncStatus {
 }
 
 export function getSyncInterval(): number {
-  const saved = localStorage.getItem(SYNC_INTERVAL_KEY)
-  return saved ? parseInt(saved, 10) : 5 * 60 * 1000 // 默认5分钟
+  let saved: string | null = null
+  try { saved = localStorage.getItem(SYNC_INTERVAL_KEY) } catch { /* localStorage unavailable */ }
+  const parsed = saved ? parseInt(saved, 10) : 5 * 60 * 1000
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60 * 1000
 }
 
 export function setSyncInterval(intervalMs: number): void {
-  localStorage.setItem(SYNC_INTERVAL_KEY, String(intervalMs))
+  try { localStorage.setItem(SYNC_INTERVAL_KEY, String(intervalMs)) } catch { /* silent fail */ }
   if (syncTimer) {
     stopBackgroundSync()
     startBackgroundSync()
@@ -56,7 +58,7 @@ export function setSyncInterval(intervalMs: number): void {
 }
 
 export function isAutoSyncEnabled(): boolean {
-  return localStorage.getItem(AUTO_SYNC_KEY) === 'true'
+  try { return localStorage.getItem(AUTO_SYNC_KEY) === 'true' } catch { return false }
 }
 
 async function performSync(): Promise<void> {
@@ -69,8 +71,10 @@ async function performSync(): Promise<void> {
   try {
     await fetchAllQuotes()
     const now = new Date().toLocaleString('zh-CN')
-    localStorage.setItem(LAST_SYNC_KEY, now)
-    localStorage.setItem('cache_time', now)
+    try {
+      localStorage.setItem(LAST_SYNC_KEY, now)
+      localStorage.setItem('cache_time', now)
+    } catch { /* localStorage unavailable, sync status kept in memory */ }
 
     syncStatus.lastSyncTime = now
     syncStatus.error = null

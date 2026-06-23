@@ -64,6 +64,7 @@ export class LogCollector {
   private userId: string | null = null
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private categories: Map<string, { count: number; lastLog: number }> = new Map()
+  private _beforeunloadHandler: (() => void) | null = null
 
   constructor() {
     this.sessionId = this.generateSessionId()
@@ -276,7 +277,7 @@ export class LogCollector {
     this.categories.clear()
 
     if (this.config.enableStorage) {
-      localStorage.removeItem(this.config.storageKey)
+      try { localStorage.removeItem(this.config.storageKey) } catch { /* silent fail */ }
     }
   }
 
@@ -385,7 +386,7 @@ export class LogCollector {
       // 存储空间不足，清理旧日志
       console.warn('[LogCollector] Storage full, clearing old logs')
       const reduced = logs.slice(0, Math.floor(this.config.maxStorageSize / 2))
-      localStorage.setItem(this.config.storageKey, JSON.stringify(reduced))
+      try { localStorage.setItem(this.config.storageKey, JSON.stringify(reduced)) } catch { /* silent fail */ }
     }
   }
 
@@ -435,9 +436,16 @@ export class LogCollector {
   private setupGlobalHandlers(): void {
     // Note: global error/unhandledrejection listeners are managed by errorLogger.ts
     // to avoid duplicate registration. We only handle beforeunload here.
-    window.addEventListener('beforeunload', () => {
-      this.flush()
-    })
+    this._beforeunloadHandler = () => { this.flush() }
+    window.addEventListener('beforeunload', this._beforeunloadHandler)
+  }
+
+  destroy(): void {
+    this.stopFlushTimer()
+    if (this._beforeunloadHandler) {
+      window.removeEventListener('beforeunload', this._beforeunloadHandler)
+      this._beforeunloadHandler = null
+    }
   }
 }
 

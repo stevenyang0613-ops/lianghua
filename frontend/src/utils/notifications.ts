@@ -72,6 +72,7 @@ class NotificationService {
   private notificationQueue: NotificationOptions[] = []
   private audioEnabled = true
   private audioSrc = '/notification.mp3'
+  private _audioInstances = new Set<HTMLAudioElement>()
 
   async init(): Promise<void> {
     if (!('Notification' in window)) {
@@ -97,25 +98,29 @@ class NotificationService {
   }
 
   private loadSettings(): void {
-    const saved = localStorage.getItem('notification_settings')
-    if (saved) {
-      try {
-        const settings = JSON.parse(saved)
-        this.enabled = settings.enabled ?? true
-        this.audioEnabled = settings.audioEnabled ?? true
-      } catch {
-        console.warn('[Notifications] Corrupted settings, using defaults')
+    try {
+      const saved = localStorage.getItem('notification_settings')
+      if (saved) {
+        try {
+          const settings = JSON.parse(saved)
+          this.enabled = settings.enabled ?? true
+          this.audioEnabled = settings.audioEnabled ?? true
+        } catch {
+          console.warn('[Notifications] Corrupted settings, using defaults')
+        }
       }
-    }
+    } catch { /* localStorage unavailable */ }
   }
 
   saveSettings(settings: { enabled?: boolean; audioEnabled?: boolean }): void {
     this.enabled = settings.enabled ?? this.enabled
     this.audioEnabled = settings.audioEnabled ?? this.audioEnabled
-    localStorage.setItem('notification_settings', JSON.stringify({
-      enabled: this.enabled,
-      audioEnabled: this.audioEnabled,
-    }))
+    try {
+      localStorage.setItem('notification_settings', JSON.stringify({
+        enabled: this.enabled,
+        audioEnabled: this.audioEnabled,
+      }))
+    } catch { /* silent fail */ }
   }
 
   show(options: NotificationOptions): Notification | null {
@@ -178,11 +183,26 @@ class NotificationService {
 
     try {
       const audio = new Audio(this.audioSrc)
+      this._audioInstances.add(audio)
       audio.volume = 0.5
       audio.play().catch(() => {})
+      // 播放结束后自动清理引用
+      audio.addEventListener('ended', () => this._audioInstances.delete(audio))
     } catch {
       // Ignore audio errors
     }
+  }
+
+  destroy(): void {
+    // 停止并清理所有音频实例
+    this._audioInstances.forEach(audio => {
+      try {
+        audio.pause()
+        audio.src = ''
+      } catch { /* ignore */ }
+    })
+    this._audioInstances.clear()
+    this.notificationQueue = []
   }
 
   // 交易信号通知

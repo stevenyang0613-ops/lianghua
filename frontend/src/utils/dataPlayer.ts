@@ -180,6 +180,14 @@ class DataPlayerEngine {
     const state = this.getState()
     this.stateListeners.forEach(l => l(state))
   }
+
+  destroy(): void {
+    this.stop()
+    this.listeners.clear()
+    this.stateListeners.clear()
+    this.frames = []
+    this.currentIndex = 0
+  }
 }
 
 export const dataPlayer = new DataPlayerEngine()

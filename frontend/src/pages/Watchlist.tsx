@@ -59,10 +59,10 @@ export default function Watchlist() {
       dataIndex: 'change_pct',
       key: 'change_pct',
       width: 90,
-      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.change_pct ?? 0) - (b.change_pct ?? 0),
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.change_pct ?? -Infinity) - (b.change_pct ?? -Infinity),
       render: (v: number) => (
-        <Tag color={(v ?? 0) > 0 ? 'red' : (v ?? 0) < 0 ? 'green' : undefined}>
-          {(v ?? 0) > 0 ? '+' : ''}{fmt(v)}%
+        <Tag color={v == null ? undefined : (v > 0 ? 'red' : v < 0 ? 'green' : undefined)}>
+          {v == null ? '' : (v > 0 ? '+' : '')}{fmt(v)}%
         </Tag>
       ),
     },
@@ -71,7 +71,7 @@ export default function Watchlist() {
       dataIndex: 'premium_ratio',
       key: 'premium_ratio',
       width: 90,
-      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.premium_ratio ?? 0) - (b.premium_ratio ?? 0),
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.premium_ratio ?? -Infinity) - (b.premium_ratio ?? -Infinity),
       render: (v: number) => <span>{fmt(v)}%</span>,
     },
     {
@@ -79,9 +79,9 @@ export default function Watchlist() {
       dataIndex: 'dual_low',
       key: 'dual_low',
       width: 80,
-      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.dual_low ?? 0) - (b.dual_low ?? 0),
+      sorter: (a: ConvertibleQuote, b: ConvertibleQuote) => (a.dual_low ?? -Infinity) - (b.dual_low ?? -Infinity),
       render: (v: number) => (
-        <Tag color={(v ?? 0) < 130 ? 'green' : (v ?? 0) > 180 ? 'red' : 'orange'}>
+        <Tag color={v == null ? undefined : (v < 130 ? 'green' : v > 180 ? 'red' : 'orange')}>
           {fmt(v)}
         </Tag>
       ),

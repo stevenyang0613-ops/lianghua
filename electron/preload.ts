@@ -5,6 +5,16 @@ import type { ElectronAPI, UpdateStatus, CrashReport } from '../shared/types/ele
 let listenerCounter = 0
 const listeners: Map<string, (...args: any[]) => void> = new Map()
 
+function _cleanupListener(key: string, channel: string, listener: (...args: any[]) => void) {
+  ipcRenderer.removeListener(channel, listener)
+  listeners.delete(key)
+  // AGENTS.md fix: reset counter when all listeners are removed to prevent
+  // unbounded growth over long-running sessions (e.g. days of uptime).
+  if (listeners.size === 0) {
+    listenerCounter = 0
+  }
+}
+
 const api: ElectronAPI = {
   isElectron: true,
   platform: process.platform,
@@ -46,8 +56,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('backend-ready', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('backend-ready', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'backend-ready', listener)
     }
   },
 
@@ -66,8 +75,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('resource-updated', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('resource-updated', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'resource-updated', listener)
     }
   },
 
@@ -84,8 +92,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('navigate', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('navigate', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'navigate', listener)
     }
   },
 
@@ -95,8 +102,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('refresh-data', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('refresh-data', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'refresh-data', listener)
     }
   },
 
@@ -106,8 +112,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('export-report', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('export-report', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'export-report', listener)
     }
   },
 
@@ -117,8 +122,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('window-focus', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('window-focus', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'window-focus', listener)
     }
   },
 
@@ -131,8 +135,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('update-status', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('update-status', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'update-status', listener)
     }
   },
 
@@ -153,8 +156,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('broadcast', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('broadcast', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'broadcast', listener)
     }
   },
 
@@ -169,8 +171,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('ws-state', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('ws-state', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'ws-state', listener)
     }
   },
   onWsMessage: (callback: (wsId: string, data: string, isBinary: boolean) => void) => {
@@ -179,8 +180,7 @@ const api: ElectronAPI = {
     ipcRenderer.on('ws-message', listener)
     listeners.set(key, listener)
     return () => {
-      ipcRenderer.removeListener('ws-message', listener)
-      listeners.delete(key)
+      _cleanupListener(key, 'ws-message', listener)
     }
   },
 

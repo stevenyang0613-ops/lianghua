@@ -4,6 +4,7 @@
  */
 
 import { safeJsonParse } from './safeJson'
+import { executeSignal as apiExecuteSignal, batchExecuteSignals as apiBatchExecuteSignals } from '../services/api'
 
 export interface AutoTradeConfig {
   enabled: boolean
@@ -49,10 +50,18 @@ const CONFIG_KEY = 'auto_trade_config'
 const ORDERS_KEY = 'auto_trade_orders'
 const LOGS_KEY = 'auto_trade_logs'
 
+// 与后端 STRATEGY_REGISTRY 对齐的合法策略 key
+export const VALID_STRATEGIES = new Set([
+  'dual_low', 'low_premium', 'momentum', 'xuanji_v8',
+  'multi_factor', 'xibu_seven', 'xuanji_twelve',
+  'sector_rotation', 'fusion',
+])
+const DEFAULT_STRATEGY = 'dual_low'
+
 // 默认配置
 const DEFAULT_CONFIG: AutoTradeConfig = {
   enabled: false,
-  strategy: 'macd_cross',
+  strategy: DEFAULT_STRATEGY,
   maxPosition: 30,
   maxOrders: 5,
   stopLoss: -5,
@@ -72,24 +81,82 @@ function generateId(): string {
 }
 
 // 获取配置
+// Debounced localStorage writes for auto-trader data
+let _pendingConfig: AutoTradeConfig | null = null
+let _pendingOrders: AutoTradeOrder[] | null = null
+let _pendingLogs: AutoTradeLog[] | null = null
+let _autoTraderFlushTimer: ReturnType<typeof setTimeout> | null = null
+const AUTO_TRADER_FLUSH_DELAY = 500
+
+function _flushAutoTrader(): void {
+  if (_autoTraderFlushTimer) {
+    clearTimeout(_autoTraderFlushTimer)
+    _autoTraderFlushTimer = null
+  }
+  try {
+    if (_pendingConfig !== null) {
+      localStorage.setItem(CONFIG_KEY, JSON.stringify(_pendingConfig))
+      _pendingConfig = null
+    }
+    if (_pendingOrders !== null) {
+      localStorage.setItem(ORDERS_KEY, JSON.stringify(_pendingOrders))
+      _pendingOrders = null
+    }
+    if (_pendingLogs !== null) {
+      localStorage.setItem(LOGS_KEY, JSON.stringify(_pendingLogs))
+      _pendingLogs = null
+    }
+  } catch (e) {
+    console.warn('[AutoTrader] localStorage write failed:', e)
+  }
+}
+
+function _scheduleAutoTraderFlush(): void {
+  if (_autoTraderFlushTimer) return
+  _autoTraderFlushTimer = setTimeout(_flushAutoTrader, AUTO_TRADER_FLUSH_DELAY)
+}
+
 export function getAutoTradeConfig(): AutoTradeConfig {
-  const saved = localStorage.getItem(CONFIG_KEY)
-  const parsed = safeJsonParse<Partial<AutoTradeConfig>>(saved, {})
-  return { ...DEFAULT_CONFIG, ...parsed }
+  try {
+    const saved = localStorage.getItem(CONFIG_KEY)
+    const parsed = safeJsonParse<Partial<AutoTradeConfig>>(saved, {})
+
+    // 策略 key 合法性校验：非法值自动回退到默认值
+    if (parsed.strategy && !VALID_STRATEGIES.has(parsed.strategy)) {
+      console.warn(`[AutoTrader] 无效策略 key "${parsed.strategy}"，自动回退为 "${DEFAULT_STRATEGY}"`)
+      parsed.strategy = DEFAULT_STRATEGY
+    }
+
+    return { ...DEFAULT_CONFIG, ...parsed }
+  } catch {
+    return { ...DEFAULT_CONFIG }
+  }
 }
 
 // 更新配置
 export function updateAutoTradeConfig(updates: Partial<AutoTradeConfig>): AutoTradeConfig {
   const config = getAutoTradeConfig()
+
+  // 如果更新的策略 key 不合法，拒绝写入并回退
+  if (updates.strategy && !VALID_STRATEGIES.has(updates.strategy)) {
+    console.warn(`[AutoTrader] 拒绝写入无效策略 key "${updates.strategy}"`)
+    updates.strategy = DEFAULT_STRATEGY
+  }
+
   const newConfig = { ...config, ...updates }
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(newConfig))
+  _pendingConfig = newConfig
+  _scheduleAutoTraderFlush()
   return newConfig
 }
 
 // 获取订单列表
 export function getAutoTradeOrders(): AutoTradeOrder[] {
-  const saved = localStorage.getItem(ORDERS_KEY)
-  return safeJsonParse<AutoTradeOrder[]>(saved, [])
+  try {
+    const saved = localStorage.getItem(ORDERS_KEY)
+    return safeJsonParse<AutoTradeOrder[]>(saved, [])
+  } catch {
+    return []
+  }
 }
 
 // 添加订单
@@ -107,7 +174,8 @@ export function addAutoTradeOrder(order: Omit<AutoTradeOrder, 'id' | 'createdAt'
   if (orders.length > 100) {
     orders.splice(100)
   }
-  localStorage.setItem(ORDERS_KEY, JSON.stringify(orders))
+  _pendingOrders = orders
+  _scheduleAutoTraderFlush()
   return newOrder
 }
 
@@ -121,14 +189,19 @@ export function updateOrderStatus(id: string, status: AutoTradeOrder['status'], 
   orders[index].executedAt = status === 'executed' ? Date.now() : null
   if (error) orders[index].error = error
 
-  localStorage.setItem(ORDERS_KEY, JSON.stringify(orders))
+  _pendingOrders = orders
+  _scheduleAutoTraderFlush()
   return orders[index]
 }
 
 // 获取日志
 export function getAutoTradeLogs(): AutoTradeLog[] {
-  const saved = localStorage.getItem(LOGS_KEY)
-  return safeJsonParse<AutoTradeLog[]>(saved, [])
+  try {
+    const saved = localStorage.getItem(LOGS_KEY)
+    return safeJsonParse<AutoTradeLog[]>(saved, [])
+  } catch {
+    return []
+  }
 }
 
 // 添加日志
@@ -144,13 +217,19 @@ export function addAutoTradeLog(log: Omit<AutoTradeLog, 'id' | 'timestamp'>): Au
   if (logs.length > 200) {
     logs.splice(200)
   }
-  localStorage.setItem(LOGS_KEY, JSON.stringify(logs))
+  _pendingLogs = logs
+  _scheduleAutoTraderFlush()
   return newLog
 }
 
 // 清空日志
 export function clearAutoTradeLogs(): void {
-  localStorage.removeItem(LOGS_KEY)
+  if (_autoTraderFlushTimer) {
+    clearTimeout(_autoTraderFlushTimer)
+    _autoTraderFlushTimer = null
+  }
+  _pendingLogs = null
+  try { localStorage.removeItem(LOGS_KEY) } catch { /* silent fail */ }
 }
 
 // 检查交易时间
@@ -200,18 +279,18 @@ export function shouldExecuteTrade(
   return { should: true, reason: '符合执行条件' }
 }
 
-// 执行交易信号
+// 执行交易信号 — 调用后端真实 API
 export async function executeSignal(
   signal: { code: string; name: string; action: 'buy' | 'sell'; price: number; confidence: number; reason: string },
   config: AutoTradeConfig,
-  quantity: number = 10
+  _quantity: number = 10
 ): Promise<AutoTradeOrder> {
   const order = addAutoTradeOrder({
     code: signal.code,
     name: signal.name,
     action: signal.action,
     price: signal.price,
-    quantity,
+    quantity: _quantity,
     reason: signal.reason,
     confidence: signal.confidence,
     strategy: config.strategy,
@@ -220,32 +299,107 @@ export async function executeSignal(
   addAutoTradeLog({
     type: 'info',
     message: `创建${signal.action === 'buy' ? '买入' : '卖出'}订单: ${signal.code} ${signal.name}`,
-    details: { orderId: order.id, price: signal.price, quantity },
+    details: { orderId: order.id, price: signal.price, quantity: _quantity },
   })
 
   if (config.autoExecute) {
     try {
-      // 这里应该调用实际的交易接口
-      // 模拟执行
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // 调用后端真实交易接口
+      const result = await apiExecuteSignal(signal.code)
+      const executedCount = result.executed
 
-      updateOrderStatus(order.id, 'executed')
-      addAutoTradeLog({
-        type: 'trade',
-        message: `订单已执行: ${signal.code} ${signal.action === 'buy' ? '买入' : '卖出'} ${quantity}张`,
-        details: { orderId: order.id },
-      })
+      if (executedCount > 0) {
+        updateOrderStatus(order.id, 'executed')
+        addAutoTradeLog({
+          type: 'trade',
+          message: `订单已执行: ${signal.code} ${signal.action === 'buy' ? '买入' : '卖出'} ${result.orders?.[0]?.volume ?? _quantity}张`,
+          details: { orderId: order.id, apiResult: result },
+        })
+      } else {
+        // 后端返回未执行（例如信号不存在或已过期）
+        updateOrderStatus(order.id, 'failed', '后端未执行：信号不存在或已过期')
+        addAutoTradeLog({
+          type: 'warning',
+          message: `订单后端未执行: ${signal.code} — 信号不存在或已过期`,
+          details: { orderId: order.id },
+        })
+      }
     } catch (err) {
-      updateOrderStatus(order.id, 'failed', String(err))
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      updateOrderStatus(order.id, 'failed', errorMsg)
       addAutoTradeLog({
         type: 'error',
-        message: `订单执行失败: ${String(err)}`,
+        message: `订单执行失败: ${errorMsg}`,
         details: { orderId: order.id },
       })
     }
   }
 
   return order
+}
+
+// 批量执行所有待执行交易信号 — 调用后端真实 API
+export async function batchExecutePendingSignals(config: AutoTradeConfig): Promise<{ executed: number; failed: number }> {
+  const pendingOrders = getAutoTradeOrders().filter(o => o.status === 'pending')
+  if (pendingOrders.length === 0) {
+    return { executed: 0, failed: 0 }
+  }
+
+  try {
+    const result = await apiBatchExecuteSignals()
+    const executedCount = result.executed
+
+    // 按后端返回标记已执行的订单 — 使用 code + action 双重匹配，优先匹配最新订单
+    const apiOrders = result.orders || []
+    let matched = 0
+    for (const apiOrder of apiOrders) {
+      // 按 code + action 匹配，优先取最新的 pending 订单（unshift 后按时间倒序）
+      const localOrder = pendingOrders.find(
+        o => o.code === apiOrder.code && o.action === apiOrder.side && o.status === 'pending'
+      )
+      if (localOrder) {
+        updateOrderStatus(localOrder.id, 'executed')
+        matched++
+      } else {
+        // 记录未匹配到的后端订单
+        addAutoTradeLog({
+          type: 'warning',
+          message: `后端订单未匹配到本地记录: ${apiOrder.code} ${apiOrder.side}`,
+          details: { apiOrder },
+        })
+      }
+    }
+
+    // 未匹配到的 pending 订单标记为失败（后端未执行）
+    const remaining = pendingOrders.filter(o => o.status === 'pending')
+    for (const o of remaining) {
+      updateOrderStatus(o.id, 'failed', '后端未执行该订单')
+      addAutoTradeLog({
+        type: 'warning',
+        message: `订单未执行: ${o.code} — 后端未处理`,
+        details: { orderId: o.id },
+      })
+    }
+
+    addAutoTradeLog({
+      type: 'trade',
+      message: `批量执行完成: 成功 ${matched} 笔, 未执行 ${remaining.length} 笔`,
+      details: { apiResult: result },
+    })
+
+    return { executed: matched, failed: remaining.length }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    // 全部标记失败
+    for (const o of pendingOrders) {
+      updateOrderStatus(o.id, 'failed', errorMsg)
+    }
+    addAutoTradeLog({
+      type: 'error',
+      message: `批量执行失败: ${errorMsg}`,
+    })
+    return { executed: 0, failed: pendingOrders.length }
+  }
 }
 
 // 获取统计
@@ -288,5 +442,6 @@ export default {
   isTradingTime,
   shouldExecuteTrade,
   executeSignal,
+  batchExecutePendingSignals,
   getAutoTradeStats,
 }

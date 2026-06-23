@@ -187,6 +187,7 @@ function renderSkeleton() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function SectorRotation() {
+  const isMountedRef = useRef(true)
   const { token: themeToken } = antTheme.useToken()
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
   const chartText = isDark ? '#e0e0e0' : '#333'
@@ -243,49 +244,60 @@ export default function SectorRotation() {
   const [dsTab, setDsTab] = useState('overview')
 
   // ── 数据加载 ──
-  useEffect(()=>{loadStrategyInfo()},[])
-
   const loadStrategyInfo=async()=>{
-    try{const list=await fetchStrategies();setStrategyInfo(list.find(s=>s.id==='sector_rotation')||null)}
+    if (!isMountedRef.current) return
+    try{const list=await fetchStrategies(); if (!isMountedRef.current) return; setStrategyInfo(list.find(s=>s.id==='sector_rotation')||null)}
     catch(e:any){}
   }
 
   useEffect(()=>{
+    isMountedRef.current = true
+    loadStrategyInfo()
+    return () => { isMountedRef.current = false }
+  },[])
+
+  useEffect(()=>{
+    isMountedRef.current = true
     if(!indData&&!indLoading) loadIndustries()
     if((activeTab==='concepts'||activeTab==='distribution')&&!conceptData&&!conceptLoading) loadConcepts()
+    return () => { isMountedRef.current = false }
   },[activeTab])
 
   const loadIndustries=async()=>{
+    if (!isMountedRef.current) return
     setIndLoading(true);setIndError(null)
-    try{const data=await fetchIndustries();setIndData(data)}
-    catch(e:any){setIndError(e?.message||'无法加载行业数据')}
-    finally{setIndLoading(false)}
+    try{const data=await fetchIndustries(); if (!isMountedRef.current) return; setIndData(data)}
+    catch(e:any){ if (!isMountedRef.current) return; setIndError(e?.message||'无法加载行业数据')}
+    finally{ if (isMountedRef.current) setIndLoading(false)}
   }
 
   const loadConcepts=async()=>{
+    if (!isMountedRef.current) return
     setConceptLoading(true);setConceptError(null)
-    try{const data=await fetchConcepts();setConceptData(data)}
-    catch(e:any){setConceptError(e?.message||'无法加载概念数据')}
-    finally{setConceptLoading(false)}
+    try{const data=await fetchConcepts(); if (!isMountedRef.current) return; setConceptData(data)}
+    catch(e:any){ if (!isMountedRef.current) return; setConceptError(e?.message||'无法加载概念数据')}
+    finally{ if (isMountedRef.current) setConceptLoading(false)}
   }
 
   const loadDataSources=async()=>{
+    if (!isMountedRef.current) return
     setDsLoading(true);setDsError(null)
-    try{const data=await fetchDataSources();setDsInfo(data)}
-    catch(e:any){setDsError(e?.message||'无法加载数据源状态')}
-    finally{setDsLoading(false)}
+    try{const data=await fetchDataSources(); if (!isMountedRef.current) return; setDsInfo(data)}
+    catch(e:any){ if (!isMountedRef.current) return; setDsError(e?.message||'无法加载数据源状态')}
+    finally{ if (isMountedRef.current) setDsLoading(false)}
   }
 
-  const loadNorth=async()=>{setNorthLoading(true);try{setNorthData(await fetchNorthCapital())}catch(e:any){message.error('北向资金: '+e?.message)}finally{setNorthLoading(false)}}
-  const loadMargin=async()=>{setMarginLoading(true);try{setMarginData(await fetchMarginStocks())}catch(e:any){message.error('融资融券: '+e?.message)}finally{setMarginLoading(false)}}
-  const loadLhb=async()=>{setLhbLoading(true);try{setLhbData(await fetchLhb())}catch(e:any){message.error('龙虎榜: '+e?.message)}finally{setLhbLoading(false)}}
-  const loadBlock=async()=>{setBlockLoading(true);try{setBlockData(await fetchBlockTrade())}catch(e:any){message.error('大宗交易: '+e?.message)}finally{setBlockLoading(false)}}
-  const loadHolder=async()=>{setHolderLoading(true);try{setHolderData(await fetchHolderNum())}catch(e:any){message.error('股东户数: '+e?.message)}finally{setHolderLoading(false)}}
-  const loadForecast=async()=>{setForecastLoading(true);try{setForecastData(await fetchEarningsForecast())}catch(e:any){message.error('业绩预告: '+e?.message)}finally{setForecastLoading(false)}}
-  const loadExpress=async()=>{setExpressLoading(true);try{setExpressData(await fetchEarningsExpress())}catch(e:any){message.error('业绩快报: '+e?.message)}finally{setExpressLoading(false)}}
-  const loadRelease=async()=>{setReleaseLoading(true);try{setReleaseData(await fetchRestrictedRelease())}catch(e:any){message.error('限售解禁: '+e?.message)}finally{setReleaseLoading(false)}}
+  const loadNorth=async()=>{ if (!isMountedRef.current) return; setNorthLoading(true);try{const data=await fetchNorthCapital(); if (!isMountedRef.current) return; setNorthData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('北向资金: '+e?.message)}finally{ if (isMountedRef.current) setNorthLoading(false)}}
+  const loadMargin=async()=>{ if (!isMountedRef.current) return; setMarginLoading(true);try{const data=await fetchMarginStocks(); if (!isMountedRef.current) return; setMarginData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('融资融券: '+e?.message)}finally{ if (isMountedRef.current) setMarginLoading(false)}}
+  const loadLhb=async()=>{ if (!isMountedRef.current) return; setLhbLoading(true);try{const data=await fetchLhb(); if (!isMountedRef.current) return; setLhbData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('龙虎榜: '+e?.message)}finally{ if (isMountedRef.current) setLhbLoading(false)}}
+  const loadBlock=async()=>{ if (!isMountedRef.current) return; setBlockLoading(true);try{const data=await fetchBlockTrade(); if (!isMountedRef.current) return; setBlockData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('大宗交易: '+e?.message)}finally{ if (isMountedRef.current) setBlockLoading(false)}}
+  const loadHolder=async()=>{ if (!isMountedRef.current) return; setHolderLoading(true);try{const data=await fetchHolderNum(); if (!isMountedRef.current) return; setHolderData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('股东户数: '+e?.message)}finally{ if (isMountedRef.current) setHolderLoading(false)}}
+  const loadForecast=async()=>{ if (!isMountedRef.current) return; setForecastLoading(true);try{const data=await fetchEarningsForecast(); if (!isMountedRef.current) return; setForecastData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('业绩预告: '+e?.message)}finally{ if (isMountedRef.current) setForecastLoading(false)}}
+  const loadExpress=async()=>{ if (!isMountedRef.current) return; setExpressLoading(true);try{const data=await fetchEarningsExpress(); if (!isMountedRef.current) return; setExpressData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('业绩快报: '+e?.message)}finally{ if (isMountedRef.current) setExpressLoading(false)}}
+  const loadRelease=async()=>{ if (!isMountedRef.current) return; setReleaseLoading(true);try{const data=await fetchRestrictedRelease(); if (!isMountedRef.current) return; setReleaseData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('限售解禁: '+e?.message)}finally{ if (isMountedRef.current) setReleaseLoading(false)}}
 
   useEffect(()=>{
+    isMountedRef.current = true
     if(activeTab==='sources'&&!dsInfo&&!dsLoading) loadDataSources()
     if(activeTab==='sources'&&dsTab==='north'&&!northData&&!northLoading) loadNorth()
     if(activeTab==='sources'&&dsTab==='margin'&&!marginData&&!marginLoading) loadMargin()
@@ -295,6 +307,7 @@ export default function SectorRotation() {
     if(activeTab==='sources'&&dsTab==='forecast'&&!forecastData&&!forecastLoading) loadForecast()
     if(activeTab==='sources'&&dsTab==='express'&&!expressData&&!expressLoading) loadExpress()
     if(activeTab==='sources'&&dsTab==='release'&&!releaseData&&!releaseLoading) loadRelease()
+    return () => { isMountedRef.current = false }
   },[activeTab,dsTab])
 
   const doBacktest=useCallback(async()=>{

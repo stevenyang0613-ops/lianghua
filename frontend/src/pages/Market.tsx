@@ -4,7 +4,7 @@ import { Typography, Space, message, Switch, Input, Row, Col, Pagination, Empty,
 import { SearchOutlined, BellOutlined, DownloadOutlined, FileExcelOutlined, FileTextOutlined, WifiOutlined, DisconnectOutlined, ReloadOutlined, SwapOutlined, WarningOutlined } from '@ant-design/icons'
 import VirtualTable from '../components/VirtualTable'
 import type { VirtualColumn, SortOrder } from '../components/VirtualTable'
-import MarketTable from '../components/MarketTable'
+import MarketTable, { EXTENDED_COLUMNS } from '../components/MarketTable'
 import { fmt } from '../utils/format'
 import FilterPanel from '../components/FilterPanel'
 import AlertPanel from '../components/AlertPanel'
@@ -46,6 +46,7 @@ export default function Market() {
   const [forcedCallBond, setForcedCallBond] = useState<ConvertibleQuote | null>(null)
   const [alertVisible, setAlertVisible] = useState(false)
   const [selectedForAlert, setSelectedForAlert] = useState<{ code: string; name: string } | null>(null)
+  const [selectedExtraCols, setSelectedExtraCols] = useState<Set<string>>(new Set())
 
   const allBonds = useMarketStore((s) => s.allBonds)
   const setAllBonds = useMarketStore((s) => s.setAllBonds)
@@ -109,11 +110,11 @@ export default function Market() {
   }, [setSelectedBond])
 
   const filteredBonds = useMemo(() => {
-    let result = [...allBonds]
+    let result = allBonds
 
     if (searchText) {
       const search = searchText.toLowerCase()
-      result = result.filter(b => b.code.includes(search) || b.name.toLowerCase().includes(search))
+      result = result.filter(b => b.code?.includes(search) || b.name?.toLowerCase().includes(search))
     }
 
     if (filters.priceMin !== undefined) result = result.filter(b => (b.price ?? 0) >= filters.priceMin!)
@@ -134,6 +135,8 @@ export default function Market() {
           : null)
 
     if (effectiveSort) {
+      // 只有需要排序时才创建新数组，避免无过滤/无排序时的 O(n) 复制
+      result = [...result]
       const sortKey = effectiveSort.key as keyof ConvertibleQuote
       const sortOrder = effectiveSort.order
       // 安全读取数值;null/undefined/非数字按 -Infinity 处理使其排到末尾
@@ -320,6 +323,25 @@ export default function Market() {
             <Dropdown menu={{ items: exportMenuItems }} trigger={['click']}>
               <Button icon={<DownloadOutlined />}>导出</Button>
             </Dropdown>
+            <Dropdown menu={{
+              items: EXTENDED_COLUMNS.map(col => ({
+                key: col.key as string,
+                label: col.title as string,
+                onClick: () => {
+                  setSelectedExtraCols(prev => {
+                    const next = new Set(prev)
+                    if (next.has(col.key as string)) {
+                      next.delete(col.key as string)
+                    } else {
+                      next.add(col.key as string)
+                    }
+                    return next
+                  })
+                },
+              })),
+            }} trigger={['click']}>
+              <Button>列选择 ({selectedExtraCols.size})</Button>
+            </Dropdown>
             <Badge count={triggers.length} size="small">
               <Button icon={<BellOutlined />} onClick={() => handleOpenAlert()}>
                 告警
@@ -357,7 +379,12 @@ export default function Market() {
           />
         ) : (
           <>
-            <MarketTable bonds={paginatedBonds} loading={false} onRowClick={(code) => setSelectedBond(code)} />
+            <MarketTable
+              bonds={paginatedBonds}
+              loading={false}
+              onRowClick={(code) => setSelectedBond(code)}
+              extraColumns={EXTENDED_COLUMNS.filter(col => selectedExtraCols.has(col.key as string))}
+            />
           <div style={{ marginTop: 16, textAlign: 'right' }}>
             <Pagination
               current={currentPage}

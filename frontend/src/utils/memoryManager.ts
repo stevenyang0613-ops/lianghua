@@ -415,6 +415,14 @@ export class LazyDataSource<T> {
 export const memoryMonitor = new MemoryMonitor()
 export const chunkedDataManager = new ChunkedDataManager()
 
+/**
+ * 销毁内存管理器单例（清理定时器、缓存和监听器）
+ */
+export function destroyMemoryManager(): void {
+  memoryMonitor.clear()
+  chunkedDataManager.clear()
+}
+
 export default {
   ChunkedDataManager,
   ObjectPool,

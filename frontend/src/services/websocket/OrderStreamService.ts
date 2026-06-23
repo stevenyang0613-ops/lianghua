@@ -49,7 +49,7 @@ type OrderEventType = 'order' | 'trade' | 'error' | 'connected' | 'disconnected'
 
 class OrderStreamService extends EventEmitter {
   private ws: WebSocket | null = null
-  private reconnectTimer: NodeJS.Timeout | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private isConnected: boolean = false
   private orders: Map<string, Order> = new Map()
   private activeOrders: Map<string, Order> = new Map()
@@ -63,6 +63,11 @@ class OrderStreamService extends EventEmitter {
   connect(accountId: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       return
+    }
+    // 清除旧的重连定时器，防止重复连接
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
     }
 
     try {
@@ -256,6 +261,10 @@ class OrderStreamService extends EventEmitter {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.reconnectTimer = setTimeout(() => {
       // 需要重新获取accountId来重连
       this.emit('reconnect-needed')

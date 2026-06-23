@@ -331,23 +331,28 @@ export const useAnalyticsStore = create<AnalyticsState>()(
 )
 
 // 自动追踪页面访问
-export function initAnalyticsTracking() {
+export function initAnalyticsTracking(): () => void {
   const store = useAnalyticsStore.getState()
   store.startSession()
 
   // 监听页面卸载
-  window.addEventListener('beforeunload', () => {
-    store.endSession()
-  })
+  const beforeUnloadHandler = () => { store.endSession() }
+  window.addEventListener('beforeunload', beforeUnloadHandler)
 
   // 监听页面可见性变化
-  document.addEventListener('visibilitychange', () => {
+  const visibilityHandler = () => {
     if (document.visibilityState === 'hidden') {
       store.endSession()
     } else {
       store.startSession()
     }
-  })
+  }
+  document.addEventListener('visibilitychange', visibilityHandler)
+
+  return () => {
+    window.removeEventListener('beforeunload', beforeUnloadHandler)
+    document.removeEventListener('visibilitychange', visibilityHandler)
+  }
 }
 
 export default useAnalyticsStore

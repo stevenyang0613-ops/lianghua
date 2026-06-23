@@ -12,40 +12,45 @@ function isElectron(): boolean {
 
 export async function secureSave(key: string, value: string): Promise<void> {
   if (!value) {
-    localStorage.removeItem(key)
+    try { localStorage.removeItem(key) } catch { /* silent fail */ }
     return
   }
 
   if (isElectron() && window.electronAPI?.encryptString) {
     try {
       const encrypted = await window.electronAPI.encryptString(value)
-      localStorage.setItem(key, ENCRYPTED_PREFIX + encrypted)
+      try { localStorage.setItem(key, ENCRYPTED_PREFIX + encrypted) } catch { /* silent fail */ }
       return
     } catch {
-      // 加密失败，降级为明文存储
+      // 加密失败，不降级为明文存储，抛出错误让调用者处理
+      throw new Error(`secureSave failed: encryption unavailable for key "${key}"`)
     }
   }
 
-  localStorage.setItem(key, value)
+  // 非 Electron 环境：如果未配置加密，拒绝存储敏感数据
+  throw new Error(`secureSave failed: no encryption available for key "${key}"`)
 }
 
 export async function secureLoad(key: string): Promise<string> {
-  const stored = localStorage.getItem(key)
-  if (!stored) return ''
+  try {
+    const stored = localStorage.getItem(key)
+    if (!stored) return ''
 
-  if (stored.startsWith(ENCRYPTED_PREFIX) && isElectron() && window.electronAPI?.decryptString) {
-    try {
-      const cipherText = stored.slice(ENCRYPTED_PREFIX.length)
-      return await window.electronAPI.decryptString(cipherText)
-    } catch {
-      // 解密失败，返回加密后的原始文本（不可用）
-      return stored.slice(ENCRYPTED_PREFIX.length)
+    if (stored.startsWith(ENCRYPTED_PREFIX) && isElectron() && window.electronAPI?.decryptString) {
+      try {
+        const cipherText = stored.slice(ENCRYPTED_PREFIX.length)
+        return await window.electronAPI.decryptString(cipherText)
+      } catch {
+        // 解密失败时不返回密文，避免调用者误用
+        console.error('[SecureStorage] Decrypt failed for key:', key)
+        return ''
+      }
     }
-  }
 
-  return stored
+    return stored
+  } catch { return '' }
 }
 
 export async function secureRemove(key: string): Promise<void> {
-  localStorage.removeItem(key)
+  try { localStorage.removeItem(key) } catch { /* silent fail */ }
 }

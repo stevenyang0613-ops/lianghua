@@ -49,9 +49,6 @@ function _scheduleFlush(): void {
   _flushTimer = setTimeout(_flushLogs, FLUSH_DELAY)
 }
 
-// Ensure logs are flushed on page unload
-window.addEventListener('beforeunload', _flushLogs)
-
 // 记录错误
 export function logError(error: Partial<ErrorLog>): void {
   const fullError: ErrorLog = {
@@ -80,13 +77,17 @@ export function logError(error: Partial<ErrorLog>): void {
 
 // 获取错误日志
 export function getErrorLogs(): ErrorLog[] {
-  const saved = localStorage.getItem(ERROR_LOG_KEY)
-  return safeJsonParse<ErrorLog[]>(saved, [])
+  try {
+    const saved = localStorage.getItem(ERROR_LOG_KEY)
+    return safeJsonParse<ErrorLog[]>(saved, [])
+  } catch {
+    return []
+  }
 }
 
 // 清除错误日志
 export function clearErrorLogs(): void {
-  localStorage.removeItem(ERROR_LOG_KEY)
+  try { localStorage.removeItem(ERROR_LOG_KEY) } catch { /* silent fail */ }
 }
 
 // 导出错误日志
@@ -177,11 +178,15 @@ export function setupGlobalErrorHandler(): () => void {
   }
   window.addEventListener('error', resourceErrorHandler, true)
 
+  // 页面卸载时刷新日志
+  window.addEventListener('beforeunload', _flushLogs)
+
   // 返回清理函数
   return () => {
     window.removeEventListener('error', errorHandler)
     window.removeEventListener('unhandledrejection', rejectionHandler)
     window.removeEventListener('error', resourceErrorHandler, true)
+    window.removeEventListener('beforeunload', _flushLogs)
   }
 }
 

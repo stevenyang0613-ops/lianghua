@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Row, Col, Typography, message, Progress, Alert } from 'antd'
 import { BarChartOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -29,6 +29,7 @@ export default function Backtest() {
   const [result, setResult] = useState<BacktestResult | null>(null)
   const [optResult, setOptResult] = useState<OptimizationResult | null>(null)
   const [strategiesLoading, setStrategiesLoading] = useState(true)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ---- 交易成本参数 ----
   const [config, setConfig] = useState<BacktestConfig>({ ...DEFAULT_CONFIG })
@@ -43,6 +44,11 @@ export default function Backtest() {
 
   // 带重试的策略列表加载
   const loadStrategies = useCallback((retries = 3) => {
+    // 清除旧的重试定时器，避免重复请求
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
     setStrategiesLoading(true)
     fetchStrategies()
       .then((list) => {
@@ -59,7 +65,7 @@ export default function Backtest() {
       })
       .catch(() => {
         if (retries > 0) {
-          setTimeout(() => loadStrategies(retries - 1), 2000)
+          retryTimerRef.current = setTimeout(() => loadStrategies(retries - 1), 2000)
         } else {
           message.error('策略列表加载失败，请检查后端是否正常运行')
           setStrategiesLoading(false)
@@ -69,6 +75,12 @@ export default function Backtest() {
 
   useEffect(() => {
     loadStrategies()
+    return () => {
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
   }, [loadStrategies])
 
   // 切换策略时自动初始化优化范围

@@ -118,7 +118,7 @@ export default function BackendLoading({ children }: BackendLoadingProps) {
               </button>
               <button
                 onClick={() => {
-                  localStorage.setItem('offline_mode', 'true')
+                  try { localStorage.setItem('offline_mode', 'true') } catch { /* silent fail */ }
                   setBackendConnected(true)
                 }}
                 style={{

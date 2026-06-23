@@ -11,19 +11,28 @@ interface AppState {
   signalWsConnected: boolean
 }
 
-// Store创建时立即注册WS状态监听，确保任何组件首次读取时状态已是最新
-// 使用 queueMicrotask 避免同步 setState 导致 React #300 错误
-// 监听器引用保存在模块级，以便在 destroy 时清理
-const _unsub1 = marketWs.onStateChange((state) => {
-  queueMicrotask(() => {
-    try { useAppStore.setState({ marketWsConnected: state === 'connected' }) } catch { /* isolated */ }
+// 使用模块级标志防止 HMR 热更新时重复注册监听器
+let _listenersRegistered = false
+let _unsub1: (() => void) | null = null
+let _unsub2: (() => void) | null = null
+
+/** 初始化 WS 状态监听器，确保 store 状态与 WebSocket 同步
+ * 在 App.tsx 的 useEffect 中调用，避免 StrictMode 下 cleanup 后无法恢复
+ */
+export function initWsListeners() {
+  if (_listenersRegistered) return
+  _listenersRegistered = true
+  _unsub1 = marketWs.onStateChange((state) => {
+    queueMicrotask(() => {
+      try { useAppStore.setState({ marketWsConnected: state === 'connected' }) } catch { /* isolated */ }
+    })
   })
-})
-const _unsub2 = signalsWs.onStateChange((state) => {
-  queueMicrotask(() => {
-    try { useAppStore.setState({ signalWsConnected: state === 'connected' }) } catch { /* isolated */ }
+  _unsub2 = signalsWs.onStateChange((state) => {
+    queueMicrotask(() => {
+      try { useAppStore.setState({ signalWsConnected: state === 'connected' }) } catch { /* isolated */ }
+    })
   })
-})
+}
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -60,4 +69,7 @@ export const useAppStore = create<AppState>()(
 export function cleanupWsListeners() {
   if (typeof _unsub1 === 'function') _unsub1()
   if (typeof _unsub2 === 'function') _unsub2()
+  _unsub1 = null
+  _unsub2 = null
+  _listenersRegistered = false
 }

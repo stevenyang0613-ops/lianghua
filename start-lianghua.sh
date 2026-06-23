@@ -25,9 +25,23 @@ start_backend() {
 
   # Try run_app.py first (handles config, port detection, SSL certs)
   if [ -f "run_app.py" ]; then
-    python3 run_app.py --host 127.0.0.1 --port 8765 &
+    if [ -f "$SCRIPT_DIR/backend/.venv/bin/python3" ]; then
+      PYTHON="$SCRIPT_DIR/backend/.venv/bin/python3"
+    else
+      PYTHON="python3"
+    fi
   else
-    python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8765 --log-level info &
+    PYTHON="python3"
+  fi
+
+  # Use setsid + nohup for full session detachment (AGENTS.md #49)
+  # Closing the terminal won't send SIGHUP to the backend
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup "$PYTHON" run_app.py --host 127.0.0.1 --port 8765 \
+        < /dev/null > /tmp/lianghua_backend.log 2>&1 &
+  else
+    nohup "$PYTHON" run_app.py --host 127.0.0.1 --port 8765 \
+        < /dev/null > /tmp/lianghua_backend.log 2>&1 &
   fi
   BACKEND_PID=$!
 
@@ -78,7 +92,11 @@ case "$MODE" in
     start_backend
 
     # Open the packaged app
-    if [ -d "$SCRIPT_DIR/release/mac-arm64/LiangHua.app" ]; then
+    if [ -d "$SCRIPT_DIR/electron/release/mac-arm64/LiangHua.app" ]; then
+      echo "[launcher] Opening LiangHua.app..."
+      open "$SCRIPT_DIR/electron/release/mac-arm64/LiangHua.app"
+      echo "[launcher] ✓ LiangHua.app launched (backend PID $BACKEND_PID)"
+    elif [ -d "$SCRIPT_DIR/release/mac-arm64/LiangHua.app" ]; then
       echo "[launcher] Opening LiangHua.app..."
       open "$SCRIPT_DIR/release/mac-arm64/LiangHua.app"
       echo "[launcher] ✓ LiangHua.app launched (backend PID $BACKEND_PID)"

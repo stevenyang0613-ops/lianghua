@@ -57,19 +57,22 @@ function VirtualTableInner<T>({
     [columns]
   )
 
+  // 防御性：rowHeight 不能为 0 或负数
+  const safeRowHeight = Math.max(1, rowHeight)
+
   // 计算可见范围
-  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan)
+  const startIndex = Math.max(0, Math.floor(scrollTop / safeRowHeight) - overscan)
   const endIndex = Math.min(
     data.length,
-    Math.floor((scrollTop + containerHeight) / rowHeight) + overscan
+    Math.floor((scrollTop + containerHeight) / safeRowHeight) + overscan
   )
 
   // 可见数据
   const visibleData = data.slice(startIndex, endIndex)
 
   // 总高度
-  const totalHeight = data.length * rowHeight
-  const offsetY = startIndex * rowHeight
+  const totalHeight = data.length * safeRowHeight
+  const offsetY = startIndex * safeRowHeight
 
   // 滚动处理
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
@@ -96,9 +99,11 @@ function VirtualTableInner<T>({
   // 渲染行
   const renderRow = (record: T, index: number) => {
     const actualIndex = startIndex + index
+    const keyValue = rowKey && typeof rowKey !== 'function' ? (record as Record<string, unknown>)[rowKey] : undefined
+    const key = typeof rowKey === 'function' ? rowKey(record) : (keyValue !== undefined && keyValue !== null ? String(keyValue) : actualIndex)
     return (
       <div
-        key={typeof rowKey === 'function' ? rowKey(record) : (rowKey ? String((record as Record<string, unknown>)[rowKey]) || actualIndex : actualIndex)}
+        key={key}
         style={{
           height: rowHeight,
           display: 'flex',
@@ -187,6 +192,12 @@ function VirtualTableInner<T>({
           <div
             key={col.key || col.dataIndex || index}
             onClick={() => handleHeaderClick(col)}
+            onKeyDown={(e) => {
+              if (col.sortable && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault()
+                handleHeaderClick(col)
+              }
+            }}
             className={col.sortable ? 'vt-header-cell sortable' : 'vt-header-cell'}
             style={{
               width: col.width || 100,
@@ -204,6 +215,7 @@ function VirtualTableInner<T>({
             }}
             data-testid={col.sortable ? `vt-sort-${col.dataIndex}` : undefined}
             role={col.sortable ? 'button' : undefined}
+            tabIndex={col.sortable ? 0 : undefined}
             aria-sort={
               col.sortOrder === 'asc' ? 'ascending' :
               col.sortOrder === 'desc' ? 'descending' :

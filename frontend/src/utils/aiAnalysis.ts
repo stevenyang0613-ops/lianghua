@@ -319,6 +319,10 @@ ${JSON.stringify(data, null, 2)}
       }),
     })
 
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`OpenAI API error ${response.status}: ${err.slice(0, 200)}`)
+    }
     const data = await response.json()
     return data.choices[0].message.content
   }
@@ -341,6 +345,10 @@ ${JSON.stringify(data, null, 2)}
       }),
     })
 
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`Anthropic API error ${response.status}: ${err.slice(0, 200)}`)
+    }
     const data = await response.json()
     return data.content[0].text
   }
@@ -363,6 +371,10 @@ ${JSON.stringify(data, null, 2)}
       }),
     })
 
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`DeepSeek API error ${response.status}: ${err.slice(0, 200)}`)
+    }
     const data = await response.json()
     return data.choices[0].message.content
   }
@@ -383,6 +395,10 @@ ${JSON.stringify(data, null, 2)}
       }),
     })
 
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`Local model error ${response.status}: ${err.slice(0, 200)}`)
+    }
     const data = await response.json()
     return data.response
   }

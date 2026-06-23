@@ -208,7 +208,9 @@ export class MultiAccountManager {
   setActiveAccount(id: string): void {
     if (this.accounts.has(id)) {
       this.activeAccountId = id
-      localStorage.setItem('activeAccountId', id)
+      try {
+        localStorage.setItem('activeAccountId', id)
+      } catch { /* localStorage unavailable */ }
     }
   }
 
@@ -489,7 +491,9 @@ export class MultiAccountManager {
       accounts: Array.from(this.accounts.entries()),
       groups: Array.from(this.groups.entries()),
     }
-    localStorage.setItem('multiAccountData', JSON.stringify(data))
+    try {
+      localStorage.setItem('multiAccountData', JSON.stringify(data))
+    } catch { /* localStorage unavailable */ }
   }
 
   /**

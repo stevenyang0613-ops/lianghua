@@ -27,6 +27,7 @@ export class FirstScreenOptimizer {
   private loaded = new Set<string>()
   private criticalResources: string[] = []
   private loadingPromises = new Map<string, Promise<unknown>>()
+  private _injectedElements: HTMLElement[] = []
 
   /**
    * 设置关键资源
@@ -110,6 +111,7 @@ export class FirstScreenOptimizer {
       script.onload = () => resolve(script)
       script.onerror = reject
       document.head.appendChild(script)
+      this._injectedElements.push(script)
     })
   }
 
@@ -124,6 +126,7 @@ export class FirstScreenOptimizer {
       link.onload = () => resolve(link)
       link.onerror = reject
       document.head.appendChild(link)
+      this._injectedElements.push(link)
     })
   }
 
@@ -152,6 +155,7 @@ export class FirstScreenOptimizer {
       link.onload = () => resolve()
       link.onerror = reject
       document.head.appendChild(link)
+      this._injectedElements.push(link)
     })
   }
 
@@ -166,6 +170,7 @@ export class FirstScreenOptimizer {
       link.onload = () => resolve()
       link.onerror = reject
       document.head.appendChild(link)
+      this._injectedElements.push(link)
     })
   }
 
@@ -194,6 +199,18 @@ export class FirstScreenOptimizer {
       pending: this.loadingPromises.size,
     }
   }
+
+  /**
+   * 清理：移除所有动态注入的 DOM 元素
+   */
+  destroy(): void {
+    this._injectedElements.forEach(el => {
+      if (el.parentNode) el.parentNode.removeChild(el)
+    })
+    this._injectedElements = []
+    this.loaded.clear()
+    this.loadingPromises.clear()
+  }
 }
 
 /**
@@ -203,6 +220,7 @@ export class ResourcePreloader {
   private preloaded = new Set<string>()
   private prefetchQueue: string[] = []
   private isProcessing = false
+  private _injectedElements: HTMLElement[] = []
 
   /**
    * 预加载资源
@@ -219,6 +237,7 @@ export class ResourcePreloader {
     }
 
     document.head.appendChild(link)
+    this._injectedElements.push(link)
     this.preloaded.add(url)
   }
 
@@ -276,12 +295,14 @@ export class ResourcePreloader {
       link.rel = 'preconnect'
       link.href = domain
       document.head.appendChild(link)
+      this._injectedElements.push(link)
 
       // DNS 预解析
       const dnsLink = document.createElement('link')
       dnsLink.rel = 'dns-prefetch'
       dnsLink.href = domain
       document.head.appendChild(dnsLink)
+      this._injectedElements.push(dnsLink)
     })
   }
 
@@ -292,6 +313,17 @@ export class ResourcePreloader {
     this.preloaded.clear()
     this.prefetchQueue = []
     this.isProcessing = false
+  }
+
+  /**
+   * 清理：移除所有动态注入的 DOM 元素
+   */
+  destroy(): void {
+    this._injectedElements.forEach(el => {
+      if (el.parentNode) el.parentNode.removeChild(el)
+    })
+    this._injectedElements = []
+    this.clear()
   }
 }
 
@@ -788,6 +820,8 @@ export function stopPerformanceOptimization(): void {
     clearInterval(_perfCleanupInterval)
     _perfCleanupInterval = null
   }
+  firstScreenOptimizer.destroy()
+  resourcePreloader.destroy()
 }
 
 export default {

@@ -7,12 +7,17 @@ import CryptoJS from 'crypto-js'
 
 // 加密密钥（实际应用中应从安全存储获取）
 const getEncryptionKey = (): string => {
-  let key = localStorage.getItem('app_key')
-  if (!key) {
-    key = CryptoJS.lib.WordArray.random(32).toString()
-    localStorage.setItem('app_key', key)
+  try {
+    let key = localStorage.getItem('app_key')
+    if (!key) {
+      key = CryptoJS.lib.WordArray.random(32).toString()
+      localStorage.setItem('app_key', key)
+    }
+    return key ?? ''
+  } catch {
+    // localStorage 不可用（隐私模式、浏览器限制等），每次生成新密钥
+    return CryptoJS.lib.WordArray.random(32).toString()
   }
-  return key ?? ''
 }
 
 /**
@@ -97,15 +102,67 @@ export function escapeHtml(str: string): string {
 
 /**
  * XSS 防护 - 移除危险标签
+ * 保留白名单安全标签，剥离危险属性，非白名单标签用文本内容替换。
+ * For production use with untrusted HTML, use a dedicated library like DOMPurify.
  */
 export function sanitizeHtml(html: string): string {
-  // 移除 script 标签
-  let result = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-  // 移除事件处理器
-  result = result.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '')
-  // 移除 javascript: 协议
-  result = result.replace(/javascript:/gi, '')
-  return result
+  if (typeof window === 'undefined') {
+    return escapeHtml(html)
+  }
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const body = doc.body
+    if (!body) return ''
+
+    // 1. 移除危险元素
+    const dangerous = doc.querySelectorAll('script, style, iframe, object, embed, form, input, textarea')
+    dangerous.forEach(el => el.remove())
+
+    // Safe tag whitelist
+    const SAFE_TAGS = new Set([
+      'p', 'strong', 'em', 'b', 'i', 'u', 'span', 'br', 'h1', 'h2', 'h3',
+      'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'code', 'pre',
+      'div', 'a', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    ])
+
+    // 2. 遍历所有元素：清理危险属性，非白名单标签替换为文本
+    const allElements = body.querySelectorAll('*')
+    allElements.forEach(el => {
+      const tag = el.tagName.toLowerCase()
+
+      // 清理危险属性
+      const attrs = Array.from(el.attributes)
+      attrs.forEach(attr => {
+        const name = attr.name.toLowerCase()
+        const value = attr.value
+        if (/^on\w+/i.test(name)) {
+          el.removeAttribute(attr.name)
+        }
+        if (/^\s*javascript:/i.test(value)) {
+          el.removeAttribute(attr.name)
+        }
+        if (/^\s*data:text\/html/i.test(value)) {
+          el.removeAttribute(attr.name)
+        }
+        if (tag === 'a' && name === 'href') {
+          if (/^\s*javascript:/i.test(value) || /^\s*data:/i.test(value)) {
+            el.removeAttribute(attr.name)
+          }
+        }
+      })
+
+      // 非白名单标签：替换为文本内容（保留子文本）
+      if (!SAFE_TAGS.has(tag) && el.parentNode) {
+        const text = doc.createTextNode(el.textContent || '')
+        el.parentNode.replaceChild(text, el)
+      }
+    })
+
+    return body.innerHTML
+  } catch {
+    return escapeHtml(html)
+  }
 }
 
 /**

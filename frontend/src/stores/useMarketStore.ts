@@ -30,10 +30,20 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
       if (!q || !q.code) continue
       const existing = bondsCache.get(q.code)
       // 增量数据合并：如果缺少 name 字段说明是增量 tick，从 cache 合并
-      const merged = (existing && !('name' in q && q.name))
-        ? { ...existing, ...q }
+      const merged: ConvertibleQuote = (existing && !('name' in q && q.name))
+        ? { ...existing, ...q, name: q.name || existing.name }
         : q
-      if (!existing || existing.price !== merged.price || existing.change_pct !== merged.change_pct || existing.is_called !== merged.is_called || existing.call_status !== merged.call_status || existing.forced_call_days !== merged.forced_call_days || existing.last_trade_date !== merged.last_trade_date || existing.maturity_date !== merged.maturity_date) {
+      // 比较所有字段，避免 volume、stock_price 等字段更新被静默丢失
+      let differs = !existing
+      if (existing && !differs) {
+        for (const key of Object.keys(merged) as (keyof typeof merged)[]) {
+          if (merged[key] !== existing[key]) {
+            differs = true
+            break
+          }
+        }
+      }
+      if (differs) {
         bondsCache.set(merged.code, merged)
         changed = true
       }
@@ -80,5 +90,6 @@ export const useMarketStore = create<MarketState>((set, _get) => ({
       bondsUpdateTimer = null
       pendingBondsUpdate = null
     }
+    bondsCache.clear()
   },
 }))

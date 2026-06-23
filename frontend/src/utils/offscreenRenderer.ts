@@ -71,6 +71,19 @@ export class OffscreenRenderer {
   }
 
   /**
+   * 克隆 OffscreenCanvas 内容，避免 transferToImageBitmap 销毁原画布
+   */
+  private cloneOffscreenCanvas(): OffscreenCanvas {
+    if (!this.canvas || !(this.canvas instanceof OffscreenCanvas)) {
+      throw new Error('Canvas is not an OffscreenCanvas')
+    }
+    const clone = new OffscreenCanvas(this.config.width, this.config.height)
+    const cloneCtx = clone.getContext('2d')!
+    cloneCtx.drawImage(this.canvas as OffscreenCanvas, 0, 0)
+    return clone
+  }
+
+  /**
    * 渲染折线图
    */
   renderLineChart(series: LineSeries[], options?: {
@@ -121,9 +134,9 @@ export class OffscreenRenderer {
       this.drawLine(s, padding, chartWidth, chartHeight, minVal, range)
     }
 
-    // 返回结果
+    // 返回结果（克隆后 transfer，避免销毁原画布）
     if (this.canvas instanceof OffscreenCanvas) {
-      return this.canvas.transferToImageBitmap()
+      return this.cloneOffscreenCanvas().transferToImageBitmap()
     }
     return this.canvas!
   }
@@ -308,9 +321,9 @@ export class OffscreenRenderer {
     // 绘制坐标轴
     this.drawAxis(padding, chartWidth, chartHeight, minPrice, maxPrice)
 
-    // 返回结果
+    // 返回结果（克隆后 transfer，避免销毁原画布）
     if (this.canvas instanceof OffscreenCanvas) {
-      return this.canvas.transferToImageBitmap()
+      return this.cloneOffscreenCanvas().transferToImageBitmap()
     }
     return this.canvas!
   }
@@ -368,9 +381,9 @@ export class OffscreenRenderer {
       }
     }
 
-    // 返回结果
+    // 返回结果（克隆后 transfer，避免销毁原画布）
     if (this.canvas instanceof OffscreenCanvas) {
-      return this.canvas.transferToImageBitmap()
+      return this.cloneOffscreenCanvas().transferToImageBitmap()
     }
     return this.canvas!
   }
@@ -380,8 +393,8 @@ export class OffscreenRenderer {
    */
   toDataURL(format: 'png' | 'jpeg' = 'png', quality = 0.92): string {
     if (this.canvas instanceof OffscreenCanvas) {
-      // OffscreenCanvas 需要先转换为 ImageBitmap
-      const bitmap = this.canvas.transferToImageBitmap()
+      // OffscreenCanvas 需要先克隆再转换为 ImageBitmap，避免销毁原画布
+      const bitmap = this.cloneOffscreenCanvas().transferToImageBitmap()
       const tempCanvas = document.createElement('canvas')
       tempCanvas.width = this.config.width
       tempCanvas.height = this.config.height
@@ -419,7 +432,7 @@ export class OffscreenRenderer {
  * 渲染器池（用于批量渲染）
  */
 export class RendererPool {
-  private renderers: OffscreenRenderer[] = []
+  private entries: { renderer: OffscreenRenderer; inUse: boolean }[] = []
   private maxSize: number
 
   constructor(maxSize = 4) {
@@ -430,19 +443,20 @@ export class RendererPool {
    * 获取渲染器
    */
   acquire(config: ChartConfig): OffscreenRenderer {
-    // 尝试复用
-    const existing = this.renderers.find(
-      r => r['config'].width === config.width && r['config'].height === config.height
+    // 尝试复用空闲的
+    const freeEntry = this.entries.find(
+      e => !e.inUse && e.renderer['config'].width === config.width && e.renderer['config'].height === config.height
     )
 
-    if (existing) {
-      return existing
+    if (freeEntry) {
+      freeEntry.inUse = true
+      return freeEntry.renderer
     }
 
     // 创建新的
     const renderer = new OffscreenRenderer(config)
-    if (this.renderers.length < this.maxSize) {
-      this.renderers.push(renderer)
+    if (this.entries.length < this.maxSize) {
+      this.entries.push({ renderer, inUse: true })
     }
     return renderer
   }
@@ -451,15 +465,18 @@ export class RendererPool {
    * 释放渲染器
    */
   release(renderer: OffscreenRenderer): void {
-    // 渲染器保留在池中以供复用
+    const entry = this.entries.find(e => e.renderer === renderer)
+    if (entry) {
+      entry.inUse = false
+    }
   }
 
   /**
    * 清空池
    */
   clear(): void {
-    this.renderers.forEach(r => r.destroy())
-    this.renderers = []
+    this.entries.forEach(e => e.renderer.destroy())
+    this.entries = []
   }
 }
 

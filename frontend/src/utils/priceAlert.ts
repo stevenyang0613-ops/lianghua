@@ -92,8 +92,24 @@ function _scheduleFlush(): void {
   _flushTimer = setTimeout(_flushAlerts, FLUSH_DELAY)
 }
 
-// Ensure alerts are flushed on page unload
-window.addEventListener('beforeunload', _flushAlerts)
+let _beforeunloadHandler: (() => void) | null = null
+
+function _registerBeforeUnload(): void {
+  if (_beforeunloadHandler) return
+  _beforeunloadHandler = _flushAlerts
+  window.addEventListener('beforeunload', _beforeunloadHandler)
+}
+
+export function destroyPriceAlert(): void {
+  if (_beforeunloadHandler) {
+    window.removeEventListener('beforeunload', _beforeunloadHandler)
+    _beforeunloadHandler = null
+  }
+  _flushAlerts()
+}
+
+// Auto-register on first import
+_registerBeforeUnload()
 
 // 生成唯一ID
 function generateId(): string {
@@ -105,7 +121,8 @@ export function getAlerts(): PriceAlert[] {
   if (_pendingAlerts !== null) {
     return _pendingAlerts.slice()
   }
-  const saved = localStorage.getItem(ALERTS_KEY)
+  let saved: string | null = null
+  try { saved = localStorage.getItem(ALERTS_KEY) } catch { /* localStorage unavailable */ }
   const alerts = safeJsonParse<PriceAlert[]>(saved, [])
   if (alerts.length === 0) {
     // Seed default alerts on first use so the UI is never empty

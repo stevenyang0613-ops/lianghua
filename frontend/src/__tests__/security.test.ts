@@ -194,6 +194,20 @@ describe('Security Utils', () => {
   })
 
   describe('sessionManager', () => {
+    // 兼容 vitest worker 隔离：若 jsdom 未初始化 localStorage，手动提供
+    if (typeof localStorage === 'undefined') {
+      // @ts-ignore
+      globalThis.localStorage = {
+        _store: {} as Record<string, string>,
+        getItem(key: string) { return this._store[key] ?? null },
+        setItem(key: string, value: string) { this._store[key] = value },
+        removeItem(key: string) { delete this._store[key] },
+        clear() { this._store = {} },
+        key(index: number) { return Object.keys(this._store)[index] ?? null },
+        get length() { return Object.keys(this._store).length },
+      }
+    }
+
     beforeEach(() => {
       localStorage.clear()
       sessionManager.destroy()

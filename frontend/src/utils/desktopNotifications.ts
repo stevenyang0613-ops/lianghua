@@ -58,10 +58,12 @@ const defaultSettings: NotificationSettings = {
 
 // 获取通知设置
 export function getNotificationSettings(): NotificationSettings {
-  const saved = localStorage.getItem(NOTIFICATION_SETTINGS_KEY)
-  if (saved) {
-    try { return { ...defaultSettings, ...JSON.parse(saved) } } catch { /* fall through */ }
-  }
+  try {
+    const saved = localStorage.getItem(NOTIFICATION_SETTINGS_KEY)
+    if (saved) {
+      try { return { ...defaultSettings, ...JSON.parse(saved) } } catch { /* fall through */ }
+    }
+  } catch { /* localStorage unavailable */ }
   return defaultSettings
 }
 

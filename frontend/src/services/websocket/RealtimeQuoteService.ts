@@ -32,8 +32,8 @@ type QuoteEventType = 'quote' | 'update' | 'error' | 'connected' | 'disconnected
 
 class RealtimeQuoteService extends EventEmitter {
   private ws: WebSocket | null = null
-  private reconnectTimer: NodeJS.Timeout | null = null
-  private pingTimer: NodeJS.Timeout | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private pingTimer: ReturnType<typeof setTimeout> | null = null
   private subscriptions: Set<string> = new Set()
   private quotes: Map<string, QuoteData> = new Map()
   private isConnected: boolean = false
@@ -48,6 +48,11 @@ class RealtimeQuoteService extends EventEmitter {
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       return
+    }
+    // 清除旧的重连定时器，防止重复连接
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
     }
 
     try {
@@ -174,6 +179,10 @@ class RealtimeQuoteService extends EventEmitter {
   }
 
   private startPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
     this.pingTimer = setInterval(() => {
       this.send({ action: 'ping' })
     }, 30000)
@@ -187,6 +196,10 @@ class RealtimeQuoteService extends EventEmitter {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('达到最大重连次数，停止重连')
       return

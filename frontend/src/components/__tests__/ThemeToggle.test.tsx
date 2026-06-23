@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 
 const mockSetMode = vi.fn()
 vi.mock('../../stores/useThemeStore', () => ({
@@ -20,10 +20,12 @@ describe('ThemeToggle', () => {
     expect(btn).toBeDefined()
   })
 
-  it('should have three theme options', () => {
+  it('should have three theme options', async () => {
     render(<ThemeToggle />)
     const btn = screen.getByRole('button')
-    fireEvent.click(btn)
+    await act(async () => {
+      fireEvent.click(btn)
+    })
     expect(screen.getByText('浅色')).toBeDefined()
     expect(screen.getByText('深色')).toBeDefined()
     expect(screen.getByText('跟随系统')).toBeDefined()

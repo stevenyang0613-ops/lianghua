@@ -58,6 +58,7 @@ export default function ChartPanel({ code, name }: ChartPanelProps) {
           if (result.ok) data = result.data
         } else {
           const resp = await fetch(`${baseUrl}/api/v1/history/${code}?limit=100`, { signal: controller.signal })
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           data = await resp.json()
         }
         if (data?.history && data.history.length > 0) {

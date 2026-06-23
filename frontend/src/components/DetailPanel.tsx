@@ -112,6 +112,150 @@ export default function DetailPanel() {
           <Card size="small" title="交易数据" style={{ margin: '0 16px 16px' }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="成交额">{fmt(bond.volume)} 亿元</Descriptions.Item>
+              {bond.turnover_rate !== undefined && (
+                <Descriptions.Item label="换手率">{fmt(bond.turnover_rate)}%</Descriptions.Item>
+              )}
+              {bond.outstanding_scale !== undefined && (
+                <Descriptions.Item label="剩余规模">{fmt(bond.outstanding_scale)} 亿</Descriptions.Item>
+              )}
+            </Descriptions>
+          </Card>
+
+          <Card size="small" title="正股财务" style={{ margin: '0 16px 16px' }}>
+            <Descriptions column={1} size="small">
+              {bond.pe !== undefined && (
+                <Descriptions.Item label="PE">{fmt(bond.pe)}</Descriptions.Item>
+              )}
+              {bond.pb !== undefined && (
+                <Descriptions.Item label="PB">{fmt(bond.pb)}</Descriptions.Item>
+              )}
+              {bond.roe !== undefined && (
+                <Descriptions.Item label="ROE">{fmt(bond.roe)}%</Descriptions.Item>
+              )}
+              {bond.gpm !== undefined && bond.gpm > 0 && (
+                <Descriptions.Item label="毛利率">{fmt(bond.gpm)}%</Descriptions.Item>
+              )}
+              {bond.debt_ratio !== undefined && (
+                <Descriptions.Item label="资产负债率">{fmt(bond.debt_ratio)}%</Descriptions.Item>
+              )}
+              {bond.current_ratio !== undefined && (
+                <Descriptions.Item label="流动比率">{fmt(bond.current_ratio)}</Descriptions.Item>
+              )}
+              {bond.eps !== undefined && (
+                <Descriptions.Item label="EPS">{fmt(bond.eps)}</Descriptions.Item>
+              )}
+              {bond.bps !== undefined && (
+                <Descriptions.Item label="BPS">{fmt(bond.bps)}</Descriptions.Item>
+              )}
+              {bond.revenue_yoy !== undefined && (
+                <Descriptions.Item label="营收增速">
+                  <Tag color={(bond.revenue_yoy ?? 0) > 0 ? 'green' : 'red'}>
+                    {(bond.revenue_yoy ?? 0) > 0 ? '+' : ''}{fmt(bond.revenue_yoy)}%
+                  </Tag>
+                </Descriptions.Item>
+              )}
+              {bond.profit_yoy !== undefined && (
+                <Descriptions.Item label="利润增速">
+                  <Tag color={(bond.profit_yoy ?? 0) > 0 ? 'green' : 'red'}>
+                    {(bond.profit_yoy ?? 0) > 0 ? '+' : ''}{fmt(bond.profit_yoy)}%
+                  </Tag>
+                </Descriptions.Item>
+              )}
+              {bond.industry && (
+                <Descriptions.Item label="行业">{bond.industry}</Descriptions.Item>
+              )}
+              {bond.concepts && bond.concepts.length > 0 && (
+                <Descriptions.Item label="概念">
+                  {bond.concepts.map(c => <Tag key={c}>{c}</Tag>)}
+                </Descriptions.Item>
+              )}
+            </Descriptions>
+          </Card>
+
+          <Card size="small" title="资金与情绪" style={{ margin: '0 16px 16px' }}>
+            <Descriptions column={1} size="small">
+              {bond.north_net !== undefined && (
+                <Descriptions.Item label="北向资金">{fmt(bond.north_net)} 亿</Descriptions.Item>
+              )}
+              {bond.margin_balance !== undefined && (
+                <Descriptions.Item label="融资余额">{fmt(bond.margin_balance)} 亿</Descriptions.Item>
+              )}
+              {bond.net_capital_flow !== undefined && (
+                <Descriptions.Item label="主力净流入">
+                  <Tag color={(bond.net_capital_flow ?? 0) > 0 ? 'red' : 'green'}>
+                    {(bond.net_capital_flow ?? 0) > 0 ? '+' : ''}{fmt(bond.net_capital_flow)} 万
+                  </Tag>
+                </Descriptions.Item>
+              )}
+              {bond.sentiment_score !== undefined && (
+                <Descriptions.Item label="新闻情绪">
+                  <Tag color={
+                    (bond.sentiment_score ?? 0) > 0.3 ? 'green' :
+                    (bond.sentiment_score ?? 0) < -0.3 ? 'red' : 'default'
+                  }>
+                    {(bond.sentiment_score ?? 0) > 0.3 ? '正面' :
+                     (bond.sentiment_score ?? 0) < -0.3 ? '负面' : '中性'}
+                    ({fmt(bond.sentiment_score)})
+                  </Tag>
+                </Descriptions.Item>
+              )}
+              {bond.lhb_count !== undefined && bond.lhb_count > 0 && (
+                <Descriptions.Item label="龙虎榜">近5日 {bond.lhb_count} 次</Descriptions.Item>
+              )}
+              {bond.block_trade_amount !== undefined && bond.block_trade_amount > 0 && (
+                <Descriptions.Item label="大宗交易">{fmt(bond.block_trade_amount)} 万</Descriptions.Item>
+              )}
+              {bond.pledge_ratio !== undefined && (
+                <Descriptions.Item label="质押率">{fmt(bond.pledge_ratio)}%</Descriptions.Item>
+              )}
+              {bond.holder_num_change !== undefined && (
+                <Descriptions.Item label="股东户数变化">
+                  <Tag color={(bond.holder_num_change ?? 0) > 0 ? 'red' : 'green'}>
+                    {(bond.holder_num_change ?? 0) > 0 ? '+' : ''}{fmt(bond.holder_num_change)}%
+                  </Tag>
+                </Descriptions.Item>
+              )}
+              {bond.buyback_amount !== undefined && bond.buyback_amount > 0 && (
+                <Descriptions.Item label="回购金额">{fmt(bond.buyback_amount)} 亿</Descriptions.Item>
+              )}
+              {bond.mgmt_buy_price !== undefined && bond.mgmt_buy_price > 0 && (
+                <Descriptions.Item label="管理层增持">{fmt(bond.mgmt_buy_price)} 元</Descriptions.Item>
+              )}
+            </Descriptions>
+          </Card>
+
+          <Card size="small" title="动量与事件" style={{ margin: '0 16px 16px' }}>
+            <Descriptions column={1} size="small">
+              {bond.momentum_5d !== undefined && (
+                <Descriptions.Item label="5日动量">{fmt(bond.momentum_5d)}%</Descriptions.Item>
+              )}
+              {bond.momentum_20d !== undefined && (
+                <Descriptions.Item label="20日动量">{fmt(bond.momentum_20d)}%</Descriptions.Item>
+              )}
+              {bond.momentum_60d !== undefined && (
+                <Descriptions.Item label="60日动量">{fmt(bond.momentum_60d)}%</Descriptions.Item>
+              )}
+              {bond.event_score !== undefined && (
+                <Descriptions.Item label="事件评分">{fmt(bond.event_score)}</Descriptions.Item>
+              )}
+              {bond.event_detail && (
+                <Descriptions.Item label="最近事件">{bond.event_detail}</Descriptions.Item>
+              )}
+              {bond.hv !== undefined && (
+                <Descriptions.Item label="历史波动率">{fmt(bond.hv)}%</Descriptions.Item>
+              )}
+              {bond.iv !== undefined && (
+                <Descriptions.Item label="隐含波动率">{fmt(bond.iv)}%</Descriptions.Item>
+              )}
+              {bond.rating_score !== undefined && (
+                <Descriptions.Item label="评级评分">{fmt(bond.rating_score)}</Descriptions.Item>
+              )}
+              {bond.pure_bond_premium_ratio !== undefined && (
+                <Descriptions.Item label="纯债溢价率">{fmt(bond.pure_bond_premium_ratio)}%</Descriptions.Item>
+              )}
+              {bond.bond_value !== undefined && (
+                <Descriptions.Item label="纯债价值">{fmt(bond.bond_value)} 元</Descriptions.Item>
+              )}
             </Descriptions>
           </Card>
         </>

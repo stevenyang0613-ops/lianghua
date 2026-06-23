@@ -37,7 +37,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 async function testBinaryPath() {
   console.log('\n=== 测试1: PyInstaller 二进制路径查找 ===')
 
-  const backendDir = '/Users/stevenyang/Public/lianghua/backend'
+  const backendDir = path.join(__dirname, '..', '..', 'backend')
 
   // 模拟 getPythonCmd 的逻辑
   function getPythonCmd(backendDir) {
@@ -106,7 +106,7 @@ async function testSpawnArgs() {
 async function testPackageJsonFilter() {
   console.log('\n=== 测试3: package.json 打包过滤配置 ===')
 
-  const pkgPath = '/Users/stevenyang/Public/lianghua/electron/package.json'
+  const pkgPath = path.join(__dirname, '..', 'package.json')
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
   const backendResource = pkg.build.extraResources.find(r => r.to === 'backend')
 
@@ -118,11 +118,12 @@ async function testPackageJsonFilter() {
   console.log(`  当前 !dist/** 过滤: ${hasDistFilter ? '存在（问题！）' : '不存在（正确）'}`)
 
   // lianghua-backend 根目录文件应该被包含
-  const rootBinaryExists = fs.existsSync('/Users/stevenyang/Public/lianghua/backend/lianghua-backend')
+  const rootBinaryPath = path.join(__dirname, '..', '..', 'backend', 'lianghua-backend')
+  const rootBinaryExists = fs.existsSync(rootBinaryPath)
   assert2(rootBinaryExists, '根目录二进制文件存在')
 
   // 验证 app 目录存在（Python 模块源码）
-  const appDirExists = fs.existsSync('/Users/stevenyang/Public/lianghua/backend/app')
+  const appDirExists = fs.existsSync(path.join(__dirname, '..', '..', 'backend', 'app'))
   assert2(appDirExists, 'app 目录存在（Python 模块）')
 }
 
@@ -132,7 +133,7 @@ async function testPackageJsonFilter() {
 async function testRouterType() {
   console.log('\n=== 测试4: Router 类型检查 ===')
 
-  const mainTsx = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/main.tsx', 'utf-8')
+  const mainTsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'main.tsx'), 'utf-8')
 
   const hasBrowserRouter = mainTsx.includes('BrowserRouter')
   const hasHashRouter = mainTsx.includes('HashRouter')
@@ -151,9 +152,9 @@ async function testRouterType() {
 async function testFrontendIPCProxy() {
   console.log('\n=== 测试5: 前端 API 请求走 IPC 代理 ===')
 
-  const configTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/utils/config.ts', 'utf-8')
-  const apiTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/services/api.ts', 'utf-8')
-  const startupTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/components/StartupLoading.tsx', 'utf-8')
+  const configTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'utils', 'config.ts'), 'utf-8')
+  const apiTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'services', 'api.ts'), 'utf-8')
+  const startupTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'StartupLoading.tsx'), 'utf-8')
 
   // config.ts 应该用 hasElectronAPI (检查 httpRequest) 而不是 isElectron
   const hasHttpRequestCheck = configTs.includes('httpRequest') || configTs.includes('hasElectronAPI')
@@ -174,7 +175,7 @@ async function testFrontendIPCProxy() {
 async function testBackendHealthRoutes() {
   console.log('\n=== 测试6: 后端健康检查路由 ===')
 
-  const mainPy = fs.readFileSync('/Users/stevenyang/Public/lianghua/backend/app/main.py', 'utf-8')
+  const mainPy = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'app', 'main.py'), 'utf-8')
 
   const hasHealthRoute = mainPy.includes('@app.get("/health")')
   const hasApiV1HealthRoute = mainPy.includes('@app.get("/api/v1/health")')
@@ -272,8 +273,8 @@ async function testIPCProxyHTTP() {
 async function testNoDefaultOffline() {
   console.log('\n=== 测试8: 离线模式不应默认启用 ===')
 
-  const startupTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/components/StartupLoading.tsx', 'utf-8')
-  const dataCacheTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/utils/dataCache.ts', 'utf-8')
+  const startupTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'StartupLoading.tsx'), 'utf-8')
+  const dataCacheTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'utils', 'dataCache.ts'), 'utf-8')
 
   // enableOfflineMode 不应在组件初始化时被调用
   const autoOfflineInInit = startupTs.match(/useEffect[^]*enableOfflineMode/m)

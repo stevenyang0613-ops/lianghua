@@ -261,7 +261,7 @@ export default React.memo(function SignalStrategyTab() {
     { title: '名称', dataIndex: 'name', width: 110, ellipsis: true },
     { title: '动作', dataIndex: 'action', width: 70, render: (v: string) => <Tag color={v === 'buy' ? 'green' : 'red'}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
     { title: '价格', dataIndex: 'price', width: 75, render: (v: number) => v?.toFixed(3), sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => (a.price ?? 0) - (b.price ?? 0) },
-    { title: '置信度', dataIndex: 'confidence', width: 80, render: (v: number) => ((v ?? 0) * 100).toFixed(0) + '%', sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => a.confidence - b.confidence },
+    { title: '置信度', dataIndex: 'confidence', width: 80, render: (v: number) => v == null ? '-' : `${(v * 100).toFixed(0)}%`, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => (a.confidence ?? -Infinity) - (b.confidence ?? -Infinity) },
     { title: '原因', dataIndex: 'reason', width: 180, ellipsis: true },
     { title: '时间', dataIndex: 'ts', width: 130, render: (v: string) => dayjs(v).format('MM-DD HH:mm'), sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => new Date(a.ts).getTime() - new Date(b.ts).getTime() },
     { title: '已执行', dataIndex: 'executed', width: 60, render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? '是' : '否'}</Tag>, sorter: (a: SignalHistoryItem, b: SignalHistoryItem) => Number(a.executed) - Number(b.executed) },
@@ -781,9 +781,9 @@ export default React.memo(function SignalStrategyTab() {
                   pagination={false}
                   columns={[
                     { title: '年份', dataIndex: 'year', width: 80 },
-                    { title: '年化收益', dataIndex: 'annual_return', width: 100, render: (v: number) => <span style={{ color: (v ?? 0) > 0 ? '#cf1322' : '#3f8600' }}>{((v ?? 0) * 100).toFixed(2)}%</span> },
-                    { title: '最大回撤', dataIndex: 'max_drawdown', width: 100, render: (v: number) => <span style={{ color: '#3f8600' }}>-{((v ?? 0) * 100).toFixed(2)}%</span> },
-                    { title: '夏普', dataIndex: 'sharpe_ratio', width: 70, render: (v: number) => (v ?? 0).toFixed(2) },
+                    { title: '年化收益', dataIndex: 'annual_return', width: 100, render: (v: number) => <span style={{ color: v == null ? undefined : (v > 0 ? '#cf1322' : '#3f8600') }}>{v == null ? '-' : (v * 100).toFixed(2)}%</span> },
+                    { title: '最大回撤', dataIndex: 'max_drawdown', width: 100, render: (v: number) => <span style={{ color: '#3f8600' }}>{v == null ? '-' : `-${(v * 100).toFixed(2)}%`}</span> },
+                    { title: '夏普', dataIndex: 'sharpe_ratio', width: 70, render: (v: number) => v == null ? '-' : v.toFixed(2) },
                     { title: '期数', dataIndex: 'periods', width: 60 },
                   ]}
                 />

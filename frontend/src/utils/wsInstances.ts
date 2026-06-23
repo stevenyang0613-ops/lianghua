@@ -9,23 +9,58 @@
  * 心跳策略：交易时间(9:00-15:30) 30s，非交易时间 120s
  */
 import { WSReconnect } from './wsReconnect'
-import { getWsBase } from './config'
+import { getWsBase, getHttpBase } from './config'
 
 const STALE_KEY = 'ws_stale_threshold_sec'
 const DEFAULT_STALE_MS = 60000
 
+/**
+ * 从 localStorage 获取 WS 认证 token。
+ * 如果为空，尝试从后端 health 接口异步获取（降级机制）。
+ */
 function getToken(): string {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('ws_auth_token') || ''
+  try {
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem('ws_auth_token')
+      if (cached) return cached
+    }
+  } catch { /* localStorage unavailable (private mode, sandbox, etc.) */ }
+  return ''
+}
+
+/**
+ * 通过后端 health 接口获取 token 并缓存到 localStorage。
+ * 空 token 时作为降级机制调用，避免发送无效请求。
+ */
+async function fetchTokenFromHealth(): Promise<string> {
+  try {
+    if (typeof window === 'undefined') return ''
+    const base = getHttpBase()
+    const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) })
+    if (resp.ok) {
+      const data = await resp.json()
+      const token = data?.ws_auth_token
+      if (typeof token === 'string' && token) {
+        localStorage.setItem('ws_auth_token', token)
+        return token
+      }
+    }
+  } catch (e) {
+    console.warn('[WS] fetchTokenFromHealth failed:', e)
   }
   return ''
 }
 
 function getStaleThresholdMs(): number {
-  if (typeof window !== 'undefined') {
-    const saved = localStorage.getItem(STALE_KEY)
-    if (saved) return parseInt(saved, 10) * 1000
-  }
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(STALE_KEY)
+      if (saved) {
+        const parsed = parseInt(saved, 10)
+        return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : DEFAULT_STALE_MS
+      }
+    }
+  } catch { /* localStorage unavailable */ }
   return DEFAULT_STALE_MS
 }
 
@@ -43,15 +78,24 @@ function getHeartbeatInterval(): number {
 
 const WS_BASE = getWsBase()
 
+/**
+ * 构建 WebSocket URL。
+ * 如果 token 为空，先尝试通过 health 接口异步获取；
+ * 获取失败或仍为空时，直接返回不带 token 的 URL（避免发送无效 ?token= 请求）。
+ */
 function buildUrl(path: string): string {
-  const sep = path.includes('?') ? '&' : '?'
   const token = getToken()
-  return `${path}${sep}token=${encodeURIComponent(token)}`
+  if (token) {
+    const sep = path.includes('?') ? '&' : '?'
+    return `${path}${sep}token=${encodeURIComponent(token)}`
+  }
+  return path
 }
 
 /**
  * 创建 WSReconnect 实例并包装 connect() 方法。
  * 每次连接前重新从 localStorage 读取 token，确保永远使用最新 token。
+ * 支持空 token 时通过 health 接口降级获取。
  */
 function createWsReconnect(basePath: string, wsId: string): WSReconnect {
   const url = buildUrl(`${WS_BASE}${basePath}`)
@@ -63,8 +107,9 @@ function createWsReconnect(basePath: string, wsId: string): WSReconnect {
   }, wsId)
 
   const origConnect = ws.connect.bind(ws)
-  ws.connect = function(_overrideUrl?: string) {
+  ws.connect = async function(_overrideUrl?: string) {
     const freshUrl = buildUrl(`${WS_BASE}${basePath}`)
+    ws.setUrl(freshUrl)
     return origConnect(freshUrl)
   }
 
@@ -87,6 +132,20 @@ export function cancelRefreshWsToken(): void {
     clearTimeout(_refreshTimer)
     _refreshTimer = null
   }
+}
+
+/**
+ * 销毁所有 WebSocket 实例和定时器。
+ * 在应用卸载时调用，避免内存泄漏。
+ */
+export function destroyWsInstances(): void {
+  try {
+    marketWs.dispose()
+  } catch { /* noop */ }
+  try {
+    signalsWs.dispose()
+  } catch { /* noop */ }
+  cancelRefreshWsToken()
 }
 
 /**

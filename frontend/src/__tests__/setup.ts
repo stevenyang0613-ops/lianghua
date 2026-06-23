@@ -6,16 +6,22 @@ import '@testing-library/jest-dom'
 import { vi, afterEach } from 'vitest'
 
 // Mock localStorage
+const workingStorage: Record<string, string> = {}
+
 const localStorageMock = {
-  getItem: vi.fn(),
-  setItem: vi.fn(),
-  removeItem: vi.fn(),
-  clear: vi.fn(),
+  getItem: vi.fn((key: string) => workingStorage[key] ?? null),
+  setItem: vi.fn((key: string, value: string) => { workingStorage[key] = value; }),
+  removeItem: vi.fn((key: string) => { delete workingStorage[key]; }),
+  clear: vi.fn(() => { Object.keys(workingStorage).forEach(k => delete workingStorage[k]); }),
+  key: vi.fn((index: number) => Object.keys(workingStorage)[index] ?? null),
+  get length() { return Object.keys(workingStorage).length },
 }
-Object.defineProperty(window, 'localStorage', { value: localStorageMock })
+
+// 使用 stubGlobal 覆盖所有可能的全局引用（jsdom worker 隔离兼容）
+vi.stubGlobal('localStorage', localStorageMock)
 
 // Mock sessionStorage
-Object.defineProperty(window, 'sessionStorage', { value: localStorageMock })
+Object.defineProperty(window, 'sessionStorage', { value: localStorageMock, configurable: true })
 
 // Mock matchMedia
 Object.defineProperty(window, 'matchMedia', {
@@ -67,7 +73,7 @@ afterEach(() => {
 
 // Make localStorage actually work for crypto tests
 // Override the mock to store/retrieve values
-const workingStorage: Record<string, string> = {}
+// (workingStorage already declared above at line 9)
 const originalMock = window.localStorage
 Object.defineProperty(window, 'localStorage', {
   value: {

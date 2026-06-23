@@ -16,7 +16,7 @@ const RETRY_CONFIG = {
 
 // 离线模式检测
 function isOfflineMode(): boolean {
-  return localStorage.getItem('offline_mode') === 'true'
+  try { return localStorage.getItem('offline_mode') === 'true' } catch { return false }
 }
 
 // 获取缓存过期状态（从 IndexedDB 读取）
@@ -97,7 +97,8 @@ async function requestAPI<T>(
   // Web 环境使用 fetch —— 注入 ws_auth_token 作为 Bearer 以通过后端鉴权
   const doFetch = async (token?: string): Promise<Response> => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const wsToken = token || localStorage.getItem('ws_auth_token')
+    let wsToken: string | null = null
+    try { wsToken = token || localStorage.getItem('ws_auth_token') } catch { /* localStorage unavailable */ }
     if (wsToken) {
       headers['Authorization'] = `Bearer ${wsToken}`
     }
@@ -373,7 +374,8 @@ export function runBacktestStream(
 
      // Use IPC proxy or auth token like other API calls
      const sseHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-     const wsToken = localStorage.getItem('ws_auth_token')
+     let wsToken: string | null = null
+     try { wsToken = localStorage.getItem('ws_auth_token') } catch { /* localStorage unavailable */ }
      if (wsToken) {
        sseHeaders['Authorization'] = `Bearer ${wsToken}`
      }
@@ -1637,6 +1639,14 @@ export interface TimingSignal {
   }
   riskScore?: number
   factorContributions?: Record<string, number>
+  // V4.1: 信号准确率统计
+  accuracyStats?: {
+    accuracy: number
+    total: number
+    verified: number
+    correct: number
+    recentAccuracy: number
+  }
 }
 
 export async function fetchTimingSignal(): Promise<TimingSignal> {
@@ -2696,11 +2706,15 @@ export async function fetchIndividualFundFlow(
   const params = new URLSearchParams()
   params.set('indicator', indicator)
   params.set('limit', String(limit))
-  return fetchJSON<IndividualFundFlowResponse>(
+  const data = await fetchJSON<IndividualFundFlowResponse>(
     `${BASE}/fund_flow/individual?${params.toString()}`,
     `individual_fund_flow_${indicator}`,
     60000,  // 1分钟缓存
   )
+  if (!data || !Array.isArray(data.stocks)) {
+    throw new Error(`Invalid individual fund flow response: expected {stocks: [...], total: number}, got ${typeof data}`)
+  }
+  return data
 }
 
 /**
@@ -2729,11 +2743,15 @@ export async function fetchMainFundFlow(
 ): Promise<MainFundFlowResponse> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
-  return fetchJSON<MainFundFlowResponse>(
+  const data = await fetchJSON<MainFundFlowResponse>(
     `${BASE}/fund_flow/main?${params.toString()}`,
     'main_fund_flow',
     60000,
   )
+  if (!data || !Array.isArray(data.stocks)) {
+    throw new Error(`Invalid main fund flow response: expected {stocks: [...], total: number}, got ${typeof data}`)
+  }
+  return data
 }
 
 /**
@@ -2745,11 +2763,15 @@ export async function fetchTurnoverRank(
 ): Promise<TurnoverRankResponse> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
-  return fetchJSON<TurnoverRankResponse>(
+  const data = await fetchJSON<TurnoverRankResponse>(
     `${BASE}/fund_flow/turnover_rank?${params.toString()}`,
     'turnover_rank',
     60000,
   )
+  if (!data || !Array.isArray(data.stocks)) {
+    throw new Error(`Invalid turnover rank response: expected {stocks: [...], total: number}, got ${typeof data}`)
+  }
+  return data
 }
 
 /**
@@ -2784,7 +2806,8 @@ export interface MXQueryResponse {
 }
 
 export async function queryMXData(req: MXQueryRequest): Promise<MXQueryResponse> {
-  const token = localStorage.getItem('token') || ''
+  let token = ''
+  try { token = localStorage.getItem('token') || '' } catch { /* localStorage unavailable */ }
   const res = await fetch(`${BASE}/mx/query`, {
     method: 'POST',
     headers: {
@@ -2850,3 +2873,4 @@ export async function updatePaperParams(accountId: string, params: Record<string
 export async function deletePaperAccount(accountId: string): Promise<any> {
   return deleteJSON(`${BASE}/paper-trade/accounts/${accountId}`)
 }
+

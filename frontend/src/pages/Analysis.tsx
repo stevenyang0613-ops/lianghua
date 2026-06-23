@@ -88,6 +88,7 @@ function ForcedRedemptionTab() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const loadSeqRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   const sortOptions = [
     { label: '风险等级', value: 'risk_level' },
@@ -97,6 +98,7 @@ function ForcedRedemptionTab() {
   ]
 
   const loadData = useCallback((mv?: number, sb?: string, so?: string, sd?: string, ed?: string) => {
+    if (!isMountedRef.current) return
     const seq = ++loadSeqRef.current
     setLoading(true)
     const opts: any = {}
@@ -105,12 +107,16 @@ function ForcedRedemptionTab() {
     if (so) opts.sort_order = so
     if (sd) opts.start_date = sd
     if (ed) opts.end_date = ed
-    fetchForcedRedemption(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (seq === loadSeqRef.current) setData(d) }).catch(e => { if (seq === loadSeqRef.current) message.error('加载强赎数据失败: ' + e.message) }).finally(() => { if (seq === loadSeqRef.current) setLoading(false) })
+    fetchForcedRedemption(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setData(d) }).catch(e => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; message.error('加载强赎数据失败: ' + e.message) }).finally(() => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setLoading(false) })
   }, [])
 
   const dateStr = dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : [undefined, undefined]
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadData()
+    return () => { isMountedRef.current = false }
+  }, [])
   useAutoRefresh(() => loadData(minVolume ?? undefined, combinedSortBy(sortField, sortField2) || undefined, sortOrder !== 'asc' ? sortOrder : undefined, dateStr[0], dateStr[1]), 60000)
 
   const handleMinVolumeChange = (v: number | null) => {
@@ -178,6 +184,7 @@ function DualLowRankingTab() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
   const loadSeqRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   const sortOptions = [
     { label: '双低值', value: 'dual_low' },
@@ -187,6 +194,7 @@ function DualLowRankingTab() {
   ]
 
   const loadData = useCallback((mv?: number, sb?: string, so?: string, sd?: string, ed?: string) => {
+    if (!isMountedRef.current) return
     const seq = ++loadSeqRef.current
     setLoading(true)
     const opts: any = {}
@@ -195,12 +203,16 @@ function DualLowRankingTab() {
     if (so) opts.sort_order = so
     if (sd) opts.start_date = sd
     if (ed) opts.end_date = ed
-    fetchDualLowRanking(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (seq === loadSeqRef.current) setData(d) }).catch(e => { if (seq === loadSeqRef.current) message.error('加载双低排名失败: ' + e.message) }).finally(() => { if (seq === loadSeqRef.current) setLoading(false) })
+    fetchDualLowRanking(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setData(d) }).catch(e => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; message.error('加载双低排名失败: ' + e.message) }).finally(() => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setLoading(false) })
   }, [])
 
   const dateStr = dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : [undefined, undefined]
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadData()
+    return () => { isMountedRef.current = false }
+  }, [])
   useAutoRefresh(() => loadData(minVolume ?? undefined, combinedSortBy(sortField, sortField2) || undefined, sortOrder !== 'asc' ? sortOrder : undefined, dateStr[0], dateStr[1]), 60000)
 
   const handleMinVolumeChange = (v: number | null) => {
@@ -265,6 +277,7 @@ function PulseScanTab() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const loadSeqRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   const sortOptions = [
     { label: '涨跌幅', value: 'change_pct' },
@@ -274,6 +287,7 @@ function PulseScanTab() {
   ]
 
   const loadData = useCallback((mv?: number, sb?: string, so?: string, sd?: string, ed?: string) => {
+    if (!isMountedRef.current) return
     const seq = ++loadSeqRef.current
     setLoading(true)
     const opts: any = {}
@@ -282,12 +296,16 @@ function PulseScanTab() {
     if (so) opts.sort_order = so
     if (sd) opts.start_date = sd
     if (ed) opts.end_date = ed
-    fetchPulseScan(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (seq === loadSeqRef.current) setData(d) }).catch(e => { if (seq === loadSeqRef.current) message.error('加载脉冲扫描失败: ' + e.message) }).finally(() => { if (seq === loadSeqRef.current) setLoading(false) })
+    fetchPulseScan(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setData(d) }).catch(e => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; message.error('加载脉冲扫描失败: ' + e.message) }).finally(() => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setLoading(false) })
   }, [])
 
   const dateStr = dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : [undefined, undefined]
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadData()
+    return () => { isMountedRef.current = false }
+  }, [])
   useAutoRefresh(() => loadData(minVolume ?? undefined, combinedSortBy(sortField, sortField2) || undefined, sortOrder !== 'asc' ? sortOrder : undefined, dateStr[0], dateStr[1]), 10000)
 
   const handleMinVolumeChange = (v: number | null) => {
@@ -361,6 +379,7 @@ function RevisionProbabilityTab() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const loadSeqRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   const sortOptions = [
     { label: '概率', value: 'probability' },
@@ -370,6 +389,7 @@ function RevisionProbabilityTab() {
   ]
 
   const loadData = useCallback((mv?: number, sb?: string, so?: string, sd?: string, ed?: string) => {
+    if (!isMountedRef.current) return
     const seq = ++loadSeqRef.current
     setLoading(true)
     const opts: any = {}
@@ -378,12 +398,16 @@ function RevisionProbabilityTab() {
     if (so) opts.sort_order = so
     if (sd) opts.start_date = sd
     if (ed) opts.end_date = ed
-    fetchRevisionProbability(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (seq === loadSeqRef.current) setData(d) }).catch(e => { if (seq === loadSeqRef.current) message.error('加载下修概率失败: ' + e.message) }).finally(() => { if (seq === loadSeqRef.current) setLoading(false) })
+    fetchRevisionProbability(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setData(d) }).catch(e => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; message.error('加载下修概率失败: ' + e.message) }).finally(() => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setLoading(false) })
   }, [])
 
   const dateStr = dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : [undefined, undefined]
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadData()
+    return () => { isMountedRef.current = false }
+  }, [])
   useAutoRefresh(() => loadData(minVolume ?? undefined, combinedSortBy(sortField, sortField2) || undefined, sortOrder !== 'asc' ? sortOrder : undefined, dateStr[0], dateStr[1]))
 
   const handleMinVolumeChange = (v: number | null) => {
@@ -452,6 +476,7 @@ function StockCorrelationTab() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const loadSeqRef = useRef(0)
+  const isMountedRef = useRef(true)
 
   const sortOptions = [
     { label: '弹性系数', value: 'elasticity' },
@@ -461,6 +486,7 @@ function StockCorrelationTab() {
   ]
 
   const loadData = useCallback((mv?: number, sb?: string, so?: string, sd?: string, ed?: string) => {
+    if (!isMountedRef.current) return
     const seq = ++loadSeqRef.current
     setLoading(true)
     const opts: any = {}
@@ -469,12 +495,16 @@ function StockCorrelationTab() {
     if (so) opts.sort_order = so
     if (sd) opts.start_date = sd
     if (ed) opts.end_date = ed
-    fetchStockCorrelation(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (seq === loadSeqRef.current) setData(d) }).catch(e => { if (seq === loadSeqRef.current) message.error('加载正股关联失败: ' + e.message) }).finally(() => { if (seq === loadSeqRef.current) setLoading(false) })
+    fetchStockCorrelation(Object.keys(opts).length > 0 ? opts : undefined).then(d => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setData(d) }).catch(e => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; message.error('加载正股关联失败: ' + e.message) }).finally(() => { if (!isMountedRef.current || seq !== loadSeqRef.current) return; setLoading(false) })
   }, [])
 
   const dateStr = dateRange ? [dateRange[0].format('YYYY-MM-DD'), dateRange[1].format('YYYY-MM-DD')] : [undefined, undefined]
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadData()
+    return () => { isMountedRef.current = false }
+  }, [])
   useAutoRefresh(() => loadData(minVolume ?? undefined, combinedSortBy(sortField, sortField2) || undefined, sortOrder !== 'asc' ? sortOrder : undefined, dateStr[0], dateStr[1]))
 
   const handleMinVolumeChange = (v: number | null) => {
@@ -497,8 +527,8 @@ function StockCorrelationTab() {
   const columns = [
     { title: '代码', dataIndex: 'code', width: 90, sorter: strSort('code') },
     { title: '名称', dataIndex: 'name', width: 100, ellipsis: true, sorter: strSort('name') },
-    { title: '转债涨跌', dataIndex: 'bond_change', width: 80, sorter: numSort('bond_change'), render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{v != null ? v.toFixed(2) : '-'}%</span> },
-    { title: '正股涨跌', dataIndex: 'stock_change', width: 80, sorter: numSort('stock_change'), render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{v != null ? v.toFixed(2) : '-'}%</span> },
+    { title: '转债涨跌', dataIndex: 'bond_change', width: 80, sorter: numSort('bond_change'), render: (v: number) => <span style={{ color: v == null ? undefined : (v >= 0 ? '#cf1322' : '#389e0d') }}>{v != null ? v.toFixed(2) : '-'}%</span> },
+    { title: '正股涨跌', dataIndex: 'stock_change', width: 80, sorter: numSort('stock_change'), render: (v: number) => <span style={{ color: v == null ? undefined : (v >= 0 ? '#cf1322' : '#389e0d') }}>{v != null ? v.toFixed(2) : '-'}%</span> },
     { title: '弹性系数', dataIndex: 'elasticity', width: 80, ellipsis: { showTitle: true }, sorter: numSort('elasticity'), render: (v: number) => <Text strong>{v != null ? v.toFixed(4) : '-'}</Text> },
     { title: '关联度', dataIndex: 'correlation', width: 70, sorter: strSort('correlation'), render: (v: string) => {
       const colorMap: Record<string, string> = { '强关联': 'red', '中关联': 'orange', '弱关联': 'blue', '待观察': 'default' }
@@ -550,10 +580,23 @@ export default function Analysis() {
     return unsub
   }, [])
 
+  const isMountedRef = useRef(true)
+
   useEffect(() => {
-    fetchCacheStats().then(setCacheInfo).catch(() => {})
-    const id = setInterval(() => fetchCacheStats().then(setCacheInfo).catch(() => {}), 30000)
-    return () => clearInterval(id)
+    isMountedRef.current = true
+    const load = async () => {
+      try {
+        const info = await fetchCacheStats()
+        if (!isMountedRef.current) return
+        setCacheInfo(info)
+      } catch {}
+    }
+    load()
+    const id = setInterval(() => {
+      if (!isMountedRef.current) return
+      load()
+    }, 30000)
+    return () => { isMountedRef.current = false; clearInterval(id) }
   }, [])
 
   const hitRate = cacheInfo?.hit_rate != null

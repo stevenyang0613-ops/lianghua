@@ -156,7 +156,10 @@ const DEFAULT_LAYOUT: DashboardLayout = {
 
 // 获取所有布局
 export function getLayouts(): DashboardLayout[] {
-  const saved = localStorage.getItem(LAYOUTS_KEY)
+  let saved = null
+  try {
+    saved = localStorage.getItem(LAYOUTS_KEY)
+  } catch { /* localStorage unavailable */ }
   if (saved) {
     try {
       const layouts = JSON.parse(saved)
@@ -169,7 +172,9 @@ export function getLayouts(): DashboardLayout[] {
     } catch {
       // localStorage 数据损坏，重置为默认
       console.warn('[dashboardLayout] Corrupted layout data, resetting to default')
-      localStorage.setItem(LAYOUTS_KEY, JSON.stringify([DEFAULT_LAYOUT]))
+      try {
+        localStorage.setItem(LAYOUTS_KEY, JSON.stringify([DEFAULT_LAYOUT]))
+      } catch { /* localStorage unavailable */ }
     }
   }
   return [DEFAULT_LAYOUT]
@@ -177,14 +182,19 @@ export function getLayouts(): DashboardLayout[] {
 
 // 获取当前布局
 export function getCurrentLayout(): DashboardLayout {
-  const currentId = localStorage.getItem(CURRENT_LAYOUT_KEY)
+  let currentId = null
+  try {
+    currentId = localStorage.getItem(CURRENT_LAYOUT_KEY)
+  } catch { /* localStorage unavailable */ }
   const layouts = getLayouts()
   return layouts.find(l => l.id === currentId) || layouts.find(l => l.isDefault) || layouts[0]
 }
 
 // 设置当前布局
 export function setCurrentLayout(id: string): void {
-  localStorage.setItem(CURRENT_LAYOUT_KEY, id)
+  try {
+    localStorage.setItem(CURRENT_LAYOUT_KEY, id)
+  } catch { /* localStorage unavailable */ }
 }
 
 // 创建新布局
@@ -228,7 +238,9 @@ export function deleteLayout(id: string): boolean {
   if (!layout || layout.isDefault) return false
 
   const filtered = layouts.filter(l => l.id !== id)
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(filtered))
+  try {
+    localStorage.setItem(LAYOUTS_KEY, JSON.stringify(filtered))
+  } catch { /* localStorage unavailable */ }
 
   // 如果删除的是当前布局，切换到默认布局
   if (getCurrentLayout().id === id) {
@@ -359,8 +371,10 @@ export function importLayout(json: string): DashboardLayout | null {
 
 // 重置为默认布局
 export function resetToDefault(): void {
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify([DEFAULT_LAYOUT]))
-  localStorage.removeItem(CURRENT_LAYOUT_KEY)
+  try {
+    localStorage.setItem(LAYOUTS_KEY, JSON.stringify([DEFAULT_LAYOUT]))
+    localStorage.removeItem(CURRENT_LAYOUT_KEY)
+  } catch { /* localStorage unavailable */ }
 }
 
 export default {

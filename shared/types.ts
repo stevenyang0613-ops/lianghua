@@ -1,6 +1,8 @@
 export interface ConvertibleQuote {
   code: string
   name: string
+  stock_code?: string
+  stock_name?: string
   price: number | undefined
   change_pct: number | undefined
   stock_price: number | undefined
@@ -18,6 +20,55 @@ export interface ConvertibleQuote {
   last_trade_date: string | undefined
   maturity_date: string | undefined
   redemption_price: number | undefined
+  industry?: string
+  roe?: number
+  gpm?: number
+  cagr?: number
+  debt_ratio?: number
+  current_ratio?: number
+  pe?: number
+  pb?: number
+  iv?: number
+  iv_source?: string
+  hv?: number
+  rating?: string
+  rating_score?: number
+  pure_bond_premium_ratio?: number
+  bond_value?: number
+  buyback_amount?: number
+  mgmt_buy_price?: number
+  turnover_rate?: number
+  net_capital_flow?: number
+  net_capital_flow_pct?: number
+  net_super_flow?: number
+  net_big_flow?: number
+  outstanding_scale?: number
+  pledge_ratio?: number
+  momentum_5d?: number
+  momentum_10d?: number
+  momentum_20d?: number
+  momentum_60d?: number
+  event_score?: number
+  event_detail?: string
+  concepts?: string[]
+  north_net?: number
+  margin_balance?: number
+  lhb_count?: number
+  block_trade_amount?: number
+  holder_num_change?: number
+  eps_forecast?: number
+  eps?: number
+  bps?: number
+  revenue_yoy?: number
+  profit_yoy?: number
+  restricted_release_amount?: number
+  sentiment_score?: number
+  macro_cpi?: number
+  macro_ppi?: number
+  macro_m2?: number
+  macro_lpr?: number
+  macro_policy_score?: number
+  macro_event_score?: number
   timestamp: string
 }
 

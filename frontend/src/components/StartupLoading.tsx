@@ -173,8 +173,10 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
         for (let i = 0; i < 50; i++) {
           if (window.electronAPI) break
           await new Promise((r) => setTimeout(r, 100))
+          if (cancelled) return
         }
       }
+      if (cancelled) return
 
       // 步骤动画
       stepInterval = setInterval(() => {
@@ -185,11 +187,13 @@ export default function StartupLoading({ children }: StartupLoadingProps) {
 
       while (!cancelled && retries < maxRetries) {
         try {
+          if (cancelled) return
           setProgress(Math.min(80, Math.round((retries / maxRetries) * 80)))
 
           // 在 Electron 环境中直接使用 IPC 检测后端，跳过 withRetry 延迟
           if (window.electronAPI?.httpRequest) {
             const result = await window.electronAPI.httpRequest('GET', getApiBase() + '/health')
+            if (cancelled) return
             if (result.ok) {
               disableOfflineMode()
               const token = result.data?.ws_auth_token

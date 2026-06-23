@@ -19,6 +19,8 @@ interface ReconnectConfig {
   heartbeatInterval: number
   staleThresholdMs: number
   staleCheckIntervalMs: number
+  /** 空 token 时通过 health 接口异步获取的降级函数 */
+  fetchToken?: () => Promise<string>
 }
 
 const defaultConfig: ReconnectConfig = {
@@ -27,7 +29,8 @@ const defaultConfig: ReconnectConfig = {
   multiplier: 2,
   jitter: 0.3,
   maxAttempts: 50,
-  connectionTimeout: 5000,
+  // Electron 环境下主进程负载可能较高，连接超时延长至 8000ms
+  connectionTimeout: (typeof window !== 'undefined' && window.electronAPI?.wsConnect) ? 8000 : 5000,
   heartbeatInterval: 30000,
   staleThresholdMs: 60000,
   staleCheckIntervalMs: 10000,
@@ -60,7 +63,7 @@ export interface WsDiagnostic {
 
 export class WSReconnect {
   private ws: WebSocket | null = null
-  private url: string
+  public url: string
   private config: ReconnectConfig
   private state: ConnectionState = 'disconnected'
   private attempts = 0
@@ -106,6 +109,20 @@ export class WSReconnect {
     if (this.state === 'connected' || this.state === 'connecting') return
     this.isManualClose = false
     if (overrideUrl) this.url = overrideUrl
+
+    // 空 token 降级：如果 URL 中没有 token 且配置了 fetchToken，先尝试获取 token
+    if (this.config.fetchToken && !this.url.includes('token=')) {
+      try {
+        const token = await this.config.fetchToken()
+        if (token && !this.url.includes('token=')) {
+          const sep = this.url.includes('?') ? '&' : '?'
+          this.url = `${this.url}${sep}token=${encodeURIComponent(token)}`
+        }
+      } catch (e) {
+        console.warn('[WS] fetchToken failed:', e)
+      }
+    }
+
     this.setState('connecting')
 
     if (this.useIPC) {
@@ -151,9 +168,8 @@ export class WSReconnect {
           if (this.state === 'connected') return
           this.onConnected()
         } else if (state === WsIpcState.DISCONNECTED || state === WsIpcState.ERROR) {
-          // 忽略旧连接的断开事件（序号不匹配或仍在connecting状态）
+          // 忽略旧连接的断开事件（序号不匹配）
           if (connectSeq !== this._connectSeq) return
-          if (this.state === 'connecting') return
           this.clearConnectionTimeout()
           this.onDisconnected(code || 1000, reason || '')
         }
@@ -183,6 +199,8 @@ export class WSReconnect {
       const result = await api.wsConnect(this.wsId, this.url)
       if (!result.ok) {
         this._addLog('error', `IPC连接失败: ${result.error}`)
+        this.ipcCleanup?.()
+        this.ipcCleanup = null
         this.handleConnectionFailure()
         return
       }
@@ -190,6 +208,10 @@ export class WSReconnect {
       // 重连竞态防护：IPC Promise resolve 后，状态可能被并发路径改变
       if (this.state !== 'connecting') {
         this._addLog('reconnect', `IPC连接成功后状态变更: ${this.state}`)
+        // 连接已建立但立即被断开（竞态），需要触发重连
+        if (this.state === 'disconnected' && !this.isManualClose) {
+          this.handleConnectionFailure()
+        }
         return
       }
 
@@ -200,9 +222,21 @@ export class WSReconnect {
         this.clearConnectionTimeout()
         if (this.state === 'connecting') {
           this.onConnected()
+        } else if (this.state === 'disconnected' && !this.isManualClose) {
+          // 连接建立后已断开（竞态），需要触发重连
+          this._addLog('reconnect', '连接建立后已断开，触发重连')
+          this.handleConnectionFailure()
         }
       } else {
         this.startConnectionTimeout()
+      }
+
+      // 兜底：无论 result 状态如何，如果最终不是 connected/connecting 且不是手动关闭，触发重连
+      // 使用类型断言绕过 TypeScript 控制流收窄（运行时 state 可能被 onWsState 回调并发修改）
+      const finalState = this.state as ConnectionState
+      if (finalState !== 'connected' && finalState !== 'connecting' && !this.isManualClose) {
+        this._addLog('reconnect', `connectViaIPC 结束但状态=${finalState}，触发重连`)
+        this.handleConnectionFailure()
       }
     } catch (error) {
       console.error('[WS] IPC连接错误:', error)
@@ -320,6 +354,10 @@ export class WSReconnect {
 
   private scheduleReconnect(): void {
     if (this.isManualClose) return
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.attempts++
     if (this.config.maxAttempts > 0 && this.attempts > this.config.maxAttempts) {
       console.error('[WS] 已达最大重试次数')
@@ -333,15 +371,22 @@ export class WSReconnect {
   }
 
   private startConnectionTimeout(): void {
+    // 渐进式超时：首次 5s/8s，后续随尝试次数递增，最大 30s
+    // 避免后端启动期间（数据刷新需 5-10 分钟）的超时误判
+    const baseTimeout = this.config.connectionTimeout
+    const progressiveTimeout = Math.min(
+      baseTimeout + this.attempts * (this.useIPC ? 5000 : 3000),
+      30000
+    )
     this.connectionTimer = setTimeout(() => {
-      console.warn('[WS] 连接超时')
+      console.warn(`[WS] 连接超时 (尝试 ${this.attempts}, 超时 ${progressiveTimeout}ms)`)
       if (this.useIPC) {
         window.electronAPI?.wsClose(this.wsId)
       } else {
         this.ws?.close()
       }
       this.handleConnectionFailure()
-    }, this.config.connectionTimeout)
+    }, progressiveTimeout)
   }
 
   private clearConnectionTimeout(): void {
@@ -376,12 +421,14 @@ export class WSReconnect {
         text = data
       } else {
         // Binary gzip compressed message
+        let writer: any = undefined
+        let reader: any = undefined
         try {
           const ds = new DecompressionStream('gzip')
-          const writer = ds.writable.getWriter()
+          writer = ds.writable.getWriter()
           writer.write(new Uint8Array(data))
           writer.close()
-          const reader = ds.readable.getReader()
+          reader = ds.readable.getReader()
           const chunks: Uint8Array[] = []
           while (true) {
             const { done, value } = await reader.read()
@@ -394,7 +441,9 @@ export class WSReconnect {
           for (const c of chunks) { merged.set(c, offset); offset += c.length }
           text = new TextDecoder().decode(merged)
         } catch {
-          // gzip 解压失败，尝试直接解码
+          // gzip 解压失败，关闭 writer/reader 后尝试直接解码
+          try { if (writer) writer.close().catch(() => {}) } catch { /* ignore */ }
+          try { if (reader) reader.cancel().catch(() => {}) } catch { /* ignore */ }
           text = new TextDecoder().decode(new Uint8Array(data))
         }
       }
@@ -550,6 +599,13 @@ export class WSReconnect {
       if (elapsed > this.config.staleThresholdMs && !this._isStale) {
         this._isStale = true
         this._healthListeners.forEach(l => l('stale', elapsed))
+        // 自动断开并重连：stale 意味着 WS 可能已静默死亡，不重连将永久无数据
+        if (!this.isManualClose) {
+          console.warn(`[WS ${this.wsId}] Stale detected (${elapsed}ms), auto-reconnecting`)
+          this._addLog('reconnect', `Stale detected, auto-reconnecting`)
+          this.disconnect()
+          this.connect()
+        }
       }
     }, this.config.staleCheckIntervalMs)
   }

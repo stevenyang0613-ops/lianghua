@@ -65,7 +65,10 @@ const STALE_MS = 3 * 60 * 1000 // 3 minutes
 function getScoreWsRefreshInterval(): number {
   try {
     const saved = localStorage.getItem('score_ws_refresh_sec')
-    if (saved) return parseInt(saved, 10) * 1000
+    if (saved) {
+      const parsed = parseInt(saved, 10)
+      return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : 60 * 1000
+    }
   } catch { /* ignore */ }
   return 60 * 1000
 }
@@ -109,7 +112,8 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
     try {
       const data = await fetchScoreRanking(params)
       set({ filteredData: data, filteredLoading: false, filteredLoadedAt: Date.now() })
-    } catch {
+    } catch (e) {
+      console.error('[ScoreStore] loadFilteredRanking failed:', e)
       set({ filteredLoading: false })
     }
   },
@@ -125,7 +129,8 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
     try {
       const data = await fetchFullScoreRanking()
       set({ fullData: data, fullLoading: false, fullLoadedAt: Date.now() })
-    } catch {
+    } catch (e) {
+      console.error('[ScoreStore] loadFullRanking failed:', e)
       set({ fullLoading: false })
     }
   },
@@ -136,21 +141,21 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
     try {
       const data = await fetchScoreAlerts()
       set({ alerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now() })
-    } catch { /* non-critical */ }
+    } catch (e) { console.error('[ScoreStore] loadAlerts failed:', e) }
   },
 
   loadComboAlerts: async () => {
     try {
       const data = await fetchComboAlerts()
-      set({ comboAlerts: Array.isArray(data) ? data : data?.alerts || [] })
-    } catch { /* non-critical */ }
+      set({ comboAlerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now() })
+    } catch (e) { console.error('[ScoreStore] loadComboAlerts failed:', e) }
   },
 
   loadAlertHistory: async () => {
     try {
       const data = await fetchAlertHistory()
-      set({ alertHistory: Array.isArray(data) ? data : data?.history || [] })
-    } catch { /* non-critical */ }
+      set({ alertHistory: Array.isArray(data) ? data : data?.history || [], alertsLoadedAt: Date.now() })
+    } catch (e) { console.error('[ScoreStore] loadAlertHistory failed:', e) }
   },
 
   setBacktestResults: (results, summary) => set({ backtestResults: results, backtestSummary: summary }),
@@ -175,11 +180,13 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
 
     if (now - state.lastWsRefreshAt < WS_REFRESH_INTERVAL) {
       if (!state.wsRefreshTimer) {
-        const delay = WS_REFRESH_INTERVAL - (now - state.lastWsRefreshAt)
-        const timer = setTimeout(() => {
-          set({ wsRefreshTimer: null, filteredLoadedAt: 0, lastWsRefreshAt: Date.now() })
-        }, delay)
-        set({ wsRefreshTimer: timer })
+        const delay = Math.max(0, WS_REFRESH_INTERVAL - (now - state.lastWsRefreshAt))
+        if (Number.isFinite(delay)) {
+          const timer = setTimeout(() => {
+            set({ wsRefreshTimer: null, filteredLoadedAt: 0, lastWsRefreshAt: Date.now() })
+          }, delay)
+          set({ wsRefreshTimer: timer })
+        }
       }
       return
     }
@@ -193,7 +200,20 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
 let _scoreWsUnsub: (() => void) | null = null
 let _scoreWsRefCount = 0
 
-export function subscribeScoreWs() {
+export function destroyScoreStore(): void {
+  if (_scoreWsUnsub) {
+    _scoreWsUnsub()
+    _scoreWsUnsub = null
+  }
+  _scoreWsRefCount = 0
+  const timer = useScoreStore.getState().wsRefreshTimer
+  if (timer) {
+    clearTimeout(timer)
+    useScoreStore.setState({ wsRefreshTimer: null })
+  }
+}
+
+export function subscribeScoreStore(): () => void {
   _scoreWsRefCount++
   if (_scoreWsRefCount === 1) {
     _scoreWsUnsub = marketWs.subscribe('tick', () => {

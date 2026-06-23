@@ -218,22 +218,34 @@ export function useProgressiveImage(src: string, thumbnail?: string): {
   useEffect(() => {
     if (!src) return
 
+    let blurTimer: ReturnType<typeof setTimeout> | null = null
+    const isMounted = { current: true }
+
     setIsLoading(true)
 
     const img = new Image()
     img.src = src
 
     img.onload = () => {
+      if (!isMounted.current) return
       setCurrentSrc(src)
       setIsLoading(false)
       // 渐进淡出模糊效果
       if (thumbnail) {
-        setTimeout(() => setBlur(false), 100)
+        blurTimer = setTimeout(() => {
+          if (isMounted.current) setBlur(false)
+        }, 100)
       }
     }
 
     img.onerror = () => {
+      if (!isMounted.current) return
       setIsLoading(false)
+    }
+
+    return () => {
+      isMounted.current = false
+      if (blurTimer) clearTimeout(blurTimer)
     }
   }, [src, thumbnail])
 

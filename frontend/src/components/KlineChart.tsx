@@ -29,11 +29,11 @@ import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined } from '@ant-design/ico
 
 interface KlineData {
   date: string
-  open: number
-  close: number
-  low: number
-  high: number
-  volume: number
+  open: number | null
+  close: number | null
+  low: number | null
+  high: number | null
+  volume: number | null
 }
 
 interface KlineChartProps {
@@ -79,7 +79,7 @@ export default function KlineChart({ data, loading, height = 500 }: KlineChartPr
         if (i < period - 1) {
           result.push(null)
         } else {
-          const sum = data.slice(i - period + 1, i + 1).reduce((acc, d) => acc + d.close, 0)
+          const sum = data.slice(i - period + 1, i + 1).reduce((acc, d) => acc + (d.close ?? 0), 0)
           if (!isFinite(sum)) {
             result.push(null)
           } else {
@@ -229,7 +229,7 @@ export default function KlineChart({ data, loading, height = 500 }: KlineChartPr
           data: volumes.map((v, i) => ({
             value: v,
             itemStyle: {
-              color: data[i].close >= data[i].open ? '#ef5350' : '#26a69a',
+              color: (data[i].close ?? 0) >= (data[i].open ?? 0) ? '#ef5350' : '#26a69a',
             },
           })),
         },

@@ -2,18 +2,30 @@
  * 自动交易配置页面
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Card, Switch, Button, Space, Typography, Row, Col, Statistic, Tag, Table, InputNumber, Select, Input, List, Alert, Popconfirm, message, Modal, TimePicker } from 'antd'
-import { RobotOutlined, PauseCircleOutlined, HistoryOutlined, CheckCircleOutlined } from '@ant-design/icons'
-import { getAutoTradeConfig, updateAutoTradeConfig, getAutoTradeOrders, getAutoTradeLogs, clearAutoTradeLogs, getAutoTradeStats, type AutoTradeConfig, type AutoTradeOrder, type AutoTradeLog } from '../utils/autoTrader'
+import { RobotOutlined, PauseCircleOutlined, HistoryOutlined, CheckCircleOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { getAutoTradeConfig, updateAutoTradeConfig, getAutoTradeOrders, getAutoTradeLogs, clearAutoTradeLogs, getAutoTradeStats, batchExecutePendingSignals, type AutoTradeConfig, type AutoTradeOrder, type AutoTradeLog, VALID_STRATEGIES } from '../utils/autoTrader'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { fmt } from '../utils/format'
+import { useSignalStore } from '../stores/useSignalStore'
+import { setActiveStrategies, fetchAvailableSignalsStrategies } from '../services/api'
 
 const { Title, Text, Paragraph } = Typography
 
-
-
+// 与后端 STRATEGY_REGISTRY 对齐的合法策略列表
+const STRATEGY_OPTIONS = [
+  { value: 'dual_low', label: '双低策略' },
+  { value: 'low_premium', label: '低溢价策略' },
+  { value: 'momentum', label: '动量策略' },
+  { value: 'xuanji_v8', label: '璇玑V8策略' },
+  { value: 'multi_factor', label: '多因子策略' },
+  { value: 'xibu_seven', label: '西部七维策略' },
+  { value: 'xuanji_twelve', label: '璇玑十二因子' },
+  { value: 'sector_rotation', label: '板块轮动策略' },
+  { value: 'fusion', label: '融合策略' },
+]
 
 export default function AutoTrade() {
   const [config, setConfig] = useState<AutoTradeConfig>(() => getAutoTradeConfig())
@@ -21,33 +33,119 @@ export default function AutoTrade() {
   const [logs, setLogs] = useState<AutoTradeLog[]>([])
   const [stats, setStats] = useState(getAutoTradeStats())
   const [logsVisible, setLogsVisible] = useState(false)
+  const [batchLoading, setBatchLoading] = useState(false)
+  const [availableStrategies, setAvailableStrategies] = useState<string[]>([])
 
-  useEffect(() => {
-    loadData()
-  }, [])
+  const signalStore = useSignalStore()
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     setConfig(getAutoTradeConfig())
     setOrders(getAutoTradeOrders())
     setLogs(getAutoTradeLogs())
     setStats(getAutoTradeStats())
-  }
+  }, [])
+
+  useEffect(() => {
+    loadData()
+
+    // 检查 localStorage 原始策略是否被回退，显示一次提示
+    try {
+      const raw = localStorage.getItem('auto_trade_config')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed.strategy && parsed.strategy !== config.strategy && !VALID_STRATEGIES.has(parsed.strategy)) {
+          message.warning(
+            `检测到非法策略 key「${parsed.strategy}」已自动回退为「${STRATEGY_OPTIONS.find(o => o.value === config.strategy)?.label || config.strategy}」`
+          )
+        }
+      }
+    } catch { /* ignore parse errors */ }
+
+    // 加载后端可用策略列表，并同步到信号系统
+    fetchAvailableSignalsStrategies().then((data) => {
+      const ids = data.strategies.map(s => s.id)
+      setAvailableStrategies(ids)
+    }).catch(() => {
+      // 后端不可用时回退到硬编码列表
+      setAvailableStrategies(STRATEGY_OPTIONS.map(o => o.value))
+    })
+  }, [loadData])
+
+  // 当自动交易页面切换策略时，同步到信号系统的活跃策略（追加模式，不覆盖其他策略）
+  useEffect(() => {
+    if (!availableStrategies.length) return
+
+    const strategy = config.strategy
+    if (!availableStrategies.includes(strategy)) return
+
+    // 追加模式：如果信号系统的活跃策略不包含当前策略，则追加而非替换
+    const signalActive = signalStore.activeStrategies
+    if (!signalActive.includes(strategy)) {
+      const combined = [...signalActive, strategy]
+      setActiveStrategies(combined).catch(() => { /* ignore */ })
+    }
+  }, [config.strategy, availableStrategies, signalStore.activeStrategies])
 
   const handleToggle = (checked: boolean) => {
-    updateAutoTradeConfig({ enabled: checked })
+    const newConfig = updateAutoTradeConfig({ enabled: checked })
     loadData()
+
+    // 如果策略被自动回退，显示警告
+    if (newConfig.strategy !== config.strategy && !VALID_STRATEGIES.has(config.strategy)) {
+      message.warning(`策略配置已回退为「${STRATEGY_OPTIONS.find(o => o.value === newConfig.strategy)?.label || newConfig.strategy}」`)
+    }
+
     message.success(checked ? '自动交易已启用' : '自动交易已禁用')
   }
 
   const handleConfigChange = (key: keyof AutoTradeConfig, value: unknown) => {
-    updateAutoTradeConfig({ [key]: value })
+    const newConfig = updateAutoTradeConfig({ [key]: value })
     loadData()
+
+    // 策略切换时，追加到信号系统的活跃策略（不覆盖其他策略）
+    if (key === 'strategy' && typeof value === 'string') {
+      const signalActive = signalStore.activeStrategies
+      if (!signalActive.includes(value)) {
+        const combined = [...signalActive, value]
+        setActiveStrategies(combined).catch(() => {
+          message.warning('信号系统策略同步失败')
+        })
+      }
+    }
+
+    // 如果策略被自动回退，显示警告
+    if (key === 'strategy' && newConfig.strategy !== value) {
+      message.warning(`策略已回退为「${STRATEGY_OPTIONS.find(o => o.value === newConfig.strategy)?.label || newConfig.strategy}」`)
+    }
   }
 
   const handleClearLogs = () => {
     clearAutoTradeLogs()
     loadData()
     message.success('日志已清除')
+  }
+
+  const handleBatchExecute = async () => {
+    const pendingCount = orders.filter(o => o.status === 'pending').length
+    if (pendingCount === 0) {
+      message.info('没有待执行的订单')
+      return
+    }
+    setBatchLoading(true)
+    try {
+      const result = await batchExecutePendingSignals(config)
+      loadData()
+      if (result.executed > 0) {
+        message.success(`成功执行 ${result.executed} 笔订单`)
+      }
+      if (result.failed > 0) {
+        message.warning(`${result.failed} 笔订单执行失败`)
+      }
+    } catch (e) {
+      message.error(`批量执行失败: ${e}`)
+    } finally {
+      setBatchLoading(false)
+    }
   }
 
   const orderColumns: ColumnsType<AutoTradeOrder> = [
@@ -90,7 +188,7 @@ export default function AutoTrade() {
       title: '置信度',
       dataIndex: 'confidence',
       width: 80,
-      render: (v: number) => `${fmt((v ?? 0) * 100, 0)}%`,
+      render: (v: number) => `${fmt(v == null ? null : v * 100, 0)}%`,
     },
     {
       title: '状态',
@@ -105,7 +203,11 @@ export default function AutoTrade() {
     {
       title: '策略',
       dataIndex: 'strategy',
-      width: 100,
+      width: 120,
+      render: (v: string) => {
+        const label = STRATEGY_OPTIONS.find(o => o.value === v)?.label || v
+        return <Tag>{label}</Tag>
+      },
     },
   ]
 
@@ -115,6 +217,8 @@ export default function AutoTrade() {
     error: 'red',
     trade: 'green',
   }
+
+  const pendingCount = orders.filter(o => o.status === 'pending').length
 
   return (
     <div style={{ padding: 16, maxWidth: 1400, margin: '0 auto' }}>
@@ -185,13 +289,7 @@ export default function AutoTrade() {
               style={{ width: '100%' }}
               value={config.strategy}
               onChange={(v) => handleConfigChange('strategy', v)}
-              options={[
-                { value: 'macd_cross', label: 'MACD金叉策略' },
-                { value: 'ma_cross', label: '均线交叉策略' },
-                { value: 'rsi_reversal', label: 'RSI反转策略' },
-                { value: 'bollinger', label: '布林带策略' },
-                { value: 'dual_low', label: '双低策略' },
-              ]}
+              options={STRATEGY_OPTIONS}
             />
           </Col>
           <Col span={8}>
@@ -309,6 +407,16 @@ export default function AutoTrade() {
         title="订单记录"
         extra={
           <Space>
+            {pendingCount > 0 && (
+              <Button
+                icon={<ThunderboltOutlined />}
+                type="primary"
+                loading={batchLoading}
+                onClick={handleBatchExecute}
+              >
+                批量执行 ({pendingCount})
+              </Button>
+            )}
             <Button icon={<HistoryOutlined />} onClick={() => setLogsVisible(true)}>
               查看日志
             </Button>

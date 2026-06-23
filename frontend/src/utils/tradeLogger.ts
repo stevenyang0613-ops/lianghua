@@ -54,7 +54,8 @@ function _scheduleFlush(): void {
 }
 
 // Ensure logs are flushed on page unload
-window.addEventListener('beforeunload', _flushLogs)
+const _beforeUnloadHandler = () => _flushLogs()
+window.addEventListener('beforeunload', _beforeUnloadHandler)
 
 // 生成唯一ID
 function generateId(): string {
@@ -246,6 +247,16 @@ export function getTradeStatsByCode(): Map<string, { count: number; totalAmount:
   })
 
   return stats
+}
+
+// 清理资源（应用卸载时调用）
+export function destroyTradeLogger(): void {
+  if (_flushTimer) {
+    clearTimeout(_flushTimer)
+    _flushTimer = null
+  }
+  _flushLogs()
+  window.removeEventListener('beforeunload', _beforeUnloadHandler)
 }
 
 // 按日期分组统计

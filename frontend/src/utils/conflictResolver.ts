@@ -156,21 +156,25 @@ export function addToSyncQueue(key: string, data: unknown, operation: 'create' |
     queue.push(newItem)
   }
 
-  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue))
+  try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue)) } catch { /* silent fail */ }
 }
 
 export function getSyncQueue(): SyncQueueItem[] {
-  const saved = localStorage.getItem(SYNC_QUEUE_KEY)
-  return safeJsonParse<SyncQueueItem[]>(saved, [])
+  try {
+    const saved = localStorage.getItem(SYNC_QUEUE_KEY)
+    return safeJsonParse<SyncQueueItem[]>(saved, [])
+  } catch {
+    return []
+  }
 }
 
 export function clearSyncQueue(): void {
-  localStorage.removeItem(SYNC_QUEUE_KEY)
+  try { localStorage.removeItem(SYNC_QUEUE_KEY) } catch { /* silent fail */ }
 }
 
 export function removeSyncQueueItem(key: string): void {
   const queue = getSyncQueue().filter(item => item.key !== key)
-  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue))
+  try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue)) } catch { /* silent fail */ }
 }
 
 // 执行同步队列
@@ -202,7 +206,9 @@ export async function processSyncQueue(
 // 冲突日志
 export function logConflict(conflict: ConflictItem<unknown>, resolution: ConflictResolution<unknown>): void {
   const logKey = 'conflict_log'
-  const log = safeJsonParse<unknown[]>(localStorage.getItem(logKey), [])
+  let saved: string | null = null
+  try { saved = localStorage.getItem(logKey) } catch { /* localStorage unavailable */ }
+  const log = safeJsonParse<unknown[]>(saved, [])
 
   log.push({
     timestamp: Date.now(),
@@ -211,7 +217,7 @@ export function logConflict(conflict: ConflictItem<unknown>, resolution: Conflic
   })
 
   // 只保留最近100条
-  localStorage.setItem(logKey, JSON.stringify(log.slice(-100)))
+  try { localStorage.setItem(logKey, JSON.stringify(log.slice(-100))) } catch { /* silent fail */ }
 }
 
 export default {

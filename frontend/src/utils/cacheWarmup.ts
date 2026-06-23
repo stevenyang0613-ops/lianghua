@@ -26,16 +26,18 @@ const warmupTasks: { name: string; fn: () => Promise<unknown> }[] = [
 ]
 
 function loadStatus(): WarmupStatus {
-  const saved = localStorage.getItem(WARMUP_STATUS_KEY)
-  return safeJsonParse<WarmupStatus>(saved, { lastWarmup: null, duration: 0, successCount: 0, errorCount: 0, errors: [] })
+  try {
+    const saved = localStorage.getItem(WARMUP_STATUS_KEY)
+    return safeJsonParse<WarmupStatus>(saved, { lastWarmup: null, duration: 0, successCount: 0, errorCount: 0, errors: [] })
+  } catch { return { lastWarmup: null, duration: 0, successCount: 0, errorCount: 0, errors: [] } }
 }
 
 function saveStatus(status: WarmupStatus): void {
-  localStorage.setItem(WARMUP_STATUS_KEY, JSON.stringify(status))
+  try { localStorage.setItem(WARMUP_STATUS_KEY, JSON.stringify(status)) } catch { /* silent fail */ }
 }
 
 export function isEnabled(): boolean {
-  return localStorage.getItem(WARMUP_ENABLED_KEY) === 'true'
+  try { return localStorage.getItem(WARMUP_ENABLED_KEY) === 'true' } catch { return false }
 }
 
 export function getStatus(): WarmupStatus {
@@ -50,10 +52,12 @@ export async function runWarmup(): Promise<WarmupStatus> {
   }
 
   // 检查离线模式
-  if (localStorage.getItem('offline_mode') === 'true') {
-    console.log('[Warmup] Offline mode, skipping')
-    return loadStatus()
-  }
+  try {
+    if (localStorage.getItem('offline_mode') === 'true') {
+      console.log('[Warmup] Offline mode, skipping')
+      return loadStatus()
+    }
+  } catch { /* localStorage unavailable, continue */ }
 
   console.log('[Warmup] Starting cache warmup...')
   const startTime = Date.now()
@@ -108,12 +112,19 @@ export function shouldWarmup(): boolean {
 }
 
 // 初始化预热
-export function initWarmup(): void {
+export function initWarmup(): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null
   if (shouldWarmup()) {
     // 延迟执行，不阻塞启动
-    setTimeout(() => {
+    timer = setTimeout(() => {
       runWarmup().catch(err => console.error('[Warmup] Failed:', err))
     }, 2000)
+  }
+  return () => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
   }
 }
 

@@ -357,6 +357,7 @@ MACD 金叉，RSI 超买。
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
+        text: () => Promise.resolve('Internal Server Error'),
       })
 
       await expect(service.analyze({

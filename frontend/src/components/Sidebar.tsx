@@ -110,6 +110,7 @@ const menuGroups: MenuGroup[] = [
       { key: '/timing-signal', icon: <ThunderboltOutlined />, label: '多维度择时' },
       { key: '/sector-rotation', icon: <SwapOutlined />, label: '行业轮动' },
       { key: '/sector-rotation-stock', icon: <StockOutlined />, label: '行业轮动·股票版' },
+      { key: '/backtest-results', icon: <BarChartOutlined />, label: '三大策略回测' },
       { key: '/backtest', icon: <ExperimentOutlined />, label: '回测中心' },
       { key: '/strategies', icon: <DeploymentUnitOutlined />, label: '策略管理' },
       { key: '/strategy-market', icon: <ShopOutlined />, label: '策略市场' },

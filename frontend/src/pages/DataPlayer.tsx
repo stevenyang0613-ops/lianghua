@@ -58,6 +58,12 @@ export default function DataPlayer() {
     if (chartRef.current && !chartInstance.current) {
       chartInstance.current = echarts.init(chartRef.current, 'dark')
     }
+    return () => {
+      if (chartInstance.current) {
+        chartInstance.current.dispose()
+        chartInstance.current = null
+      }
+    }
   }, [frames.length > 0])
 
   const updateChart = (frame: MarketFrame | null) => {

@@ -8,14 +8,17 @@ function checkBackend() {
   const backendConnected = useAppStore.getState().backendConnected
   if (backendConnected && !_lastBackendOnline) {
     _lastBackendOnline = true
-    try { marketWs.connect() } catch {}
-    try { signalsWs.connect() } catch {}
+    if (marketWs.getState() !== 'connecting') try { marketWs.connect() } catch {}
+    if (signalsWs.getState() !== 'connecting') try { signalsWs.connect() } catch {}
   } else if (!backendConnected && _lastBackendOnline) {
     _lastBackendOnline = false
     try { marketWs.disconnect() } catch {}
     try { signalsWs.disconnect() } catch {}
+  } else if (backendConnected && _lastBackendOnline) {
+    // 后端持续在线：若 WebSocket 未连接，主动补连
+    if (!marketWs.isConnected() && marketWs.getState() !== 'connecting') try { marketWs.connect() } catch {}
+    if (!signalsWs.isConnected() && signalsWs.getState() !== 'connecting') try { signalsWs.connect() } catch {}
   }
-  _lastBackendOnline = backendConnected
 }
 
 export function stopHealthCheck() {

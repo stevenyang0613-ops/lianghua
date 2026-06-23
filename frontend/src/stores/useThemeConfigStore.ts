@@ -244,15 +244,20 @@ export function watchSystemTheme(callback: (isDark: boolean) => void) {
 }
 
 // 初始化主题
-export function initTheme() {
+export function initTheme(): () => void {
   const config = useThemeConfigStore.getState()
   applyThemeToDOM(config)
 
   // 监听系统主题变化
+  let cleanup: (() => void) | undefined
   if (config.mode === 'auto') {
-    watchSystemTheme((isDark) => {
+    cleanup = watchSystemTheme((isDark) => {
       document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
     })
+  }
+
+  return () => {
+    cleanup?.()
   }
 }
 

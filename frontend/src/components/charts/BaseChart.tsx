@@ -66,6 +66,8 @@ export function BaseChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const [isReady, setIsReady] = useState(false)
+  const onChartReadyRef = useRef(onChartReady)
+  onChartReadyRef.current = onChartReady
 
   // 初始化图表
   useEffect(() => {
@@ -74,13 +76,14 @@ export function BaseChart({
     const chart = echarts.init(containerRef.current, theme)
     chartRef.current = chart as unknown as ECharts
     setIsReady(true)
-    onChartReady?.(chart as unknown as ECharts)
+    // 异步调用避免同步 setState 触发 React 渲染期警告
+    setTimeout(() => onChartReadyRef.current?.(chart as unknown as ECharts), 0)
 
     return () => {
       chart.dispose()
       chartRef.current = null
     }
-  }, [theme, onChartReady])
+  }, [theme])
 
   // 更新配置
   useEffect(() => {

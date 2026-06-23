@@ -245,7 +245,7 @@ export function getActiveAccounts(): BrokerAccount[] {
 
 // 计算总资产
 export function getTotalAssets(): number {
-  return useAccountStore.getState().accounts.reduce((sum, a) => sum + a.balance + a.marketValue, 0)
+  return useAccountStore.getState().accounts.reduce((sum, a) => sum + (a.balance ?? 0) + (a.marketValue ?? 0), 0)
 }
 
 export default useAccountStore

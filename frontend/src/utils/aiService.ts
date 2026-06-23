@@ -31,6 +31,31 @@ const CONVERSATIONS_KEY = 'ai_conversations'
 const API_KEY_KEY = 'ai_api_key'
 const API_ENDPOINT_KEY = 'ai_api_endpoint'
 
+// Debounced localStorage write for conversations
+let _pendingConversations: AIConversation[] | null = null
+let _aiFlushTimer: ReturnType<typeof setTimeout> | null = null
+const AI_FLUSH_DELAY = 500
+
+function _flushConversations(): void {
+  if (_aiFlushTimer) {
+    clearTimeout(_aiFlushTimer)
+    _aiFlushTimer = null
+  }
+  if (_pendingConversations === null) return
+  try {
+    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(_pendingConversations))
+  } catch (e) {
+    console.warn('[AIService] localStorage write failed:', e)
+  }
+  _pendingConversations = null
+}
+
+function _scheduleConversationsSave(conversations: AIConversation[]): void {
+  _pendingConversations = conversations
+  if (_aiFlushTimer) return
+  _aiFlushTimer = setTimeout(_flushConversations, AI_FLUSH_DELAY)
+}
+
 // 默认 API 配置
 const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
 
@@ -87,7 +112,7 @@ export function createConversation(title: string = '新对话'): AIConversation 
     updatedAt: Date.now(),
   }
   conversations.unshift(conversation)
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations))
+  _scheduleConversationsSave(conversations)
   return conversation
 }
 
@@ -102,7 +127,7 @@ export function updateConversation(id: string, updates: Partial<AIConversation>)
     ...updates,
     updatedAt: Date.now(),
   }
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations))
+  _scheduleConversationsSave(conversations)
   return conversations[index]
 }
 
@@ -111,12 +136,17 @@ export function deleteConversation(id: string): boolean {
   const conversations = getConversations()
   const filtered = conversations.filter(c => c.id !== id)
   if (filtered.length === conversations.length) return false
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(filtered))
+  _scheduleConversationsSave(filtered)
   return true
 }
 
 // 清空所有对话
 export function clearConversations(): void {
+  if (_aiFlushTimer) {
+    clearTimeout(_aiFlushTimer)
+    _aiFlushTimer = null
+  }
+  _pendingConversations = null
   localStorage.removeItem(CONVERSATIONS_KEY)
 }
 

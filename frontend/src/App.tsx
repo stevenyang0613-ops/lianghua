@@ -12,10 +12,11 @@ import { initNetworkMonitor, cleanupNetworkMonitor } from './utils/smartSync'
 import { initWarmup } from './utils/cacheWarmup'
 import { notificationService } from './utils/notifications'
 import { setupGlobalErrorHandler } from './utils/errorLogger'
-import { marketWs, signalsWs, cancelRefreshWsToken } from './utils/wsInstances'
+import { marketWs, signalsWs, cancelRefreshWsToken, destroyWsInstances } from './utils/wsInstances'
 import { preloadByPriority, setupSmartPreload } from './utils/routePreload'
 import { initDB, indexedDBStorage } from './utils/indexedDBStorage'
 import { initOfflineQueue } from './utils/offlineQueue'
+import { offlineQueue } from './utils/offlineQueue'
 import { initLocale } from './locales'
 import { initHotkeys } from './utils/hotkeys'
 import { initPrefetchStrategy } from './utils/prefetchStrategy'
@@ -25,10 +26,18 @@ import { initPerformanceOptimization, stopPerformanceOptimization } from './util
 import { logCollector } from './utils/logCollector'
 import { alertManager, initPredefinedRules } from './utils/alertNotification'
 import { startHealthCheck } from './utils/healthCheck'
-import { cleanupWsListeners } from './stores/useAppStore'
+import { initWsListeners, cleanupWsListeners } from './stores/useAppStore'
 import { initThemeSystem, destroyThemeSystem } from './stores/useThemeStore'
 import { prefetchManager } from './utils/prefetchStrategy'
-import { offlineQueue } from './utils/offlineQueue'
+import { useMarketStore } from './stores/useMarketStore'
+import { destroyTradeLogger } from './utils/tradeLogger'
+import { dataPlayer } from './utils/dataPlayer'
+import { destroyPriceAlert } from './utils/priceAlert'
+import { destroyScoreStore } from './stores/useScoreStore'
+import { destroyXuanjiStore } from './stores/useXuanjiStore'
+import { replayEngine } from './utils/strategyReplay'
+import { destroyMemoryManager } from './utils/memoryManager'
+import { destroyRequestCache } from './utils/requestCache'
 
 const Market = lazy(() => import('./pages/Market'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
@@ -68,6 +77,7 @@ const SectorRotationStock = lazy(() => import('./pages/SectorRotationStock'))
 const PaperTrade = lazy(() => import('./pages/PaperTrade'))
 const DataSourceMonitor = lazy(() => import('./pages/DataSourceMonitor'))
 const EnrichmentDashboard = lazy(() => import('./pages/EnrichmentDashboard'))
+const BacktestResults = lazy(() => import('./pages/BacktestResults'))
 
 // 注册 Service Worker (仅在浏览器/PWA 环境下, Electron 不支持 Service Worker)
 function registerServiceWorker() {
@@ -86,10 +96,13 @@ function registerServiceWorker() {
 
 export default function App() {
   useEffect(() => {
-    // 全局 unhandledrejection 守卫：防止单个页面崩溃导致连锁崩溃
+    // 全局 unhandledrejection 守卫：仅在生产环境阻止默认行为，开发环境保留原生错误
     const rejectionGuard = (event: PromiseRejectionEvent) => {
-      console.warn('[App] Unhandled rejection (isolated):', event.reason)
-      event.preventDefault()
+      const stack = event.reason instanceof Error ? event.reason.stack : undefined
+      console.warn('[App] Unhandled rejection (isolated):', event.reason, stack || '')
+      if (!import.meta.env.DEV) {
+        event.preventDefault()
+      }
     }
     window.addEventListener('unhandledrejection', rejectionGuard)
 
@@ -99,7 +112,7 @@ export default function App() {
     // 初始化智能网络监控
     initNetworkMonitor()
     // 初始化缓存预热
-    initWarmup()
+    const warmupCleanup = initWarmup()
     // 注册 Service Worker
     registerServiceWorker()
     // 初始化通知服务
@@ -119,6 +132,9 @@ export default function App() {
     })
 
     // 全局 WS 连接管理：等 token 就绪后再连接
+    // 先注册 WS 状态监听器，确保 store 状态与 WebSocket 同步
+    initWsListeners()
+
     try {
       const wsToken = localStorage.getItem('ws_auth_token')
       if (wsToken) {
@@ -127,8 +143,8 @@ export default function App() {
       }
     } catch { /* localStorage may be unavailable */ }
 
-    // 加载加密的 API Key 到内存
-    useAccountStore.getState().loadSecureFields()
+    // 加载加密的 API Key 到内存（静默失败，不阻塞启动）
+    useAccountStore.getState().loadSecureFields().catch(() => { /* secure fields optional */ })
     // 初始化 IndexedDB
     void initDB()
     // 启动 IndexedDB 自动清理
@@ -144,7 +160,7 @@ export default function App() {
     initPrefetchStrategy()
     // 初始化监控服务
     monitoring.init({ enabled: !import.meta.env.DEV })
-    trackWebVitals()
+    const webVitalsCleanup = trackWebVitals()
     // 初始化性能优化
     initPerformanceOptimization()
     // 初始化日志收集
@@ -157,18 +173,21 @@ export default function App() {
     alertManager.init()
     initPredefinedRules()
     // 启动路由预加载
-    preloadByPriority()
+    const routePreloadCleanup = preloadByPriority()
     // 设置智能预加载（鼠标悬停预加载）
     const preloadCleanup = setupSmartPreload()
     // 启动后端健康检查（后端断开时自动断WS，恢复时自动重连）
     const healthCleanup = startHealthCheck()
 
       return () => {
-        errorHandlerCleanup()
-        hotkeysCleanup()
-        networkCleanup()
-        preloadCleanup()
-        healthCleanup()
+        errorHandlerCleanup?.()
+        hotkeysCleanup?.()
+        networkCleanup?.()
+        preloadCleanup?.()
+        healthCleanup?.()
+        warmupCleanup?.()
+        webVitalsCleanup?.()
+        routePreloadCleanup?.()
         window.removeEventListener('unhandledrejection', rejectionGuard)
         try { marketWs.disconnect() } catch { /* isolated */ }
         try { signalsWs.disconnect() } catch { /* isolated */ }
@@ -177,12 +196,24 @@ export default function App() {
         cleanupBackgroundSync()
         cleanupNetworkMonitor()
         cancelRefreshWsToken()
+        destroyWsInstances()
+        destroyRequestCache()
         monitoring.destroy()
         stopPerformanceOptimization()
         alertManager.destroy()
+        notificationService.destroy()
         destroyThemeSystem()
         prefetchManager.destroy()
         offlineQueue.destroy()
+        logCollector.destroy()
+        destroyPriceAlert?.()
+        destroyTradeLogger()
+        dataPlayer.destroy()
+        destroyScoreStore()
+        destroyXuanjiStore()
+        replayEngine.destroy()
+        destroyMemoryManager()
+        useMarketStore.getState().destroy?.()
       }
   }, [])
 
@@ -214,6 +245,7 @@ export default function App() {
             <Route path="/risk" element={<ErrorBoundary><RiskControl /></ErrorBoundary>} />
             <Route path="/auto-trade" element={<ErrorBoundary><AutoTrade /></ErrorBoundary>} />
             <Route path="/paper-trade" element={<ErrorBoundary><PaperTrade /></ErrorBoundary>} />
+            <Route path="/backtest-results" element={<ErrorBoundary><BacktestResults /></ErrorBoundary>} />
             <Route path="/data-player" element={<ErrorBoundary><DataPlayer /></ErrorBoundary>} />
             <Route path="/strategy-market" element={<ErrorBoundary><StrategyMarket /></ErrorBoundary>} />
             <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />

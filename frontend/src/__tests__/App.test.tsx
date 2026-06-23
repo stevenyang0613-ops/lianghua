@@ -26,7 +26,7 @@ vi.mock('../utils/monitoring', () => ({
   destroyMonitoring: vi.fn(),
 }))
 vi.mock('../utils/logCollector', () => ({
-  logCollector: { configure: vi.fn() },
+  logCollector: { configure: vi.fn(), destroy: vi.fn() },
 }))
 vi.mock('../utils/performanceOptimization', () => ({
   initPerformanceOptimization: vi.fn(),
@@ -41,10 +41,10 @@ vi.mock('../utils/smartSync', () => ({
   cleanupNetworkMonitor: vi.fn(),
 }))
 vi.mock('../utils/cacheWarmup', () => ({
-  initWarmup: vi.fn(),
+  initWarmup: vi.fn(() => () => {}),
 }))
 vi.mock('../utils/notifications', () => ({
-  notificationService: { init: vi.fn() },
+  notificationService: { init: vi.fn(), destroy: vi.fn() },
 }))
 vi.mock('../utils/errorLogger', () => ({
   setupGlobalErrorHandler: vi.fn(() => vi.fn()),
@@ -54,6 +54,7 @@ vi.mock('../utils/wsInstances', () => ({
   signalsWs: { connect: vi.fn(), disconnect: vi.fn(), isConnected: vi.fn(() => false), onStateChange: vi.fn(() => vi.fn()) },
   refreshWsToken: vi.fn(),
   cancelRefreshWsToken: vi.fn(),
+  destroyWsInstances: vi.fn(),
 }))
 vi.mock('../utils/routePreload', () => ({
   preloadByPriority: vi.fn(),
@@ -64,7 +65,7 @@ vi.mock('../utils/offlineQueue', () => ({
   offlineQueue: { destroy: vi.fn() },
   destroyOfflineQueue: vi.fn(),
 }))
-vi.mock('../utils/locales', () => ({
+vi.mock('../locales', () => ({
   initLocale: vi.fn(),
 }))
 vi.mock('../utils/hotkeys', () => ({
@@ -85,9 +86,9 @@ vi.mock('../utils/healthCheck', () => ({
   startHealthCheck: vi.fn(() => vi.fn()),
   stopHealthCheck: vi.fn(),
 }))
-// Mock firstScreenOptimize
-vi.mock('../utils/firstScreenOptimize', () => ({
-  initFirstScreenOptimize: vi.fn(),
+
+vi.mock('../utils/priceAlert', () => ({
+  destroyPriceAlert: vi.fn(),
 }))
 
 import App from '../App'

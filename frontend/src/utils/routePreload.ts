@@ -43,10 +43,14 @@ export function preloadRoutes(routes: string[]): Promise<unknown[]> {
   return Promise.all(routes.map(preloadRoute))
 }
 
-export function preloadByPriority(): void {
-  preloadRoutes([...PRELOAD_PRIORITY.high])
-  setTimeout(() => preloadRoutes([...PRELOAD_PRIORITY.medium]), 1000)
-  setTimeout(() => preloadRoutes([...PRELOAD_PRIORITY.low]), 3000)
+export function preloadByPriority(): () => void {
+  void preloadRoutes([...PRELOAD_PRIORITY.high])
+  const t1 = setTimeout(() => preloadRoutes([...PRELOAD_PRIORITY.medium]), 1000)
+  const t2 = setTimeout(() => preloadRoutes([...PRELOAD_PRIORITY.low]), 3000)
+  return () => {
+    clearTimeout(t1)
+    clearTimeout(t2)
+  }
 }
 
 export function preloadAllRoutes(): void {

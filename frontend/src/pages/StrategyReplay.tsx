@@ -3,7 +3,7 @@
  * 可视化历史策略执行过程
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, Button, Space, Slider, Typography, Row, Col, Statistic, Tag, Table, Empty, Spin, Select } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, StepBackwardOutlined, StepForwardOutlined, StopOutlined, DownloadOutlined, LineChartOutlined } from '@ant-design/icons'
 import { replayEngine, generateMockReplayData, type ReplayStep, type ReplayConfig, type ReplayState } from '../utils/strategyReplay'
@@ -35,6 +35,9 @@ export default function StrategyReplay() {
   const [loading, setLoading] = useState(false)
   const [speed, setSpeed] = useState<'slow' | 'normal' | 'fast'>('normal')
 
+  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isLoadingRef = useRef(false)
+
   useEffect(() => {
     const unsubscribeStep = replayEngine.onStep((step, st) => {
       setCurrentStep(step)
@@ -46,16 +49,25 @@ export default function StrategyReplay() {
     return () => {
       unsubscribeStep()
       unsubscribeState()
+      if (loadTimeoutRef.current) {
+        clearTimeout(loadTimeoutRef.current)
+        loadTimeoutRef.current = null
+      }
+      replayEngine.stop()
     }
   }, [])
 
   const handleLoadReplay = useCallback(() => {
+    if (isLoadingRef.current) return
+    isLoadingRef.current = true
     setLoading(true)
-    setTimeout(() => {
+    loadTimeoutRef.current = setTimeout(() => {
       const data = generateMockReplayData(config)
       setSteps(data)
       replayEngine.loadSteps(data)
       setLoading(false)
+      isLoadingRef.current = false
+      loadTimeoutRef.current = null
     }, 500)
   }, [config])
 
@@ -103,9 +115,9 @@ export default function StrategyReplay() {
     },
     { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v) },
     { title: '持仓数量', dataIndex: 'shares', width: 80 },
-    { title: '现金', dataIndex: 'cash', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
-    { title: '市值', dataIndex: 'position', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
-    { title: '总资产', dataIndex: 'totalValue', width: 100, render: (v: number) => (v ?? 0).toLocaleString() },
+    { title: '现金', dataIndex: 'cash', width: 100, render: (v: number) => v == null ? '-' : v.toLocaleString() },
+    { title: '市值', dataIndex: 'position', width: 100, render: (v: number) => v == null ? '-' : v.toLocaleString() },
+    { title: '总资产', dataIndex: 'totalValue', width: 100, render: (v: number) => v == null ? '-' : v.toLocaleString() },
     {
       title: '收益',
       dataIndex: 'profitPct',
@@ -131,12 +143,15 @@ export default function StrategyReplay() {
               <Select
                 value={config.strategy}
                 onChange={(v) => setConfig({ ...config, strategy: v })}
-                style={{ width: 150 }}
+                style={{ width: 180 }}
                 options={[
                   { value: 'macd_cross', label: 'MACD金叉策略' },
                   { value: 'ma_cross', label: '均线交叉策略' },
                   { value: 'rsi_reversal', label: 'RSI反转策略' },
                   { value: 'bollinger', label: '布林带策略' },
+                  { value: 'xuanji_twelve_factor', label: '璇玑十二因子' },
+                  { value: 'xibu_seven_dimension', label: '松岗七维打分' },
+                  { value: 'fusion_strategy', label: '融合策略' },
                 ]}
               />
               <Select

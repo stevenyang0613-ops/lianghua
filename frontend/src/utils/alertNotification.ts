@@ -74,6 +74,30 @@ export interface WebhookConfig {
 }
 
 /**
+ * 验证 Webhook URL 是否安全（防止 SSRF）
+ */
+function isValidWebhookUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    const hostname = parsed.hostname.toLowerCase()
+    // 阻止内网地址
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false
+    if (hostname.startsWith('10.')) return false
+    if (hostname.startsWith('192.168.')) return false
+    if (hostname.startsWith('172.')) {
+      const parts = hostname.split('.').map(Number)
+      if (parts.length >= 2 && parts[1] >= 16 && parts[1] <= 31) return false
+    }
+    // 长度限制
+    if (url.length > 2048) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * 告警管理器
  */
 export class AlertManager {
@@ -198,6 +222,13 @@ export class AlertManager {
   }
 
   /**
+   * 转义正则表达式中的特殊字符
+   */
+  private escapeRegExp(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+
+  /**
    * 评估条件
    */
   private evaluateCondition(
@@ -223,7 +254,7 @@ export class AlertManager {
         case '==': return strValue === strThreshold
         case '!=': return strValue !== strThreshold
         case 'contains': return strValue.includes(strThreshold)
-        case 'matches': return new RegExp(strThreshold).test(strValue)
+        case 'matches': return new RegExp(this.escapeRegExp(strThreshold)).test(strValue)
         default: return false
       }
     }
@@ -335,13 +366,16 @@ export class AlertManager {
       details: event.details,
     }
     if (window.electronAPI?.httpRequest) {
-      await window.electronAPI.httpRequest('POST', '/api/v1/alerts/email', emailPayload)
+      try { await window.electronAPI.httpRequest('POST', '/api/v1/alerts/email', emailPayload) } catch { /* email delivery failed, don't block other channels */ }
     } else {
-      await fetch('/api/v1/alerts/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(emailPayload),
-      })
+      try {
+        const resp = await fetch('/api/v1/alerts/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(emailPayload),
+        })
+        if (!resp.ok) console.warn('[AlertNotification] Email delivery failed:', resp.status)
+      } catch { /* email delivery failed, don't block other channels */ }
     }
   }
 
@@ -351,16 +385,23 @@ export class AlertManager {
   private async sendWebhookNotification(event: AlertEvent, ruleId: string): Promise<void> {
     const config = this.webhookConfigs.get(ruleId)
     if (!config) return
+    if (!isValidWebhookUrl(config.url)) {
+      console.warn('[AlertNotification] Invalid webhook URL, skipping:', config.url)
+      return
+    }
 
     const body = config.template ?
       this.interpolateTemplate(config.template, event) :
       JSON.stringify(event)
 
-    await fetch(config.url, {
-      method: config.method,
-      headers: config.headers || { 'Content-Type': 'application/json' },
-      body,
-    })
+    try {
+      const resp = await fetch(config.url, {
+        method: config.method,
+        headers: config.headers || { 'Content-Type': 'application/json' },
+        body,
+      })
+      if (!resp.ok) console.warn('[AlertNotification] Webhook delivery failed:', resp.status)
+    } catch { /* webhook delivery failed, don't block other channels */ }
   }
 
   /**
@@ -369,7 +410,7 @@ export class AlertManager {
   private async sendDingTalkNotification(event: AlertEvent, ruleId: string): Promise<void> {
     // 从配置中获取钉钉 webhook URL
     const webhookUrl = localStorage.getItem(`dingtalk_webhook_${ruleId}`)
-    if (!webhookUrl) return
+    if (!webhookUrl || !isValidWebhookUrl(webhookUrl)) return
 
     const body = {
       msgtype: 'markdown',
@@ -379,11 +420,14 @@ export class AlertManager {
       },
     }
 
-    await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!resp.ok) console.warn('[AlertNotification] DingTalk delivery failed:', resp.status)
+    } catch { /* dingtalk delivery failed, don't block other channels */ }
   }
 
   /**
@@ -391,7 +435,7 @@ export class AlertManager {
    */
   private async sendWeChatNotification(event: AlertEvent, ruleId: string): Promise<void> {
     const webhookUrl = localStorage.getItem(`wechat_webhook_${ruleId}`)
-    if (!webhookUrl) return
+    if (!webhookUrl || !isValidWebhookUrl(webhookUrl)) return
 
     const body = {
       msgtype: 'markdown',
@@ -400,11 +444,14 @@ export class AlertManager {
       },
     }
 
-    await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!resp.ok) console.warn('[AlertNotification] WeChat delivery failed:', resp.status)
+    } catch { /* wechat delivery failed, don't block other channels */ }
   }
 
   /**
@@ -414,19 +461,22 @@ export class AlertManager {
     if (!recipients || recipients.length === 0) return
 
     if (window.electronAPI?.httpRequest) {
-      await window.electronAPI.httpRequest('POST', '/api/v1/alerts/sms', {
+      try { await window.electronAPI.httpRequest('POST', '/api/v1/alerts/sms', {
         phones: recipients,
         message: `[${event.level.toUpperCase()}] ${event.ruleName}: ${event.message}`,
-      })
+      }) } catch { /* SMS delivery failed, don't block other channels */ }
     } else {
-      await fetch('/api/v1/alerts/sms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phones: recipients,
-          message: `[${event.level.toUpperCase()}] ${event.ruleName}: ${event.message}`,
-        }),
-      })
+      try {
+        const resp = await fetch('/api/v1/alerts/sms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phones: recipients,
+            message: `[${event.level.toUpperCase()}] ${event.ruleName}: ${event.message}`,
+          }),
+        })
+        if (!resp.ok) console.warn('[AlertNotification] SMS delivery failed:', resp.status)
+      } catch { /* SMS delivery failed, don't block other channels */ }
     }
   }
 
@@ -577,13 +627,24 @@ export class AlertManager {
     }
   }
 
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null
+  private _pendingSave: boolean = false
+
   private saveToStorage(): void {
-    try {
-      localStorage.setItem('alertRules', JSON.stringify(Object.fromEntries(this.rules)))
-      localStorage.setItem('alertEvents', JSON.stringify(Object.fromEntries(this.events)))
-    } catch (error) {
-      console.error('[AlertManager] Failed to save to storage:', error)
-    }
+    // Debounce: avoid hammering localStorage during batch rule updates
+    this._pendingSave = true
+    if (this._saveTimer) return
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null
+      if (!this._pendingSave) return
+      this._pendingSave = false
+      try {
+        localStorage.setItem('alertRules', JSON.stringify(Object.fromEntries(this.rules)))
+        localStorage.setItem('alertEvents', JSON.stringify(Object.fromEntries(this.events)))
+      } catch (error) {
+        console.error('[AlertManager] Failed to save to storage:', error)
+      }
+    }, 500)
   }
 
   /**
@@ -593,6 +654,20 @@ export class AlertManager {
     if (this.checkInterval) {
       clearInterval(this.checkInterval)
       this.checkInterval = null
+    }
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer)
+      this._saveTimer = null
+    }
+    // flush any pending save
+    if (this._pendingSave) {
+      this._pendingSave = false
+      try {
+        localStorage.setItem('alertRules', JSON.stringify(Object.fromEntries(this.rules)))
+        localStorage.setItem('alertEvents', JSON.stringify(Object.fromEntries(this.events)))
+      } catch (error) {
+        console.error('[AlertManager] Failed to save to storage:', error)
+      }
     }
   }
 }
@@ -687,4 +762,11 @@ export default alertManager
  */
 export function stopAlertManager(): void {
   alertManager.destroy()
+}
+
+/**
+ * 转义正则表达式中的特殊字符
+ */
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

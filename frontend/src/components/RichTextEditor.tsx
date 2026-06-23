@@ -55,6 +55,22 @@ const colors = [
   '#00cccc', '#0066ff', '#9900ff', '#ff00ff', '#cc0066', '#ff3399',
 ]
 
+/**
+ * 简单 HTML 消毒器（DOMPurify 不可用时回退）
+ * 移除 script 标签、javascript: 协议、以及 on* 事件处理器
+ */
+function simpleSanitize(html: string): string {
+  if (!html) return html
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/javascript:/gi, 'javascript-blocked:')
+    .replace(/\s+on\w+\s*=\s*["']?[^"'>]*["']?/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed\b[^<]*>/gi, '')
+}
+
 export function RichTextEditor({
   value = '',
   onChange,
@@ -74,7 +90,7 @@ export function RichTextEditor({
   // 初始化内容
   useEffect(() => {
     if (editorRef.current && value && !editorRef.current.innerHTML) {
-      editorRef.current.innerHTML = value
+      editorRef.current.innerHTML = simpleSanitize(value)
     }
   }, [value])
 
@@ -88,7 +104,7 @@ export function RichTextEditor({
   // 触发变更
   const triggerChange = useCallback(() => {
     if (editorRef.current && onChange) {
-      onChange(editorRef.current.innerHTML)
+      onChange(simpleSanitize(editorRef.current.innerHTML))
     }
   }, [onChange])
 

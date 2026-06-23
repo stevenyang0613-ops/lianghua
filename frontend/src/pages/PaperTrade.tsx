@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps } from 'antd'
+import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps, Modal } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, RiseOutlined, FallOutlined, FundOutlined, SettingOutlined, DeleteOutlined, RocketOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { fetchPaperAccounts, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount } from '../services/api'
+import { fetchPaperAccounts, createPaperAccount, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount } from '../services/api'
 import { useEverRun } from '../hooks/useEverRun'
 import { useElectron } from '../hooks/useElectron'
 
@@ -31,9 +31,14 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
   const [loading, setLoading] = useState(false)
   const [subTab, setSubTab] = useState('positions')
   const [paramsForm] = Form.useForm()
+  const [createForm] = Form.useForm()
+  const [creating, setCreating] = useState(false)
   const accountId = account?.id
 
+  const isMountedRef = useRef(true)
+
   const loadData = useCallback(async () => {
+    if (!isMountedRef.current) return
     if (!accountId) return
     setLoading(true)
     try {
@@ -41,15 +46,24 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
         fetchPaperPositions(accountId), fetchPaperOrders(accountId),
         fetchPaperEquityCurve(accountId), fetchPaperSignals(accountId),
       ])
+      if (!isMountedRef.current) return
       setPositions(posRes.positions || [])
       setOrders(ordRes.orders || [])
       setEquity(eqRes.points || [])
       setSignals(sigRes.signals || [])
     } catch (e: unknown) { console.warn('Load paper trade data failed:', e) }
-    finally { setLoading(false) }
+    finally { if (isMountedRef.current) setLoading(false) }
   }, [accountId])
 
-  useEffect(() => { loadData(); const t = setInterval(loadData, 30000); return () => clearInterval(t) }, [loadData])
+  useEffect(() => {
+    isMountedRef.current = true
+    if (accountId) {
+      loadData()
+      const t = setInterval(loadData, 30000)
+      return () => { isMountedRef.current = false; clearInterval(t) }
+    }
+    return () => { isMountedRef.current = false }
+  }, [loadData, accountId])
   useEffect(() => { if (account?.params) paramsForm.setFieldsValue(account.params) }, [account?.params, paramsForm])
 
   const handleStart = async () => {
@@ -80,16 +94,61 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
       message.success('参数已保存')
     } catch (e: unknown) { message.error('保存参数失败: ' + (e instanceof Error ? e.message : String(e))) }
   }
-
-  if (!account) return <Card><Empty description="账户未创建" /></Card>
+  const handleCreate = async () => {
+    try {
+      const values = await createForm.validateFields()
+      setCreating(true)
+      await createPaperAccount({ strategy_id: strategyId, initial_cash: values.initial_cash })
+      message.success('账户创建成功')
+      createForm.resetFields()
+      onRefresh()
+    } catch (e: unknown) {
+      message.error('创建失败: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setCreating(false)
+    }
+  }
 
   // 新手引导：账户从未运行过且无数据时显示
   // useEverRun hook：后端驱动优先（account.created_at / is_running），localStorage 辅助缓存
   // 建议10: strategyId 为空时使用固定 key，避免 undefined 导致多策略共享标记
+  // ⚠️ 必须放在 if (!account) 之前，确保每次渲染都调用相同数量的 hooks（React Hooks 规则）
   const hasEverRun = useEverRun(
     strategyId ? `lianghua_paper_trade_ever_run_${strategyId}` : 'lianghua_paper_trade_ever_run_unknown',
-    [!!account?.created_at, account.is_running]
+    [!!account?.created_at, account?.is_running ?? false]
   )
+
+  if (!account) {
+    return (
+      <Card>
+        <Empty
+          description="账户未创建"
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+        >
+          <Form form={createForm} layout="inline" style={{ marginTop: 16 }} initialValues={{ initial_cash: 100000000 }}>
+            <Form.Item
+              name="initial_cash"
+              label="初始资金"
+              rules={[{ required: true, message: '请输入初始资金' }]}
+            >
+              <InputNumber
+                style={{ width: 240 }}
+                min={10000}
+                step={1000000}
+                formatter={(value: number | undefined) => `¥ ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                parser={(value: string | undefined) => Number(value?.replace(/[¥,\s]/g, '') || 0)}
+              />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" onClick={handleCreate} loading={creating} icon={<RocketOutlined />}>
+                创建账户
+              </Button>
+            </Form.Item>
+          </Form>
+        </Empty>
+      </Card>
+    )
+  }
 
   const showOnboarding = !hasEverRun && !account.is_running && positions.length === 0 && signals.length === 0 && orders.length === 0 && equity.length === 0
 
@@ -204,19 +263,19 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
               </Popconfirm>
             </Space>
           }>
-            <Statistic title="总资产" value={account.total_asset} precision={2} prefix="¥" valueStyle={{ color: profitColor }} />
+            <Statistic title="总资产" value={account.total_asset} precision={2} prefix="¥" valueStyle={{ color: profitColor, fontSize: 14 }} />
             <Row gutter={16} style={{ marginTop: 12 }}>
-              <Col span={12}><Statistic title="可用资金" value={account.cash} precision={2} /></Col>
-              <Col span={12}><Statistic title="持仓市值" value={account.market_value} precision={2} /></Col>
+              <Col span={12}><Statistic title="可用资金" value={account.cash} precision={2} prefix="¥" valueStyle={{ fontSize: 14 }} /></Col>
+              <Col span={12}><Statistic title="持仓市值" value={account.market_value} precision={2} prefix="¥" valueStyle={{ fontSize: 14 }} /></Col>
             </Row>
             <Row gutter={16} style={{ marginTop: 8 }}>
               <Col span={12}>
                 <Statistic title="总收益" value={account.total_profit} precision={2}
                   prefix={account.total_profit >= 0 ? <RiseOutlined /> : <FallOutlined />}
-                  valueStyle={{ color: profitColor }} />
+                  valueStyle={{ color: profitColor, fontSize: 14 }} />
               </Col>
               <Col span={12}>
-                <Statistic title="收益率" value={account.total_profit_pct} precision={2} suffix="%" valueStyle={{ color: profitColor }} />
+                <Statistic title="收益率" value={account.total_profit_pct} precision={2} suffix="%" valueStyle={{ color: profitColor, fontSize: 14 }} />
               </Col>
             </Row>
             <div style={{ marginTop: 8 }}>
@@ -306,7 +365,11 @@ export default function PaperTrade() {
   // useRef 缓存上次响应值，避免 30s 轮询导致 React 重渲染波纹
   const prevSnapshotRef = useRef<{ accounts: PaperAccountData[]; failCount: number; totalFails: number; threshold: number } | null>(null)
 
+  const isMountedRef = useRef(true)
+
   const loadAccounts = useCallback(async () => {
+    if (!isMountedRef.current) return
+    setLoadingAccounts(true) // 显式开始加载，避免闪烁
     try {
       const res = await fetchPaperAccounts()
       const accounts = res.accounts || []
@@ -359,10 +422,14 @@ export default function PaperTrade() {
       }
       // 警告恢复由 useEffect 的 setTimeout 统一管理（最小显示 10 秒）
     } catch (e: unknown) { console.warn('Load paper accounts failed:', e) }
-    finally { setLoadingAccounts(false) }
+    finally { if (isMountedRef.current) setLoadingAccounts(false) }
   }, [isElectron, showNotification])
 
-  useEffect(() => { loadAccounts() }, [loadAccounts])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadAccounts()
+    return () => { isMountedRef.current = false }
+  }, [loadAccounts])
 
   // 10秒后自动关闭 warningShownAt（确保 Alert 不会无限停留）
   // 同时：如果 refreshFailCount 恢复到 <5 且已过 10 秒，也清除 warningShownAt

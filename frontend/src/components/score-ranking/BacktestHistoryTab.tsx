@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Card, Table, Empty, Space, Button, Drawer, Descriptions, Statistic, Row, Col, message, Popconfirm, InputNumber, Checkbox } from 'antd'
 import { HistoryOutlined, EyeOutlined, DeleteOutlined, ReloadOutlined, ClearOutlined, SwapOutlined, DownloadOutlined, PrinterOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -23,23 +23,32 @@ export default React.memo(function BacktestHistoryTab() {
   const [compareVisible, setCompareVisible] = useState(false)
   const [compareData, setCompareData] = useState<{ items: { summary: BacktestHistoryItem; details: BacktestHistoryDetail[] }[] } | null>(null)
 
+  const isMountedRef = useRef(true)
+
   const loadHistory = useCallback(async (p?: number, ps?: number) => {
+    if (!isMountedRef.current) return
     setLoading(true)
     const currentPage = p ?? page
     const currentPageSize = ps ?? pageSize
     try {
       const offset = (currentPage - 1) * currentPageSize
       const res = await fetchBacktestHistory(currentPageSize, offset)
+      if (!isMountedRef.current) return
       setHistory(res.results)
       setTotal(res.total)
     } catch {
+      if (!isMountedRef.current) return
       message.error('加载回测历史失败')
     } finally {
-      setLoading(false)
+      if (isMountedRef.current) setLoading(false)
     }
   }, [page, pageSize])
 
-  useEffect(() => { loadHistory() }, [loadHistory])
+  useEffect(() => {
+    isMountedRef.current = true
+    loadHistory()
+    return () => { isMountedRef.current = false }
+  }, [loadHistory])
 
   const viewDetail = useCallback(async (item: BacktestHistoryItem) => {
     try {

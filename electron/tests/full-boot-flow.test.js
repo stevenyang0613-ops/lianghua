@@ -24,7 +24,11 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 // ============================================================
 async function testBinaryExecutable() {
   console.log('\n=== 测试1: PyInstaller 二进制可执行 ===')
-  const binPath = '/Users/stevenyang/Public/lianghua/backend/lianghua-backend'
+  const binPath = path.join(__dirname, '..', '..', 'backend', 'lianghua-backend')
+  if (!fs.existsSync(binPath)) {
+    console.log('  SKIP: 二进制文件不存在（需要先打包后端）')
+    return
+  }
   assert2(fs.existsSync(binPath), '二进制文件存在')
 
   // 检查是否有执行权限
@@ -53,7 +57,7 @@ async function testBinaryExecutable() {
 async function testGetPythonCmdLogic() {
   console.log('\n=== 测试2: getPythonCmd 查找逻辑 ===')
 
-  const mainTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/electron/main.ts', 'utf-8')
+  const mainTs = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf-8')
 
   // 验证代码中先查根目录再查 dist
   const rootBinPattern = /path\.join\(backendDir,\s*['"]lianghua-backend['"]\)/
@@ -83,12 +87,12 @@ async function testGetPythonCmdLogic() {
 async function testHashRouterComplete() {
   console.log('\n=== 测试3: HashRouter 替换完成 ===')
 
-  const mainTsx = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/main.tsx', 'utf-8')
+  const mainTsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'main.tsx'), 'utf-8')
   assert2(!mainTsx.includes('BrowserRouter'), 'main.tsx 不再使用 BrowserRouter')
   assert2(mainTsx.includes('HashRouter'), 'main.tsx 使用 HashRouter')
 
   // 检查 hotkeys.ts 中的导航使用 hash 方式
-  const hotkeysTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/utils/hotkeys.ts', 'utf-8')
+  const hotkeysTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'utils', 'hotkeys.ts'), 'utf-8')
   const badNavCount = (hotkeysTs.match(/window\.location\.href\s*=\s*['"]\//g) || []).length
   const goodNavCount = (hotkeysTs.match(/window\.location\.hash\s*=\s*['"]#\//g) || []).length
 
@@ -102,14 +106,14 @@ async function testHashRouterComplete() {
 async function testOfflineModeFixed() {
   console.log('\n=== 测试4: 离线模式不会意外启用 ===')
 
-  const dataCacheTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/utils/dataCache.ts', 'utf-8')
+  const dataCacheTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'utils', 'dataCache.ts'), 'utf-8')
 
   // isOfflineMode 应该在 Electron 环境下忽略 navigator.onLine
   const hasElectronCheck = dataCacheTs.includes('electronAPI') && dataCacheTs.includes('httpRequest')
   assert2(hasElectronCheck, 'isOfflineMode 在 Electron 环境下忽略 navigator.onLine')
 
   // StartupLoading 成功连接后应该 disableOfflineMode
-  const startupTs = fs.readFileSync('/Users/stevenyang/Public/lianghua/frontend/src/components/StartupLoading.tsx', 'utf-8')
+  const startupTs = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'StartupLoading.tsx'), 'utf-8')
   const hasDisableOnSuccess = startupTs.includes('disableOfflineMode()')
   assert2(hasDisableOnSuccess, 'StartupLoading 连接成功后调用 disableOfflineMode()')
 }
@@ -120,7 +124,7 @@ async function testOfflineModeFixed() {
 async function testPackageJsonNoDistFilter() {
   console.log('\n=== 测试5: package.json 不排除二进制文件 ===')
 
-  const pkg = JSON.parse(fs.readFileSync('/Users/stevenyang/Public/lianghua/electron/package.json', 'utf-8'))
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'))
   const backendResource = pkg.build.extraResources.find(r => r.to === 'backend')
 
   assert2(backendResource !== undefined, 'backend extraResources 存在')
@@ -231,7 +235,10 @@ async function testMainTsCompiles() {
 
   const { execSync } = require('child_process')
   try {
-    execSync('/Users/stevenyang/Public/lianghua/electron/node_modules/.bin/tsc -p /Users/stevenyang/Public/lianghua/electron/tsconfig.json --noEmit', {
+    const electronDir = path.join(__dirname, '..')
+  const tsc = path.join(electronDir, 'node_modules', '.bin', 'tsc')
+  const tsconfig = path.join(electronDir, 'tsconfig.json')
+  execSync(`${tsc} -p ${tsconfig} --noEmit`, {
       timeout: 30000,
       stdio: 'pipe'
     })

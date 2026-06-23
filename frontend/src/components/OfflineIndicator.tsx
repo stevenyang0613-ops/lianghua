@@ -15,12 +15,14 @@ interface OfflineIndicatorProps {
 }
 
 export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
-  const [isOffline, setIsOffline] = useState(() => localStorage.getItem('offline_mode') === 'true')
+  const [isOffline, setIsOffline] = useState(() => {
+    try { return localStorage.getItem('offline_mode') === 'true' } catch { return false }
+  })
   const [cacheStatus, setCacheStatus] = useState<{ key: string; status: Awaited<ReturnType<typeof getCacheStatus>> }[]>([])
 
   useEffect(() => {
     const checkStatus = async () => {
-      setIsOffline(localStorage.getItem('offline_mode') === 'true')
+      try { setIsOffline(localStorage.getItem('offline_mode') === 'true') } catch { setIsOffline(false) }
 
       // 检查主要缓存的过期状态
       const mainCaches = ['market_quotes', 'analysis_dual-low-ranking', 'analysis_forced-redemption']
@@ -88,7 +90,7 @@ export default function OfflineIndicator({ style }: OfflineIndicatorProps) {
         )}
 
         <Text type="secondary" style={{ fontSize: 12 }}>
-          上次同步: {localStorage.getItem('cache_time') || '未知'}
+          上次同步: {(() => { try { return localStorage.getItem('cache_time') || '未知' } catch { return '未知' } })()}
         </Text>
       </Space>
     </div>

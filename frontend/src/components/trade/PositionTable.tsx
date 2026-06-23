@@ -27,13 +27,13 @@ const positionColumns = [
     title: '盈亏',
     dataIndex: 'profit_amount',
     width: 90,
-    render: (v: number) => <Text style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}</Text>,
+    render: (v: number) => <Text style={{ color: v == null ? undefined : (v >= 0 ? '#cf1322' : '#389e0d') }}>{v == null ? '' : (v >= 0 ? '+' : '')}{fmt(v)}</Text>,
   },
   {
     title: '收益率',
     dataIndex: 'profit_pct',
     width: 80,
-    render: (v: number) => <span style={{ color: (v ?? 0) >= 0 ? '#cf1322' : '#389e0d' }}>{(v ?? 0) >= 0 ? '+' : ''}{fmt(v)}%</span>,
+    render: (v: number) => <span style={{ color: v == null ? undefined : (v >= 0 ? '#cf1322' : '#389e0d') }}>{v == null ? '' : (v >= 0 ? '+' : '')}{fmt(v)}%</span>,
   },
 ]
 

@@ -11,12 +11,27 @@ import {
 } from '../services/api'
 import { marketWs } from '../utils/wsInstances'
 
+interface RankingInfo {
+  total: number
+  market_state_detected: string
+  total_unfiltered?: number
+}
+
+interface RankingParams {
+  topN: number
+  marketState: string
+  maxPremium: number
+  minPrice: number
+  maxPrice: number
+  volAdjust: number
+}
+
 interface XuanjiState {
   // Ranking data
   rankingData: XuanjiItem[]
-  rankingInfo: any
+  rankingInfo: RankingInfo | null
   rankingLoading: boolean
-  rankingParams: any
+  rankingParams: RankingParams | null
   rankingLoadedAt: number
 
   // Static data (rarely changes)
@@ -57,7 +72,10 @@ const STATIC_STALE_MS = 10 * 60 * 1000 // 10 minutes for static data
 function getWsRefreshInterval(): number {
   try {
     const saved = localStorage.getItem('xuanji_ws_refresh_sec')
-    if (saved) return parseInt(saved, 10) * 1000
+    if (saved) {
+      const parsed = parseInt(saved, 10)
+      return Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : 30 * 1000
+    }
   } catch { /* ignore */ }
   return 30 * 1000
 }
@@ -107,7 +125,8 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         rankingLoadedAt: Date.now(),
         rankingLoading: false,
       })
-    } catch {
+    } catch (e) {
+      console.error('[XuanjiStore] loadRanking failed:', e)
       set({ rankingLoading: false })
     }
   },
@@ -132,8 +151,8 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         alphaSources: alphaSources.status === 'fulfilled' ? alphaSources.value : state.alphaSources,
         staticDataLoadedAt: Date.now(),
       })
-    } catch {
-      // Non-critical
+    } catch (e) {
+      console.error('[XuanjiStore] loadStaticData failed:', e)
     }
   },
 
@@ -152,8 +171,8 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         factorCorrelation: factorCorrelation.status === 'fulfilled' ? factorCorrelation.value : null,
         comparison: comparison.status === 'fulfilled' ? comparison.value : null,
       })
-    } catch {
-      // Non-critical
+    } catch (e) {
+      console.error('[XuanjiStore] loadComputedData failed:', e)
     }
   },
 
@@ -162,7 +181,8 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
     try {
       const detail = await fetchXuanjiSingle(code, params.marketState, params.maxPremium, params.minPrice, params.maxPrice, params.volAdjust)
       set({ selectedDetail: detail, detailLoading: false })
-    } catch {
+    } catch (e) {
+      console.error('[XuanjiStore] loadSingleDetail failed:', e)
       set({ detailLoading: false })
     }
   },
@@ -171,8 +191,8 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
     try {
       const result = await fetchXuanjiDeltaCandidates(params.minIvHv, params.premiumLow, params.premiumHigh, params.topN)
       set({ deltaCandidates: result })
-    } catch {
-      // Non-critical
+    } catch (e) {
+      console.error('[XuanjiStore] loadDeltaCandidates failed:', e)
     }
   },
 
@@ -193,30 +213,47 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
     if (now - state.lastWsRefreshAt < WS_REFRESH_INTERVAL) {
       // Too soon, schedule a delayed refresh if not already scheduled
       if (!state.wsRefreshTimer) {
-        const delay = WS_REFRESH_INTERVAL - (now - state.lastWsRefreshAt)
-        const timer = setTimeout(() => {
-          set({ wsRefreshTimer: null })
-          const currentState = get()
-          if (currentState.rankingParams && !currentState.rankingLoading) {
-            // Force refresh by resetting loadedAt
-            set({ rankingLoadedAt: 0, lastWsRefreshAt: Date.now() })
-            currentState.loadRanking(currentState.rankingParams)
-          }
-        }, delay)
-        set({ wsRefreshTimer: timer })
+        const delay = Math.max(0, WS_REFRESH_INTERVAL - (now - state.lastWsRefreshAt))
+        if (Number.isFinite(delay)) {
+          const timer = setTimeout(() => {
+            set({ wsRefreshTimer: null })
+            const currentState = get()
+            if (currentState.rankingParams && !currentState.rankingLoading) {
+              // Force refresh by resetting loadedAt
+              set({ rankingLoadedAt: 0, lastWsRefreshAt: Date.now() })
+              get().loadRanking(currentState.rankingParams as RankingParams)
+            }
+          }, delay)
+          set({ wsRefreshTimer: timer })
+        }
       }
       return
     }
 
     // Refresh immediately
     set({ lastWsRefreshAt: now, rankingLoadedAt: 0 })
-    state.loadRanking(state.rankingParams)
+    if (state.rankingParams) {
+      get().loadRanking(state.rankingParams)
+    }
   },
 }))
 
 // Subscribe to market WS for auto-refresh
 let _wsUnsub: (() => void) | null = null
 let _wsRefCount = 0
+
+export function destroyXuanjiStore(): void {
+  if (_wsUnsub) {
+    _wsUnsub()
+    _wsUnsub = null
+  }
+  _wsRefCount = 0
+  const timer = useXuanjiStore.getState().wsRefreshTimer
+  if (timer) {
+    clearTimeout(timer)
+    useXuanjiStore.setState({ wsRefreshTimer: null })
+  }
+}
 
 export function subscribeXuanjiWs() {
   _wsRefCount++

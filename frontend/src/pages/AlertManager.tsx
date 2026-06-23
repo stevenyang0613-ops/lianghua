@@ -126,7 +126,7 @@ export default function AlertManager() {
         if (record.type.includes('change')) {
           return `${v >= 0 ? '+' : ''}${fmt(v)}%`
         } else if (record.type.includes('volume')) {
-          return `${fmt((v ?? 0) / 10000, 0)}万`
+          return v == null ? '-' : `${fmt(v / 10000, 0)}万`
         }
         return `¥${fmt(v)}`
       },

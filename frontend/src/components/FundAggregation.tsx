@@ -180,7 +180,7 @@ export default function FundAggregation({ onTransfer }: Props) {
 
     // 方案2: 风险账户资金调出
     const riskAccounts = fundStatuses.filter(s =>
-      s.balance && s.balance.profitToday < 0 && Math.abs(s.balance.profitToday) > s.balance.totalAsset * 0.02
+      s.balance && s.balance.totalAsset > 0 && s.balance.profitToday < 0 && Math.abs(s.balance.profitToday) > s.balance.totalAsset * 0.02
     )
 
     if (riskAccounts.length > 0) {
@@ -640,7 +640,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                   title: '金额',
                   dataIndex: 'amount',
                   key: 'amount',
-                  render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
+                  render: (v: number) => `¥${v == null ? '-' : v.toLocaleString()}`,
                 },
                 {
                   title: '状态',
@@ -699,7 +699,7 @@ export default function FundAggregation({ onTransfer }: Props) {
                 {
                   title: '金额',
                   dataIndex: 'amount',
-                  render: (v: number) => `¥${(v ?? 0).toLocaleString()}`,
+                  render: (v: number) => `¥${v == null ? '-' : v.toLocaleString()}`,
                 },
                 { title: '原因', dataIndex: 'reason' },
               ]}

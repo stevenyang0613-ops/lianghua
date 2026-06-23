@@ -41,6 +41,7 @@ class RequestCache {
    */
   private async initDB(): Promise<void> {
     if (!this.config.persistToIndexedDB) return
+    if (typeof indexedDB === 'undefined') return
 
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, 1)
@@ -363,6 +364,23 @@ class RequestCache {
 
 // 导出单例
 export const requestCache = new RequestCache()
+
+/**
+ * 销毁请求缓存单例（清理内存缓存、挂起请求和关闭 IndexedDB）
+ */
+export function destroyRequestCache(): void {
+  // 清理内存缓存
+  requestCache['memoryCache'].clear()
+  // 清理挂起请求
+  requestCache['pendingRequests'].clear()
+  // 关闭 IndexedDB 连接
+  const db = requestCache['db'] as IDBDatabase | null
+  if (db) {
+    try { db.close() } catch { /* ignore */ }
+    requestCache['db'] = null
+  }
+  requestCache['initPromise'] = null
+}
 
 /**
  * 便捷方法

@@ -4,8 +4,16 @@ import { Card, Typography, InputNumber } from 'antd'
 const { Text } = Typography
 
 export const SignalConfigCard = React.memo(function SignalConfigCard() {
-  const [minConfidence, setMinConfidence] = useState(() => Number(localStorage.getItem('signal_min_confidence') || '0'))
-  const [maxSignals, setMaxSignals] = useState(() => Number(localStorage.getItem('signal_max_signals') || '20'))
+  const [minConfidence, setMinConfidence] = useState(() => {
+    const raw = localStorage.getItem('signal_min_confidence') || '0'
+    const val = Number.isFinite(Number(raw)) ? Number(raw) : 0
+    return val
+  })
+  const [maxSignals, setMaxSignals] = useState(() => {
+    const raw = localStorage.getItem('signal_max_signals') || '20'
+    const val = Number.isFinite(Number(raw)) ? Number(raw) : 20
+    return val
+  })
 
   return (
     <Card title="信号配置" style={{ marginBottom: 16 }}>

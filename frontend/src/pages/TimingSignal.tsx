@@ -241,7 +241,7 @@ const getScoreColor = (score: number) => {
               {signal && getEnvTag(signal.marketEnv)}
               {isEnhanced && signal && getQualityTag(signal.quality)}
               {isEnhanced && (
-                <Tag color="purple" style={{ fontSize: 12 }}>V4.0</Tag>
+                <Tag color="purple" style={{ fontSize: 12 }}>V4.1</Tag>
               )}
             </Space>
           </Col>
@@ -418,6 +418,49 @@ const getScoreColor = (score: number) => {
                 suffix="/ 100"
                 valueStyle={{ color: getScoreColor(signal.consensusScore || 50) }}
                 prefix={<DashboardOutlined />}
+              />
+            </Col>
+          </Row>
+        </Card>
+      )}
+
+      {/* V4.1: 信号准确率统计 */}
+      {isEnhanced && signal?.accuracyStats && (
+        <Card title="信号准确率追踪" style={{ marginBottom: 16 }}>
+          <Row gutter={16}>
+            <Col span={6}>
+              <Statistic
+                title="历史准确率"
+                value={Math.round((signal.accuracyStats.accuracy || 0) * 100)}
+                suffix="%"
+                valueStyle={{ color: (signal.accuracyStats.accuracy || 0) > 0.6 ? '#52c41a' : '#faad14' }}
+                prefix={<CheckCircleOutlined />}
+              />
+            </Col>
+            <Col span={6}>
+              <Statistic
+                title="近期准确率(20次)"
+                value={Math.round((signal.accuracyStats.recentAccuracy || 0) * 100)}
+                suffix="%"
+                valueStyle={{ color: (signal.accuracyStats.recentAccuracy || 0) > 0.6 ? '#52c41a' : '#faad14' }}
+                prefix={<CheckCircleOutlined />}
+              />
+            </Col>
+            <Col span={6}>
+              <Statistic
+                title="验证样本数"
+                value={signal.accuracyStats.verified || 0}
+                suffix={`/ ${signal.accuracyStats.total || 0}`}
+                valueStyle={{ color: '#1890ff' }}
+                prefix={<DashboardOutlined />}
+              />
+            </Col>
+            <Col span={6}>
+              <Statistic
+                title="正确次数"
+                value={signal.accuracyStats.correct || 0}
+                valueStyle={{ color: '#52c41a' }}
+                prefix={<CheckCircleOutlined />}
               />
             </Col>
           </Row>

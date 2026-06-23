@@ -597,11 +597,11 @@ export class StrategySharingService {
   }
 
   private getCurrentUserId(): string {
-    return localStorage.getItem('userId') || 'anonymous'
+    try { return localStorage.getItem('userId') || 'anonymous' } catch { return 'anonymous' }
   }
 
   private getCurrentUserName(): string {
-    return localStorage.getItem('userName') || 'Anonymous'
+    try { return localStorage.getItem('userName') || 'Anonymous' } catch { return 'Anonymous' }
   }
 
   private async syncToServer(action: string, data: unknown): Promise<void> {

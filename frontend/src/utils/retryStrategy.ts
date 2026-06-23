@@ -167,33 +167,40 @@ function _flushRetryStats(): void {
     _statsFlushTimer = null
   }
   if (_pendingStats) {
-    localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats))
+    try { localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats)) } catch { /* silent fail */ }
     _pendingStats = null
   }
 }
 
 export function getRetryStats(): RetryStats {
   _flushRetryStats() // 读取前先 flush，确保数据一致
-  const saved = localStorage.getItem(RETRY_STATS_KEY)
-  return safeJsonParse<RetryStats>(saved, {
-    totalAttempts: 0,
-    successfulRetries: 0,
-    failedRetries: 0,
-    lastRetryTime: null,
-  })
+  try {
+    const saved = localStorage.getItem(RETRY_STATS_KEY)
+    return safeJsonParse<RetryStats>(saved, {
+      totalAttempts: 0,
+      successfulRetries: 0,
+      failedRetries: 0,
+      lastRetryTime: null,
+    })
+  } catch { return { totalAttempts: 0, successfulRetries: 0, failedRetries: 0, lastRetryTime: null } }
 }
 
 export function recordRetryAttempt(success: boolean): void {
   // 使用内存缓冲，避免高频写入 localStorage
   if (_pendingStats === null) {
     // 从 localStorage 加载已有数据
-    const saved = localStorage.getItem(RETRY_STATS_KEY)
-    _pendingStats = safeJsonParse<RetryStats>(saved, {
-      totalAttempts: 0,
-      successfulRetries: 0,
-      failedRetries: 0,
-      lastRetryTime: null,
-    })
+    try {
+      const saved = localStorage.getItem(RETRY_STATS_KEY)
+      _pendingStats = safeJsonParse<RetryStats>(saved, {
+        totalAttempts: 0,
+        successfulRetries: 0,
+        failedRetries: 0,
+        lastRetryTime: null,
+      })
+    } catch { /* localStorage unavailable */ }
+    if (_pendingStats === null) {
+      _pendingStats = { totalAttempts: 0, successfulRetries: 0, failedRetries: 0, lastRetryTime: null }
+    }
   }
 
   _pendingStats.totalAttempts++
@@ -211,7 +218,7 @@ export function recordRetryAttempt(success: boolean): void {
   }
   _statsFlushTimer = window.setTimeout(() => {
     if (_pendingStats) {
-      localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats))
+      try { localStorage.setItem(RETRY_STATS_KEY, JSON.stringify(_pendingStats)) } catch { /* silent fail */ }
       _pendingStats = null
     }
   }, 500)

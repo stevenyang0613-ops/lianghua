@@ -62,6 +62,8 @@ export function useWebSocket(onMessage: MessageHandler, onReconnect?: ReconnectH
       unsubMsg()
       unsubState()
       unsubPort()
+      // NOTE: 不要在这里 disconnect()，marketWs 是全局单例
+      // 多个组件可能同时订阅，任一组件卸载不应断开全局连接
     }
   }, [])
 

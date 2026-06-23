@@ -8,11 +8,11 @@ import BaseChart from './BaseChart'
 
 export interface KlineData {
   date: string
-  open: number
-  close: number
-  high: number
-  low: number
-  volume: number
+  open: number | null
+  close: number | null
+  high: number | null
+  low: number | null
+  volume: number | null
 }
 
 export interface KlineChartProps {
@@ -78,7 +78,7 @@ export function KlineChart({
         itemStyle: {
           color: (params: any) => {
             const idx = params.dataIndex
-            return data[idx].close >= data[idx].open ? '#ef5350' : '#26a69a'
+            return (data[idx].close ?? 0) >= (data[idx].open ?? 0) ? '#ef5350' : '#26a69a'
           },
         },
       })

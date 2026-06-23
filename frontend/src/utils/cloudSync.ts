@@ -198,11 +198,12 @@ export function getSyncStatus(): {
   hasLocalChanges: boolean
 } {
   const lastSync = localStorage.getItem(LAST_SYNC_KEY)
-  const lastSyncTime = lastSync ? new Date(parseInt(lastSync)).toLocaleString('zh-CN') : null
+  const ts = lastSync ? parseInt(lastSync, 10) : 0
+  const lastSyncTime = Number.isFinite(ts) && ts > 0 ? new Date(ts).toLocaleString('zh-CN') : null
 
   // 简单检测是否有未同步的更改
   const localData = getLocalData()
-  const hasLocalChanges = localData.lastSyncTime > (lastSync ? parseInt(lastSync) : 0)
+  const hasLocalChanges = localData.lastSyncTime > (ts || 0)
 
   return {
     lastSyncTime,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 
 /**
  * useEverRun — 首次触发后永久标记的 hook
@@ -38,9 +38,11 @@ export function useEverRun(storageKey: string, conditions: boolean[]): boolean {
   const prevSerializedRef = useRef('')
   const boolConditions = conditions.map(Boolean)
   const serialized = boolConditions.join()
-  if (serialized !== prevSerializedRef.current) {
+
+  useLayoutEffect(() => {
     prevSerializedRef.current = serialized
-  }
+  }, [serialized])
+
   const conditionsMet = boolConditions.some(Boolean)
 
   // 任意条件为 true 且当前未标记 → 标记并持久化

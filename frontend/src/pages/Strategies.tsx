@@ -123,7 +123,7 @@ export default function Strategies() {
                   { title: '名称', dataIndex: 'name', width: 120 },
                   { title: '方向', dataIndex: 'action', width: 60, render: (v: string) => <Tag color={actionColors[v]}>{v === 'buy' ? '买入' : '卖出'}</Tag> },
                   { title: '价格', dataIndex: 'price', width: 80, render: (v: number) => fmt(v, 3) },
-                  { title: '置信度', dataIndex: 'confidence', width: 70, render: (v: number) => `${fmt((v ?? 0) * 100, 0)}%` },
+                  { title: '置信度', dataIndex: 'confidence', width: 70, render: (v: number) => v == null ? '-' : `${fmt(v * 100, 0)}%` },
                   { title: '已执行', dataIndex: 'executed', width: 60, render: (v: boolean) => v ? <Tag color="green">是</Tag> : <Tag color="default">否</Tag> },
                   { title: '原因', dataIndex: 'reason', ellipsis: true },
                   { title: '时间', dataIndex: 'ts', width: 160, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },

@@ -57,21 +57,21 @@ export const useSignalStore = create<SignalState>((set, get) => ({
     try {
       const data = await fetchAvailableSignalsStrategies()
       set({ availableStrategies: data.strategies })
-    } catch { /* non-critical */ }
+    } catch (e) { console.error('[SignalStore] loadAvailableStrategies failed:', e) }
   },
 
   loadHistory: async (strategy?, code?) => {
     try {
       const data = await fetchSignalHistory(strategy, code, 200)
       set({ history: data.signals })
-    } catch { /* non-critical */ }
+    } catch (e) { console.error('[SignalStore] loadHistory failed:', e) }
   },
 
   loadStats: async () => {
     try {
       const data = await fetchSignalStats()
       set({ stats: data })
-    } catch { /* non-critical */ }
+    } catch (e) { console.error('[SignalStore] loadStats failed:', e) }
   },
 
   setStrategies: async (strategies) => {
