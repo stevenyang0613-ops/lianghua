@@ -160,6 +160,39 @@ class MacroDataService:
             return False
         return (datetime.now() - self._cache_time).total_seconds() < self._cache_ttl
 
+    def _should_skip_source(self, source_name: str, max_consecutive_failures: int = 3, cooldown_seconds: int = 300) -> bool:
+        """检查数据源是否应该跳过（连续失败过多时冷却）
+
+        AGENTS.md #67: 防止已知故障的数据源（jin10 SSL 失败）阻塞整个 backtest。
+        """
+        # 1. 检查是否在冷却期
+        cooldown_until = self._source_cooldown.get(source_name)
+        if cooldown_until and datetime.now() < cooldown_until:
+            return True
+        elif cooldown_until and datetime.now() >= cooldown_until:
+            # 冷却结束，清除冷却标记
+            del self._source_cooldown[source_name]
+            self._source_failures[source_name] = 0
+        # 2. 检查连续失败次数
+        return self._source_failures.get(source_name, 0) >= max_consecutive_failures
+
+    def _record_source_success(self, source_name: str):
+        """记录数据源成功调用，重置失败计数"""
+        if source_name in self._source_failures:
+            self._source_failures[source_name] = 0
+            if source_name in self._source_cooldown:
+                del self._source_cooldown[source_name]
+
+    def _record_source_failure(self, source_name: str, max_consecutive_failures: int = 3, cooldown_seconds: int = 300):
+        """记录数据源失败；连续失败过多时进入冷却期"""
+        self._source_failures[source_name] = self._source_failures.get(source_name, 0) + 1
+        if self._source_failures[source_name] >= max_consecutive_failures:
+            self._source_cooldown[source_name] = datetime.now() + timedelta(seconds=cooldown_seconds)
+            logger.warning(
+                f"[MacroData] {source_name} 连续失败 {self._source_failures[source_name]} 次，"
+                f"进入冷却期 {cooldown_seconds}s"
+            )
+
     async def fetch_macro_data(self, bonds=None) -> MacroData:
         """获取宏观市场数据（带缓存）"""
         if self._is_cache_valid():
@@ -1079,6 +1112,9 @@ class MacroDataService:
         """工业增加值同比(%) — 带重试和备用数据源"""
         if ak is None:
             return float('nan')
+        # AGENTS.md #67: 健康检查 — 已知故障的 jin10 数据源暂时跳过
+        if self._should_skip_source('jin10_industrial'):
+            return float('nan')
         # 重试链：[主源] 1s retry → [备用源 PMI 替代]
         delays = [0, 1, 3]
         for i, delay in enumerate(delays):
@@ -1089,8 +1125,10 @@ class MacroDataService:
                 if df is not None and not df.empty:
                     df = df.dropna(subset=['今值']).copy()
                     if not df.empty:
+                        self._record_source_success('jin10_industrial')
                         return round(float(df['今值'].iloc[-1]), 1)
             except Exception as e:
+                self._record_source_failure('jin10_industrial')
                 if i < len(delays) - 1:
                     logger.warning(f"[MacroData] Industrial output 重试{i+1}失败: {e}")
                 else:
