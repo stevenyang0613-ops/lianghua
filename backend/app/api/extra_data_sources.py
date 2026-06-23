@@ -6,34 +6,36 @@
          300-1500 天的纯债价值、转股价值、纯债溢价率、转股溢价率、收盘价
 """
 
-import asyncio
 import logging
 import time as _time
-logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import Optional
-
-logger = logging.getLogger(__name__)
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 from app.engine.data_enrich_utils import safe_float, safe_int
+from app.services.task_registry import TaskStatus, get_registry
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_bg = get_registry()
 
 
 class ValueAnalysisRequest(BaseModel):
     bond_codes: list[str]
     max_workers: int = 10
+    async_task: bool = False  # True: 后台异步, 返回 task_id
 
 
 class IndustryRequest(BaseModel):
     stock_codes: list[str]
     max_workers: int = 8
+    async_task: bool = False
 
 
 class BondDailyEMRequest(BaseModel):
@@ -41,16 +43,19 @@ class BondDailyEMRequest(BaseModel):
     start_date: str
     end_date: str
     max_workers: int = 10
+    async_task: bool = False
 
 
 class CSIIndexRequest(BaseModel):
     start_date: str
     end_date: str
+    async_task: bool = False
 
 
 class FinancialTHSRequest(BaseModel):
     stock_codes: list[str]
     max_workers: int = 8
+    async_task: bool = False
 
 
 class BondKlineEMRequest(BaseModel):
@@ -58,14 +63,41 @@ class BondKlineEMRequest(BaseModel):
     start_date: str
     end_date: str
     max_workers: int = 10
+    async_task: bool = False
+
+
+class TaskCreateResponse(BaseModel):
+    task_id: str
+    status: str
+
+
+def _to_records(obj: Any) -> Any:
+    """将 DataFrame / list / dict 转成可 JSON 序列化的结构"""
+    if isinstance(obj, pd.DataFrame):
+        return obj.to_dict("records")
+    if isinstance(obj, pd.Series):
+        return obj.to_dict()
+    return obj
+
+
+def _wrap_result(name: str, result: Any) -> dict[str, Any]:
+    return {"status": "ok", "source": name, "data": _to_records(result)}
 
 
 @router.post("/value-analysis")
 async def api_value_analysis(req: ValueAnalysisRequest):
     """批量获取转债纯债价值/转股价值/溢价率历史"""
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_value_analysis",
+            lambda codes, **kw: _wrap_result("value_analysis", fetch_value_analysis_batch(codes, **kw)),
+            req.bond_codes,
+            max_workers=req.max_workers,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         df = fetch_value_analysis_batch(req.bond_codes, max_workers=req.max_workers)
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return _wrap_result("value_analysis", df)
     except Exception as e:
         logger.error(f"[Extra] value-analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -74,15 +106,24 @@ async def api_value_analysis(req: ValueAnalysisRequest):
 @router.post("/bond-daily-em")
 async def api_bond_daily_em(req: BondDailyEMRequest):
     """批量获取转债日行情"""
-    try:
-        from datetime import date as _date
-        df = fetch_bond_daily_em_batch(
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_bond_daily_em",
+            lambda codes, start, end, **kw: _wrap_result("bond_daily_em", fetch_bond_daily_em_batch(codes, start, end, **kw)),
             req.bond_codes,
-            _date.fromisoformat(req.start_date),
-            _date.fromisoformat(req.end_date),
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
             max_workers=req.max_workers,
         )
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
+    try:
+        df = fetch_bond_daily_em_batch(
+            req.bond_codes,
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
+            max_workers=req.max_workers,
+        )
+        return _wrap_result("bond_daily_em", df)
     except Exception as e:
         logger.error(f"[Extra] bond-daily-em error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -91,34 +132,39 @@ async def api_bond_daily_em(req: BondDailyEMRequest):
 @router.post("/industry")
 async def api_industry(req: IndustryRequest):
     """批量获取正股行业归属"""
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_industry",
+            lambda codes, **kw: _wrap_result("industry", fetch_industry_batch(codes, **kw)),
+            req.stock_codes,
+            max_workers=req.max_workers,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         result = fetch_industry_batch(req.stock_codes, max_workers=req.max_workers)
-        return {"status": "ok", "count": len(result), "data": result}
+        return _wrap_result("industry", result)
     except Exception as e:
         logger.error(f"[Extra] industry error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/bond-misc")
-async def api_bond_misc():
-    """获取转债市场杂项数据"""
-    try:
-        return {"status": "ok", "data": fetch_bond_misc_data()}
-    except Exception as e:
-        logger.error(f"[Extra] bond-misc error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/csi-index")
 async def api_csi_index(req: CSIIndexRequest):
     """获取中证转债指数历史"""
-    try:
-        from datetime import date as _date
-        df = fetch_csi_index(
-            _date.fromisoformat(req.start_date),
-            _date.fromisoformat(req.end_date),
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_csi_index",
+            lambda start, end: _wrap_result("csi_index", fetch_csi_index(start, end)),
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
         )
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
+    try:
+        df = fetch_csi_index(
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
+        )
+        return _wrap_result("csi_index", df)
     except Exception as e:
         logger.error(f"[Extra] csi-index error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -127,9 +173,17 @@ async def api_csi_index(req: CSIIndexRequest):
 @router.post("/financial-ths")
 async def api_financial_ths(req: FinancialTHSRequest):
     """批量获取 THS 财务摘要"""
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_financial_ths",
+            lambda codes, **kw: _wrap_result("financial_ths", fetch_stock_financial_ths_batch(codes, **kw)),
+            req.stock_codes,
+            max_workers=req.max_workers,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         result = fetch_stock_financial_ths_batch(req.stock_codes, max_workers=req.max_workers)
-        return {"status": "ok", "count": len(result), "data": result}
+        return _wrap_result("financial_ths", result)
     except Exception as e:
         logger.error(f"[Extra] financial-ths error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -138,18 +192,66 @@ async def api_financial_ths(req: FinancialTHSRequest):
 @router.post("/bond-kline-em")
 async def api_bond_kline_em(req: BondKlineEMRequest):
     """批量获取转债 K 线"""
-    try:
-        from datetime import date as _date
-        df = fetch_bond_kline_em_dc_batch(
+    if req.async_task:
+        task_id = _bg.submit(
+            "extra_bond_kline_em",
+            lambda codes, start, end, **kw: _wrap_result("bond_kline_em", fetch_bond_kline_em_dc_batch(codes, start, end, **kw)),
             req.bond_codes,
-            _date.fromisoformat(req.start_date),
-            _date.fromisoformat(req.end_date),
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
             max_workers=req.max_workers,
         )
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
+    try:
+        df = fetch_bond_kline_em_dc_batch(
+            req.bond_codes,
+            date.fromisoformat(req.start_date),
+            date.fromisoformat(req.end_date),
+            max_workers=req.max_workers,
+        )
+        return _wrap_result("bond_kline_em", df)
     except Exception as e:
         logger.error(f"[Extra] bond-kline-em error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}")
+async def api_get_task(task_id: str):
+    info = _bg.get(task_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {
+        "task_id": info.task_id,
+        "name": info.name,
+        "status": info.status.value,
+        "created_at": info.created_at,
+        "updated_at": info.updated_at,
+        "progress": info.progress,
+        "result": info.result if info.status == TaskStatus.SUCCESS else None,
+        "error": info.error,
+    }
+
+
+@router.get("/tasks")
+async def api_list_tasks(status: Optional[str] = None, limit: int = 50):
+    st = None
+    if status:
+        try:
+            st = TaskStatus(status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid status")
+    items = _bg.list_tasks(status=st, limit=limit)
+    return [
+        {
+            "task_id": t.task_id,
+            "name": t.name,
+            "status": t.status.value,
+            "created_at": t.created_at,
+            "updated_at": t.updated_at,
+            "progress": t.progress,
+        }
+        for t in items
+    ]
 
 
 # ============================================================

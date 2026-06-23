@@ -1831,7 +1831,12 @@ class BacktestEngine:
         # 改进 (2025-06-15am): 防御空 DataFrame——早期失败而非进入空循环
         if data is None or data.empty:
             logger.warning("[BacktestEngine.run] 回测数据为空，直接返回空结果")
+            today = date.today()
             return BacktestResult(
+                strategy_name=getattr(strategy, 'name', 'unknown'),
+                strategy_params=getattr(strategy, '_params', {}),
+                start_date=today,
+                end_date=today,
                 metrics=PerformanceMetrics(),
                 equity_curve=[],
                 trades=[],
@@ -1982,11 +1987,11 @@ class BacktestEngine:
             # 1. 移除无行情的持仓
             portfolio.remove_stale(code_row_map, current_date, self.commission_pct, self.min_commission, self.impact_cost_pct)
 
-            # 2. 生成信号（传入 day_data 而非完整 data，避免每日拷贝全量 DataFrame）
-            signals = strategy.on_data(day_data, i) or []
+            # 增强：防御策略.on_data返回非dict元素（如None、字符串等）导致sig['action']抛异常
+            signals = [s for s in (strategy.on_data(day_data, i) or []) if isinstance(s, dict)]
 
             # 3. 先卖后买
-            for sig in [s for s in signals if s['action'] == 'sell']:
+            for sig in [s for s in signals if s.get('action') == 'sell']:
                 portfolio.sell(
                     sig['code'], sig['price'],
                     self.slippage_pct, self.commission_pct, self.min_commission, self.impact_cost_pct,

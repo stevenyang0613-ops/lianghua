@@ -16,14 +16,18 @@ import os
 import time as _time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 
 import akshare as ak
 import pandas as pd
 import numpy as np
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.data import get_data_source_manager
+from app.services.task_registry import TaskStatus, get_registry
+
+_bg = get_registry()
 
 data_source_manager = get_data_source_manager()
 
@@ -32,30 +36,58 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _to_records(obj):
+    if isinstance(obj, pd.DataFrame):
+        return obj.to_dict("records")
+    if isinstance(obj, pd.Series):
+        return obj.to_dict()
+    return obj
+
+
+def _wrap_result(name: str, result) -> dict:
+    return {"status": "ok", "source": name, "data": _to_records(result)}
+
+
 class ValuationRequest(BaseModel):
     stock_codes: list[str]
     stock_prices: dict[str, float] = {}
     max_workers: int = 15
+    async_task: bool = False
 
 
 class HistPriceRequest(BaseModel):
     stock_code: str
     start_date: str
     end_date: str
+    async_task: bool = False
 
 
 class TushareBondDailyRequest(BaseModel):
     trade_date: str | None = None
     start_date: str | None = None
     end_date: str | None = None
+    async_task: bool = False
+
+
+class TaskCreateResponse(BaseModel):
+    task_id: str
+    status: str
 
 
 @router.post("/valuations")
 async def api_valuations(req: ValuationRequest):
     """批量获取股票估值 (PE/PB), 优先 Baidu, 兜底 THS"""
+    if req.async_task:
+        task_id = _bg.submit(
+            "ds_valuations",
+            lambda codes, prices: _wrap_result("valuations", get_stock_valuations(codes, prices)),
+            req.stock_codes,
+            req.stock_prices,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         result = get_stock_valuations(req.stock_codes, req.stock_prices)
-        return {"status": "ok", "count": len(result), "data": result}
+        return _wrap_result("valuations", result)
     except Exception as e:
         logger.error(f"[DataSources] valuations error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -64,9 +96,18 @@ async def api_valuations(req: ValuationRequest):
 @router.post("/hist-prices")
 async def api_hist_prices(req: HistPriceRequest):
     """获取正股历史日线 (Tencent K 线兜底)"""
+    if req.async_task:
+        task_id = _bg.submit(
+            "ds_hist_prices",
+            lambda code, start, end: _wrap_result("hist_prices", get_stock_hist_prices(code, start, end)),
+            req.stock_code,
+            req.start_date,
+            req.end_date,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         df = get_stock_hist_prices(req.stock_code, req.start_date, req.end_date)
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return _wrap_result("hist_prices", df)
     except Exception as e:
         logger.error(f"[DataSources] hist-prices error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -77,25 +118,81 @@ async def api_cb_daily_tushare(
     trade_date: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    async_task: bool = False,
 ):
     """获取 Tushare 可转债日线"""
+    if async_task:
+        task_id = _bg.submit(
+            "ds_cb_daily_tushare",
+            lambda td, sd, ed: _wrap_result("cb_daily_tushare", fetch_cb_daily_tushare(td, sd, ed)),
+            trade_date,
+            start_date,
+            end_date,
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         df = fetch_cb_daily_tushare(trade_date, start_date, end_date)
-        return {"status": "ok", "count": len(df), "data": df.to_dict('records')}
+        return _wrap_result("cb_daily_tushare", df)
     except Exception as e:
         logger.error(f"[DataSources] cb-daily-tushare error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/cb-basic-tushare")
-async def api_cb_basic_tushare():
+async def api_cb_basic_tushare(async_task: bool = False):
     """获取 Tushare 可转债基本信息"""
+    if async_task:
+        task_id = _bg.submit(
+            "ds_cb_basic_tushare",
+            lambda: _wrap_result("cb_basic_tushare", fetch_cb_basic_tushare()),
+        )
+        return TaskCreateResponse(task_id=task_id, status=TaskStatus.PENDING.value)
     try:
         result = fetch_cb_basic_tushare()
-        return {"status": "ok", "count": len(result), "data": result}
+        return _wrap_result("cb_basic_tushare", result)
     except Exception as e:
         logger.error(f"[DataSources] cb-basic-tushare error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}")
+async def api_get_task(task_id: str):
+    info = _bg.get(task_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {
+        "task_id": info.task_id,
+        "name": info.name,
+        "status": info.status.value,
+        "created_at": info.created_at,
+        "updated_at": info.updated_at,
+        "progress": info.progress,
+        "result": info.result if info.status == TaskStatus.SUCCESS else None,
+        "error": info.error,
+    }
+
+
+@router.get("/tasks")
+async def api_list_tasks(status: str | None = None, limit: int = 50):
+    from app.services.task_registry import TaskStatus as _TS
+    st = None
+    if status:
+        try:
+            st = _TS(status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid status")
+    items = _bg.list_tasks(status=st, limit=limit)
+    return [
+        {
+            "task_id": t.task_id,
+            "name": t.name,
+            "status": t.status.value,
+            "created_at": t.created_at,
+            "updated_at": t.updated_at,
+            "progress": t.progress,
+        }
+        for t in items
+    ]
 
 
 @router.post("/connect")

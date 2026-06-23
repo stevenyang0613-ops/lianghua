@@ -700,18 +700,20 @@ def _refresh_fin_cache():
         old_rev = {}
         if df_old is not None:
             for _, r in df_old.iterrows():
-                code = str(r.get("股票代码", "")).strip()
+                code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                 rev = _safe_float(r.get("营业总收入-营业总收入", None))
                 if code and rev and rev > 0:
                     old_rev[code] = rev
 
         result = {}
         for _, r in df.iterrows():
-            code = str(r.get("股票代码", "")).strip()
+            code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
             if not code:
                 continue
             entry = {
                 "roe": _safe_float(r.get("净资产收益率", None)),
+                # NOTE: 银行等行业毛利率可能返回 -1 或 None，表示"不适用"。
+                # 前端 DetailPanel 将 gpm=-1 识别为"银行(无毛利率)"。
                 "gpm": _safe_float(r.get("销售毛利率", None)),
                 "industry": str(r.get("所处行业", "")) if r.get("所处行业") else None,
                 "eps": _safe_float(r.get("每股收益", None)),
@@ -776,7 +778,7 @@ def _refresh_debt_cache():
         result = {}
         for _, r in df.iterrows():
             try:
-                code = _safe_str(r.get("股票代码", ""))
+                code = _safe_str(r["股票代码"] if "股票代码" in r.index else "")
                 if not code:
                     continue
                 # Use default=None so "is not None" check is meaningful
@@ -1045,7 +1047,7 @@ def _refresh_buyback_cache():
             df = ak.stock_repurchase_em()
             if df is not None and len(df) > 0:
                 for _, r in df.iterrows():
-                    code = str(r.get("股票代码", "")).strip()
+                    code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                     amount = _safe_float(r.get("已回购金额", None))
                     if code and amount and amount > 0:
                         if code in result:
@@ -1061,7 +1063,7 @@ def _refresh_buyback_cache():
                 df_ths = getattr(ak, "stock_repurchase_ths", lambda: pd.DataFrame())()
                 if df_ths is not None and len(df_ths) > 0:
                     for _, r in df_ths.iterrows():
-                        code = str(r.get("股票代码", "")).strip()
+                        code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                         if not code:
                             continue
                         done = _safe_float(r.get("已回购金额"))
@@ -1537,7 +1539,7 @@ def _refresh_pledge_cache():
             if df is not None and len(df) > 0:
                 for _, r in df.iterrows():
                     try:
-                        code = str(r.get("股票代码", "")).strip()
+                        code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                         ratio = _safe_float(r.get("质押比例"), default=None)
                         if code and ratio is not None:
                             result[code] = ratio
@@ -1553,7 +1555,7 @@ def _refresh_pledge_cache():
                 df_ths = getattr(ak, "stock_pledge_info_ths", lambda: pd.DataFrame())()
                 if df_ths is not None and len(df_ths) > 0:
                     for _, r in df_ths.iterrows():
-                        code = str(r.get("股票代码", "")).strip()
+                        code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                         ratio = _safe_float(r.get("质押比例"), default=None)
                         if code and ratio is not None and code not in result:
                             result[code] = ratio
@@ -2972,10 +2974,12 @@ def _refresh_north_cache():
             except Exception as e:
                 logger.debug(f"[Runner] operation suppressed: {e}")
                 pass
+
         missing_codes = [c for c in all_a_codes if c not in result]
-        MAX_PER_RUN = int(os.environ.get("LH_NORTH_MAX_PER_RUN", "500"))
+        MAX_PER_RUN = int(os.environ.get("LH_NORTH_MAX_PER_RUN", "1500"))
         if len(missing_codes) > MAX_PER_RUN:
             missing_codes = missing_codes[:MAX_PER_RUN]
+
         # 只在前面几层都失败时才尝试 individual_detail_em (很慢)
         if missing_codes and _actual_indiv < 500:
             try:
@@ -2983,7 +2987,7 @@ def _refresh_north_cache():
                 from datetime import datetime, timedelta
                 end_d = datetime.now().strftime("%Y%m%d")
                 start_d = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
-                logger.info(f"[North] individual_detail_em: {len(missing_codes)} stocks missing, fetching in parallel...")
+                logger.info(f"[North] individual_detail_em: {len(missing_codes)} stocks missing, fetching in parallel with chunks...")
 
                 def _fetch_one(code: str):
                     for attempt in range(2):
@@ -3009,31 +3013,42 @@ def _refresh_north_cache():
                     return None
 
                 added = 0
-                with ThreadPoolExecutor(max_workers=5) as pool:
-                    futures = {pool.submit(_fetch_one, c): c for c in missing_codes}
-                    done_count = 0
-                    done, pending = concurrent.futures.wait(
-                        futures, timeout=300, return_when=concurrent.futures.ALL_COMPLETED
-                    )
-                    if pending:
-                        logger.warning(f"[North] individual_detail_em: {len(pending)} (of {len(futures)}) futures unfinished after 300s")
-                        for fut in pending:
-                            fut.cancel()
-                    for f in done:
-                        done_count += 1
-                        try:
-                            r = f.result()
-                            if r:
-                                code, data = r
-                                _merge_individual(code, data)
-                                added += 1
-                        except Exception as e:
-                            logger.debug(f"[Runner] operation suppressed: {e}")
-                            pass
-                        if done_count % 100 == 0:
-                            n_now = sum(1 for k in result if not k.startswith("summary_"))
-                            logger.info(f"[North] individual_detail_em progress: {done_count}/{len(missing_codes)}, individual={n_now}")
-                            _save_cache(cache_path, result)
+                chunk_size = 200
+                total_missing = len(missing_codes)
+                for chunk_start in range(0, total_missing, chunk_size):
+                    chunk = missing_codes[chunk_start:chunk_start + chunk_size]
+                    with ThreadPoolExecutor(max_workers=5) as pool:
+                        futures = {pool.submit(_fetch_one, c): c for c in chunk}
+                        done_count = 0
+                        done, pending = concurrent.futures.wait(
+                            futures, timeout=180, return_when=concurrent.futures.ALL_COMPLETED
+                        )
+                        if pending:
+                            logger.warning(f"[North] individual_detail_em chunk {chunk_start}-{chunk_start + len(chunk)}: {len(pending)} (of {len(futures)}) futures unfinished after 180s")
+                            for fut in pending:
+                                fut.cancel()
+                        for f in done:
+                            done_count += 1
+                            try:
+                                r = f.result()
+                                if r:
+                                    code, data = r
+                                    _merge_individual(code, data)
+                                    added += 1
+                            except Exception as e:
+                                logger.debug(f"[Runner] operation suppressed: {e}")
+                                pass
+                            if done_count % 50 == 0:
+                                n_now = sum(1 for k in result if not k.startswith("summary_"))
+                                logger.info(f"[North] individual_detail_em progress: {chunk_start + done_count}/{total_missing}, individual={n_now}")
+                                _save_cache(cache_path, result)
+                    n_indiv = sum(1 for k in result if not k.startswith("summary_"))
+                    logger.info(f"[North] individual_detail_em chunk {chunk_start}-{chunk_start + len(chunk)}: added {added}, total individual={n_indiv}")
+                    _save_cache(cache_path, result)
+                    # 命中足够多就提前退出, 避免把全A股都跑一遍
+                    if n_indiv >= 1500:
+                        logger.info("[North] individual_detail_em reached 1500, stopping early")
+                        break
                 n_indiv = sum(1 for k in result if not k.startswith("summary_"))
                 logger.info(f"[North] individual_detail_em: added {added} new, total individual={n_indiv}")
             except Exception as e:
@@ -4044,21 +4059,27 @@ def _refresh_holder_num_cache():
                     return None
             return None
 
-        # Also try alternate API: ak.stock_zh_a_gdhs (东方财富股东户数)
+        # Also try alternate API: ak.stock_zh_a_gdhs_detail_em (东方财富个股股东户数明细)
         def _fetch_alt(code: str):
             try:
                 import akshare as ak_alt
-                df_alt = ak_alt.stock_zh_a_gdhs(stock=code)
+                df_alt = ak_alt.stock_zh_a_gdhs_detail_em(symbol=code)
                 if df_alt is not None and not df_alt.empty:
+                    # 取最新一期
                     last = df_alt.iloc[-1]
-                    hn = int(last.get("股东人数", last.get("股东户数", 0)) or 0)
-                    if hn > 0:
+                    hn = _safe_float(last.get("股东户数-本次", last.get("股东户数", 0)))
+                    if hn is None or hn <= 0:
+                        hn = _safe_float(last.get("股东人数"))
+                    if hn is not None and hn > 0:
                         return {
                             "code": code,
-                            "name": str(last.get("股票简称", "")).strip(),
-                            "holder_num": hn,
-                            "stat_date": str(last.get("统计截止日期", str(last.get("日期", "")))).strip()[:10],
-                            "change_pct": _safe_float(last.get("较上期变化", last.get("股东人数变化", None))),
+                            "name": str(last.get("名称", last.get("股票简称", ""))).strip(),
+                            "holder_num": int(hn),
+                            "stat_date": str(last.get("股东户数统计截止日", "")).strip()[:10],
+                            "change_pct": _safe_float(last.get("股东户数-增减比例", last.get("较上期变化", None))),
+                            "avg_hold_shares": _safe_float(last.get("户均持股数量", None)),
+                            "avg_hold_amt": _safe_float(last.get("户均持股市值", None)),
+                            "_data_source": "stock_zh_a_gdhs_detail_em",
                         }
             except Exception as e:
                 logger.debug(f"[Runner] operation suppressed: {e}")
@@ -4125,7 +4146,7 @@ def _refresh_holder_num_cache():
                         _t.sleep(0.3 + random.random() * 1.0)
 
                 # Batch 2: Try alternate API for stocks we missed
-                missed = [c for c in other_to_fetch if c not in result][:150]
+                missed = [c for c in other_to_fetch if c not in result][:200]
                 logger.info(f"[HolderNum] Trying alternate API for {len(missed)} missed stocks...")
                 fut2 = {ex.submit(_fetch_alt, c): c for c in missed}
                 done_f2, pending_f2 = concurrent.futures.wait(
@@ -4156,7 +4177,7 @@ def _refresh_holder_num_cache():
                 if df_hn is not None and len(df_hn) > 0:
                     count_hn = 0
                     for _, r in df_hn.iterrows():
-                        code = str(r.get("股票代码", "")).strip()
+                        code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                         if not code or len(code) != 6 or not code.isdigit():
                             continue
                         if code in result:
@@ -4180,38 +4201,36 @@ def _refresh_holder_num_cache():
             except Exception as e_hn:
                 logger.warning(f"[HolderNum] stock_hold_num_em fallback failed: {e_hn}")
 
-        # Source 3 fallback: stock_zh_a_gdhs (individual)
+        # Source 3 fallback: stock_zh_a_gdhs_detail_em (individual)
         if len(result) < 100:
             try:
                 import akshare as ak
-                missing = [c for c in all_codes if c not in result][:100]
+                missing = [c for c in all_codes if c not in result][:200]
                 count_gdhs = 0
                 for code in missing:
                     try:
-                        df_gdhs = ak.stock_zh_a_gdhs(stock=code)
+                        df_gdhs = ak.stock_zh_a_gdhs_detail_em(symbol=code)
                         if df_gdhs is not None and len(df_gdhs) > 0:
                             last = df_gdhs.iloc[-1]
-                            hn = _safe_float(last.get("股东人数"))
-                            if hn is None:
-                                hn = _safe_float(last.get("股东户数"))
-                            if hn is None:
-                                hn = _safe_float(last.get("股东总数"))
+                            hn = _safe_float(last.get("股东户数-本次", last.get("股东户数", None)))
+                            if hn is None or hn <= 0:
+                                hn = _safe_float(last.get("股东人数"))
                             if hn is not None and hn >= 0:
                                 result[code] = {
                                     "code": code,
-                                    "name": str(last.get("股票简称", "")).strip(),
+                                    "name": str(last.get("名称", last.get("股票简称", ""))).strip(),
                                     "holder_num": int(hn),
-                                    "stat_date": str(last.get("统计截止日期", "")).strip()[:10],
-                                    "change_pct": _safe_float(last.get("较上期变化", None)),
-                                    "_data_source": "stock_zh_a_gdhs",
+                                    "stat_date": str(last.get("股东户数统计截止日", "")).strip()[:10],
+                                    "change_pct": _safe_float(last.get("股东户数-增减比例", last.get("较上期变化", None))),
+                                    "_data_source": "stock_zh_a_gdhs_detail_em",
                                 }
                                 count_gdhs += 1
                     except Exception as e:
                         logger.debug(f"[Runner] operation suppressed: {e}")
                         pass
-                logger.info(f"[HolderNum] stock_zh_a_gdhs: {count_gdhs} stocks added")
+                logger.info(f"[HolderNum] stock_zh_a_gdhs_detail_em: {count_gdhs} stocks added")
             except Exception as e_gdhs:
-                logger.warning(f"[HolderNum] stock_zh_a_gdhs fallback failed: {e_gdhs}")
+                logger.warning(f"[HolderNum] stock_zh_a_gdhs_detail_em fallback failed: {e_gdhs}")
 
         if result:
             _save_cache(cache_path, result)
@@ -4265,7 +4284,7 @@ def _refresh_earnings_forecast_cache():
                 df = ak.stock_yjyg_em(date=period)
                 count = 0
                 for _, r in df.iterrows():
-                    code = str(r.get("股票代码", "")).strip()
+                    code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                     if len(code) != 6 or not code.isdigit():
                         continue
                     if code in result:
@@ -4309,7 +4328,7 @@ def _refresh_earnings_forecast_cache():
                         if df_ths is not None and len(df_ths) > 0:
                             count = 0
                             for _, r in df_ths.iterrows():
-                                code = str(r.get("股票代码", "")).strip()
+                                code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                                 if len(code) != 6 or not code.isdigit():
                                     continue
                                 if code in result:
@@ -4388,7 +4407,7 @@ def _refresh_earnings_express_cache():
                 df = ak.stock_yjkb_em(date=period)
                 count = 0
                 for _, r in df.iterrows():
-                    code = str(r.get("股票代码", "")).strip()
+                    code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                     if len(code) != 6 or not code.isdigit():
                         continue
                     if code in result:
@@ -4511,7 +4530,7 @@ def _refresh_restricted_release_cache():
             )
             count_per_stock = 0
             for _, r in df_detail.iterrows():
-                code = str(r.get("股票代码", "")).strip()
+                code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                 if len(code) != 6 or not code.isdigit():
                     continue
                 # 用 code 作为 key - 同只股票多日多笔解禁,累加 amount 取最近日期
@@ -4561,7 +4580,7 @@ def _refresh_restricted_release_cache():
             )
             count_sh = 0
             for _, r in df_sh.iterrows():
-                code = str(r.get("股票代码", "")).strip()
+                code = str(r["股票代码"] if "股票代码" in r.index else "").strip()
                 if len(code) != 6 or not code.isdigit():
                     continue
                 # 把股东明细 merge 到现有 per-stock 记录上, 以"shareholders"字段存前5

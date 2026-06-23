@@ -401,3 +401,31 @@ Every agent working on this project MUST follow these rules.
 - Recommendation text: `if math.isnan(total_score): recommendation = "数据不足，无法评估择时信号"`.
 - This ensures the frontend can render gray/"数据缺失" labels instead of blank or 0.
 - Also applies to `_get_recommendation()` (non-enhanced signal path).
+
+### 56. 兜底归档代码 — `_archive/` 目录管理
+- 删除大段不再使用的代码文件时，不要直接删除（git 历史保留不代表 IDE/新人可发现）。
+- 移到 `_archive/` 目录下，保留文件名和顶部 docstring 以便 grep 可回溯。
+- 避免在归档文件中保留会被自动导入的模块级代码（如 `from ... import`），以防 Python 动态导入链意外激活。
+
+### 57. 长耗时批量 API 使用后台任务模式
+- `/data-sources-v2/*` 和 `/extra/*` 中的批量接口（行业、股东户数、北向资金、转债历史 K 线等）可能阻塞事件循环 30 秒以上。
+- 提供一个 `async_task: bool` 参数，为 `True` 时立即返回 `{task_id, status}`，通过 `GET /tasks/{task_id}` 轮询结果。
+- 使用 `app/services/task_registry.py` 中的 `TaskRegistry` 轻量后台任务注册表（线程池 + 内存状态字典），不引入 Redis/Celery。
+- 前端封装 `submitTask()` / `getTask()` / `listTasks()` / `pollTaskUntilDone()` 位于 `frontend/src/services/api.ts` 末尾。
+- 配置 `async_task: True` 提交后台任务，`pollTaskUntilDone()` 轮询 2s 间隔、300s 超时，支持 `onProgress` 回调更新 UI。
+
+### 58. 北向资金 individual_detail_em 分批处理 + 提前退出
+- `_refresh_north_cache` 中的逐股补齐（source 4）改为 200 只股票一批（chunk），每批 180 秒超时。
+- 达到 1500 只个股后提前退出，避免遍历全 A 股（~5000 只）耗时过长。
+- `LH_NORTH_MAX_PER_RUN` 环境变量可控制每轮最大尝试数（默认 1500）。
+
+### 59. 股东户数备选接口使用 `stock_zh_a_gdhs_detail_em` 而非 `stock_zh_a_gdhs`
+- `stock_zh_a_gdhs(symbol=code)` 参数含义是季度（如 `"20230930"`），不是个股代码，无法用于单股查询。
+- 正确的单股接口是 `stock_zh_a_gdhs_detail_em(symbol="000001")`，返回该股的全部历史股东户数变更记录。
+- 字段映射：`股东户数-本次` → `holder_num`，`股东户数-增减比例` → `change_pct`。
+- 在 `_fetch_alt` 和 source 3 fallback 中均已修复。
+
+### 60. AKShare `stock_zh_a_gdhs` 签名是季度而非个股
+- `stock_zh_a_gdhs(symbol="20230930")` 返回该季度的全市场股东户数（含 tqdm 进度条），不是单只股票。
+- 如果看到 tqdm 进度条 "858/858" 耗时 1-2 分钟，说明误用了该接口。
+- 前端需要该数据的场景应使用 `stock_zh_a_gdhs_detail_em(symbol=code)`。

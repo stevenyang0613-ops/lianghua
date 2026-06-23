@@ -2960,3 +2960,73 @@ export async function fetchFinancialTHS(stockCodes: string[], maxWorkers: number
 export async function fetchBondKlineEM(bondCodes: string[], startDate: string, endDate: string, maxWorkers: number = 10): Promise<any[]> {
   return postJSON(`${getBase()}/extra/bond-kline-em`, { bond_codes: bondCodes, start_date: startDate, end_date: endDate, max_workers: maxWorkers })
 }
+
+// -- 后台任务 API (Task registry)
+// 适用于 /data-sources-v2/* 与 /extra/* 中的长耗时批量接口
+
+export interface TaskCreateResponse {
+  task_id: string
+  status: string
+}
+
+export interface TaskInfo {
+  task_id: string
+  name: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  created_at: number
+  updated_at: number
+  progress: Record<string, any>
+  result?: any
+  error?: string
+}
+
+export async function submitTask<T = any>(
+  endpoint: 'valuations' | 'hist-prices' | 'cb-daily-tushare' | 'cb-basic-tushare' |
+            'value-analysis' | 'bond-daily-em' | 'industry' | 'csi-index' | 'financial-ths' | 'bond-kline-em',
+  payload?: Record<string, any>
+): Promise<TaskCreateResponse> {
+  const isExtra = ['value-analysis', 'bond-daily-em', 'industry', 'csi-index', 'financial-ths', 'bond-kline-em'].includes(endpoint)
+  const prefix = isExtra ? `${getBase()}/extra` : `${getBase()}/data-sources-v2`
+  const method = endpoint === 'cb-daily-tushare' || endpoint === 'cb-basic-tushare' ? 'GET' : 'POST'
+  let url = `${prefix}/${endpoint}`
+  if (method === 'GET' && payload) {
+    const qs = new URLSearchParams(payload as Record<string, string>)
+    url = `${url}?${qs.toString()}&async_task=true`
+    return requestAPI<TaskCreateResponse>('GET', url)
+  }
+  return requestAPI<TaskCreateResponse>('POST', url, { ...(payload || {}), async_task: true })
+}
+
+export async function getTask(taskId: string, base: 'data-sources-v2' | 'extra' = 'data-sources-v2'): Promise<TaskInfo> {
+  return requestAPI<TaskInfo>('GET', `${getBase()}/${base}/tasks/${taskId}`)
+}
+
+export async function listTasks(
+  base: 'data-sources-v2' | 'extra' = 'data-sources-v2',
+  opts?: { status?: string; limit?: number }
+): Promise<Pick<TaskInfo, 'task_id' | 'name' | 'status' | 'created_at' | 'updated_at' | 'progress'>[]> {
+  const qs = new URLSearchParams(opts as Record<string, string> || {})
+  return requestAPI('GET', `${getBase()}/${base}/tasks?${qs.toString()}`)
+}
+
+/**
+ * 轮询等待后台任务完成
+ */
+export async function pollTaskUntilDone<T = any>(
+  taskId: string,
+  base: 'data-sources-v2' | 'extra' = 'data-sources-v2',
+  opts?: { interval?: number; timeout?: number; onProgress?: (info: TaskInfo) => void }
+): Promise<TaskInfo & { result?: T }> {
+  const interval = opts?.interval ?? 2000
+  const timeout = opts?.timeout ?? 300000
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const info = await getTask(taskId, base)
+    opts?.onProgress?.(info)
+    if (info.status === 'success' || info.status === 'failed' || info.status === 'cancelled') {
+      return info as TaskInfo & { result?: T }
+    }
+    await new Promise(r => setTimeout(r, interval))
+  }
+  throw new Error(`Task ${taskId} polling timeout after ${timeout}ms`)
+}
