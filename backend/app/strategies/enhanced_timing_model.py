@@ -1672,45 +1672,55 @@ class EnhancedTimingModel:
     # ========== 8. 消息面 (7%) ==========
     
     def _score_news(self, data: EnhancedMarketData) -> CategoryScore:
-        """消息面评分：政策信号 + 事件冲击 + 产业链景气"""
+        """消息面评分：政策信号 + 事件冲击 + 产业链景气
+        
+        修复：当所有子因子都是默认50分（无外部填充）时，大类得分为NaN，
+        这样在 calculate() 中会被 valid_cats 过滤掉，不参与权重。
+        """
         sub_factors = []
         
         # 7.1 政策信号评分
         policy = data.policy_signal_score
+        # 默认50分且无实际数据时不视为有效信号
+        has_policy = not math.isnan(policy) and abs(policy - 50.0) > 1e-6
         sub_factors.append(FactorScore(
-            name="政策信号", score=policy, weight=0.40,
+            name="政策信号", score=policy if has_policy else float('nan'), weight=0.40,
             category="news", raw_value=policy,
-            signal="bullish" if policy > 60 else "bearish" if policy < 40 else "neutral",
-            description=f"政策信号评分{policy:.0f}，{'利好' if policy>60 else '利空' if policy<40 else '中性'}",
+            signal="bullish" if has_policy and policy > 60 else "bearish" if has_policy and policy < 40 else "neutral",
+            description=f"政策信号评分{policy:.0f}，{'利好' if has_policy and policy>60 else '利空' if has_policy and policy<40 else '无数据'}",
         ))
         
         # 7.2 事件冲击评分
         event = data.event_impact_score
+        has_event = not math.isnan(event) and abs(event - 50.0) > 1e-6
         sub_factors.append(FactorScore(
-            name="事件冲击", score=event, weight=0.30,
+            name="事件冲击", score=event if has_event else float('nan'), weight=0.30,
             category="news", raw_value=event,
-            signal="bullish" if event > 60 else "bearish" if event < 40 else "neutral",
-            description=f"事件冲击评分{event:.0f}",
+            signal="bullish" if has_event and event > 60 else "bearish" if has_event and event < 40 else "neutral",
+            description=f"事件冲击评分{event:.0f}" if has_event else "事件冲击无数据",
         ))
         
         # 7.3 产业链景气
         industry = data.industry_cycle_score
+        has_industry = not math.isnan(industry) and abs(industry - 50.0) > 1e-6
         sub_factors.append(FactorScore(
-            name="产业链景气", score=industry, weight=0.30,
+            name="产业链景气", score=industry if has_industry else float('nan'), weight=0.30,
             category="news", raw_value=industry,
-            signal="bullish" if industry > 60 else "bearish" if industry < 40 else "neutral",
-            description=f"产业链景气{industry:.0f}，{'上行' if industry>60 else '下行' if industry<40 else '平稳'}",
+            signal="bullish" if has_industry and industry > 60 else "bearish" if has_industry and industry < 40 else "neutral",
+            description=f"产业链景气{industry:.0f}，{'上行' if has_industry and industry>60 else '下行' if has_industry and industry<40 else '无数据'}",
         ))
         
         valid_sub = [sf for sf in sub_factors if not math.isnan(sf.score)]
         total = sum(sf.score * sf.weight for sf in valid_sub)
         w_sum = sum(sf.weight for sf in valid_sub)
-        cat_score = total / w_sum if w_sum > 0 else 50
+        # 如果没有任何有效的子因子数据，大类得分设为 NaN
+        cat_score = total / w_sum if w_sum > 0 else float('nan')
         
         return CategoryScore(
             name="消息面", score=cat_score, weight=self.DEFAULT_CATEGORY_WEIGHTS['news'],
             sub_factors=sub_factors,
-            description=self._category_desc(cat_score, ["重大利空", "偏空", "中性", "偏多", "重大利好"]),
+            description=self._category_desc(cat_score if not math.isnan(cat_score) else 50,
+                                             ["重大利空", "偏空", "中性", "偏多", "重大利好"]),
         )
     
     # ========== 9. 宏观面 (14%) ==========
@@ -2037,8 +2047,12 @@ class EnhancedTimingModel:
         # 交叉验证
         cross_validations, consensus = self._cross_validate(category_scores, data)
         
-        # 加权综合得分（跳过NaN/缺失的大类得分）
-        valid_cats = [(cat.score, cat.weight) for cat in category_scores.values() if not math.isnan(cat.score)]
+        # 辅助函数：大类得分是否有效（非NaN且非中性默认值50）
+        def _is_valid_category_score(score: float) -> bool:
+            return not math.isnan(score) and abs(score - 50.0) > 1e-6
+
+        # 加权综合得分（跳过NaN/缺失/中性默认的大类得分）
+        valid_cats = [(cat.score, cat.weight) for cat in category_scores.values() if _is_valid_category_score(cat.score)]
         if valid_cats:
             total = sum(score * weight for score, weight in valid_cats)
             w_sum = sum(weight for _, weight in valid_cats)
@@ -2061,13 +2075,15 @@ class EnhancedTimingModel:
         
         # B. 多因子共振放大器（解决信号过平滑）
         # 当多数因子一致看多/看空时，非线性放大得分
-        directions = [self._cat_direction(c) for c in category_scores.values()]
+        # 修复：排除中性默认得分为50的大类
+        valid_category_scores = {k: v for k, v in category_scores.items() if _is_valid_category_score(v.score)}
+        directions = [self._cat_direction(c) for c in valid_category_scores.values()]
         bullish_count = sum(1 for d in directions if d == 'bullish')
         bearish_count = sum(1 for d in directions if d == 'bearish')
         total_dirs = len(directions)
         
         # 共振放大器安全阀：至少6个大类有有效数据才允许放大
-        active_cats = sum(1 for c in category_scores.values() if not math.isnan(c.score))
+        active_cats = len(valid_category_scores)
         if total_dirs >= 5 and active_cats >= 6:
             bullish_ratio = bullish_count / total_dirs
             bearish_ratio = bearish_count / total_dirs
@@ -2177,8 +2193,8 @@ class EnhancedTimingModel:
             actual_weights=actual_weights,
         )
         
-        # V4.1: 追踪信号准确率
-        self._track_signal_accuracy(signal)
+        # V4.1: 追踪信号准确率（修复为使用真实指数收益）
+        self._track_signal_accuracy(signal, data)
         signal.accuracy_stats = self.get_signal_accuracy_stats()
         
         self._history.append(signal)
@@ -2370,37 +2386,55 @@ class EnhancedTimingModel:
     
     # ========== 信号准确率追踪（V4.1新增）==========
     
-    def _track_signal_accuracy(self, signal: EnhancedTimingSignal) -> None:
-        """记录信号并追踪后续准确率（5日后回测验证）"""
+    def _track_signal_accuracy(self, signal: EnhancedTimingSignal,
+                                data: Optional[EnhancedMarketData] = None) -> None:
+        """记录信号并追踪后续准确率（5日后回测验证）
+
+        使用真实的指数收益而非模型自评分来判断准确率。
+        修复前：用 future_score > old_score（模型自评分）判断
+        修复后：用 data.stock_index_current 的真实 N 日收益判断
+        """
         if not hasattr(self, '_signal_accuracy_tracker'):
             self._signal_accuracy_tracker: List[Dict[str, Any]] = []
-        
-        # 记录当前信号
+
+        # 记录当前信号及当时指数收盘价
+        current_index = getattr(data, 'stock_index_current', float('nan')) if data else float('nan')
         self._signal_accuracy_tracker.append({
             'date': signal.date,
             'score': signal.total_score,
             'position_ratio': signal.position_ratio,
             'regime': signal.market_regime.value,
+            'hs300_close': current_index,
         })
-        
-        # 如果历史记录>=5条，检查5条前信号的准确率
-        if len(self._signal_accuracy_tracker) >= 5 and len(self._history) >= 6:
+
+        # 如果历史记录>=5条，用真实指数收益检查5条前信号的准确率
+        if len(self._signal_accuracy_tracker) >= 5:
             old_signal = self._signal_accuracy_tracker[-5]
-            # 获取当前信号与5条前信号的得分比较
-            future_score = self._history[-1].total_score
             old_score = old_signal['score']
-            
-            # 看多信号(>55)后实际上涨(未来得分>旧得分)
-            # 看空信号(<45)后实际下跌(未来得分<旧得分)
-            # 中性信号(45-55)后变化不大(|差|<5)视为正确
-            if old_score > 55:
-                correct = future_score > old_score
-            elif old_score < 45:
-                correct = future_score < old_score
+            old_index = old_signal.get('hs300_index_close') or old_signal.get('hs300_close')
+            current_index_actual = self._signal_accuracy_tracker[-1].get('hs300_close')
+
+            # 只有有真实指数数据时才验证
+            if not math.isnan(current_index_actual) and not math.isnan(old_index) and old_index > 0:
+                total_return = (current_index_actual - old_index) / old_index
+
+                # 看多信号(>55)：真实收益为正 → 正确
+                # 看空信号(<45)：真实收益为负 → 正确
+                # 中性信号(45-55)：真实收益绝对值<1% → 正确
+                if old_score > 55:
+                    correct = total_return > 0
+                elif old_score < 45:
+                    correct = total_return < 0
+                else:
+                    correct = abs(total_return) < 0.01
+
+                old_signal['correct'] = correct
+                old_signal['future_return'] = round(total_return, 4)
             else:
-                correct = abs(future_score - old_score) < 5
-            old_signal['correct'] = correct
-            old_signal['future_score'] = future_score
+                # 无指数数据时，回退到模型得分比较（但标记为低置信度）
+                old_signal['correct'] = False
+                old_signal['future_return'] = float('nan')
+                old_signal['low_confidence'] = True
     
     def _get_historical_accuracy(self, lookback: int = 20) -> float:
         """计算近期信号准确率（0-1）"""

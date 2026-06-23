@@ -1251,14 +1251,35 @@ function killPythonProcessGroup(child: import('child_process').ChildProcess): vo
 
 function startPythonBackend() {
   // 启动前清理 backend/app/**/__pycache__ 避免旧 .pyc 导致行为不一致 (AGENTS.md #50)
-  try {
-    const glob = require('glob');
-    const pycPaths = glob.sync('**/\.pyc', { cwd: getBackendDir(), absolute: true })
-      .concat(glob.sync('**/__pycache__', { cwd: getBackendDir(), absolute: true }));
-    for (const p of pycPaths) {
-      try { require('fs').rmSync(p, { recursive: true, force: true }); } catch (_) {}
+  // 改进 (2026-06-23): 使用原生 fs 递归遍历，避免生产 bundle 缺少 glob 模块时静默跳过
+  function cleanPycache(dir: string): number {
+    let count = 0;
+    const fs = require('fs');
+    const path = require('path');
+    function walk(current: string) {
+      let entries: any[];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch { return; }
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === '__pycache__') {
+            try { fs.rmSync(full, { recursive: true, force: true }); count++; } catch (_) {}
+          } else {
+            walk(full);
+          }
+        } else if (entry.name.endsWith('.pyc')) {
+          try { fs.unlinkSync(full); count++; } catch (_) {}
+        }
+      }
     }
-    if (pycPaths.length) console.log(`[Electron] Cleaned ${pycPaths.length} pycache items`);
+    walk(dir);
+    return count;
+  }
+  try {
+    const cleaned = cleanPycache(getBackendDir());
+    if (cleaned) console.log(`[Electron] Cleaned ${cleaned} pycache items`);
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     console.log("[Electron] pycache cleanup skipped:", errMsg);

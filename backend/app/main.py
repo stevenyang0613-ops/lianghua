@@ -796,10 +796,16 @@ async def lifespan(app: FastAPI):
                             }
                             _save_cache(key, start, end, cache_data)
                             logger.info(f"[Precompute] Backtest {key} completed and cached")
+                            _completed.append(key)
+                            _write_status("running", current=key, completed=_completed, failed=_failed, total_est=max(0, (len(_STRATEGY_KEYS) - len(_completed) - len(_failed)) * 160))
                         except Exception as e:
                             logger.warning(f"[Precompute] Backtest {key} failed: {e}")
+                            _failed.append(key)
+                            _write_status("running", current=key, completed=_completed, failed=_failed, total_est=max(0, (len(_STRATEGY_KEYS) - len(_completed) - len(_failed)) * 160))
+                    _write_status("completed" if not _failed else "completed_with_errors", completed=_completed, failed=_failed, total_est=0)
                 except Exception as e:
                     logger.warning(f"[Precompute] Backtest precompute failed: {e}")
+                    _write_status("failed", failed=_failed, total_est=0)
             asyncio.create_task(_precompute_backtests())
 
         except Exception as e:
