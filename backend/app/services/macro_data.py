@@ -1072,19 +1072,46 @@ class MacroDataService:
         return pe_median, pb_median, pe_pct, pb_pct
 
     def _fetch_industrial_output(self) -> float:
-        try:
-            if ak is None:
-                return float('nan')
-            df = ak.macro_china_industrial_production_yoy()
-            if df is None or df.empty:
-                return float('nan')
-            df = df.dropna(subset=['今值']).copy()
-            if df.empty:
-                return float('nan')
-            return round(float(df['今值'].iloc[-1]), 1)
-        except Exception as e:
-            logger.warning(f"[MacroData] Industrial output fetch failed: {e}")
+        """工业增加值同比(%) — 带重试和备用数据源"""
+        if ak is None:
             return float('nan')
+        # 重试链：[主源] 1s retry → [备用源 PMI 替代]
+        delays = [0, 1, 3]
+        for i, delay in enumerate(delays):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                df = ak.macro_china_industrial_production_yoy()
+                if df is not None and not df.empty:
+                    df = df.dropna(subset=['今值']).copy()
+                    if not df.empty:
+                        return round(float(df['今值'].iloc[-1]), 1)
+            except Exception as e:
+                if i < len(delays) - 1:
+                    logger.warning(f"[MacroData] Industrial output 重试{i+1}失败: {e}")
+                else:
+                    logger.warning(f"[MacroData] Industrial output 全部重试失败: {e}")
+        # 备用源：PMI 制造业指数作为工业活动的弱代理
+        try:
+            df = ak.macro_china_pmi()
+            if df is not None and not df.empty:
+                col = None
+                for c in df.columns:
+                    if '今值' in c or '最新' in c or '制造业' in c:
+                        col = c
+                        break
+                if col is None:
+                    col = df.columns[-1]
+                vals = pd.to_numeric(df[col], errors='coerce').dropna()
+                if len(vals) > 0:
+                    pmi_val = float(vals.iloc[-1])
+                    # PMI 50 = 荣枯线，工业增加值约 5%；映射关系：工业 ≈ (PMI - 50) * 0.5 + 5
+                    estimated = round((pmi_val - 50) * 0.5 + 5, 1)
+                    logger.info(f"[MacroData] Industrial output 用 PMI={pmi_val} 估算={estimated}")
+                    return estimated
+        except Exception as e:
+            logger.warning(f"[MacroData] Industrial output PMI fallback 也失败: {e}")
+        return float('nan')
 
     def _fetch_retail_sales(self) -> float:
         try:
@@ -1109,19 +1136,47 @@ class MacroDataService:
             return float('nan')
 
     def _fetch_export_growth(self) -> float:
-        try:
-            if ak is None:
-                return float('nan')
-            df = ak.macro_china_exports_yoy()
-            if df is None or df.empty:
-                return float('nan')
-            df = df.dropna(subset=['今值']).copy()
-            if df.empty:
-                return float('nan')
-            return round(float(df['今值'].iloc[-1]), 1)
-        except Exception as e:
-            logger.warning(f"[MacroData] Export growth fetch failed: {e}")
+        """出口同比(%) — 带重试和备用数据源"""
+        if ak is None:
             return float('nan')
+        # 重试链：[主源] 1s retry → [备用源 贸易差额 proxy]
+        delays = [0, 1, 3]
+        for i, delay in enumerate(delays):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                df = ak.macro_china_exports_yoy()
+                if df is not None and not df.empty:
+                    df = df.dropna(subset=['今值']).copy()
+                    if not df.empty:
+                        return round(float(df['今值'].iloc[-1]), 1)
+            except Exception as e:
+                if i < len(delays) - 1:
+                    logger.warning(f"[MacroData] Export growth 重试{i+1}失败: {e}")
+                else:
+                    logger.warning(f"[MacroData] Export growth 全部重试失败: {e}")
+        # 备用源：贸易差额变化率作为出口的先导指标
+        try:
+            df = ak.macro_china_trade_balance()
+            if df is not None and not df.empty:
+                col = None
+                for c in df.columns:
+                    if '今值' in c or '最新' in c:
+                        col = c
+                        break
+                if col is None:
+                    col = df.columns[-1]
+                vals = pd.to_numeric(df[col], errors='coerce').dropna()
+                if len(vals) > 0:
+                    latest_balance = float(vals.iloc[-1])
+                    # 贸易差额为正且扩大→出口可能增长；粗略估算
+                    if latest_balance > 0:
+                        estimated = round(min(15, max(-5, latest_balance / 100)), 1)
+                        logger.info(f"[MacroData] Export growth 用 trade_balance={latest_balance:.0f} 估算={estimated}%")
+                        return estimated
+        except Exception as e:
+            logger.warning(f"[MacroData] Export growth trade_balance fallback 失败: {e}")
+        return float('nan')
 
     def _fetch_pcr_ratio(self) -> float:
         try:

@@ -517,6 +517,8 @@ class EnhancedTimingModel:
         self._confirmed_position: float = self._last_position_ratio
         # 波动率目标仓位保护（P1-3）
         self._daily_returns: deque = deque(maxlen=20)
+        # 连续急跌追踪（回撤保护增强）
+        self._sharp_decline_days: int = 0
         
     # ========== 市场环境检测 ==========
     
@@ -2126,14 +2128,16 @@ class EnhancedTimingModel:
         
         # ═══════════════════════════════════════════════════════════════
         # 波动率目标仓位保护（P1-3）— 在 raw_position 层面截断
-        # 设计要点：在仓位平滑/确认之前应用，这样：
-        # 1. 截断后的仓位走正常平滑流程，不锁定 _last_position_ratio
-        # 2. 波动率恢复正常后，raw_position 自然回到正常值
-        # 3. 平滑机制自然处理过渡，无需额外恢复逻辑
-        # 目标 28%（HS300 长期 ~17%，仅在极端波动时触发 < 5% 的时间）
+        # 设计要点：在仓位平滑/确认之前应用，不锁定 _last_position_ratio
+        # 目标波动率基于 vix_index 动态调节（vix 高时更保守）
         # 注意：stock_index_change 是百分比值（如 1.5 = 1.5%），std 需 /100 转小数
         # ═══════════════════════════════════════════════════════════════
-        TARGET_ANNUAL_VOL = 0.28
+        # 动态目标：vix 高→保守，vix 低→激进，默认 0.28
+        if not math.isnan(data.vix_index) and data.vix_index > 0:
+            vix = min(max(data.vix_index, 10), 50)
+            TARGET_ANNUAL_VOL = max(0.22, min(0.35, 0.32 - (vix - 15) * 0.004))
+        else:
+            TARGET_ANNUAL_VOL = 0.28
         if not math.isnan(data.stock_index_change):
             self._daily_returns.append(data.stock_index_change)
         if len(self._daily_returns) >= 10:
@@ -2144,8 +2148,8 @@ class EnhancedTimingModel:
                 capped_raw = raw_position * vol_cap
                 if capped_raw < raw_position:
                     logger.debug(
-                        f"[VolTarget] vol={realized_ann_vol:.1%} target={TARGET_ANNUAL_VOL:.0%} "
-                        f"raw={raw_position:.3f}→{capped_raw:.3f}"
+                        f"[VolTarget] vol={realized_ann_vol:.1%} vix={data.vix_index:.0f} "
+                        f"target={TARGET_ANNUAL_VOL:.0%} raw={raw_position:.3f}→{capped_raw:.3f}"
                     )
                     raw_position = max(0.05, min(1.0, capped_raw))
         
@@ -2178,13 +2182,34 @@ class EnhancedTimingModel:
             # 未确认，保持已确认仓位
             base_position = self._confirmed_position
         
-        # 如果 regime 未确认（confirm_count < 3），额外限制单次变化不超过 25%（原15%过于保守）
-        if self._regime_confirm_count < 3:
+        # 如果 regime 未确认（confirm_count < 2），额外限制单次变化不超过 25%
+        if self._regime_confirm_count < 2:
             max_change = 0.25
             position_ratio = max(min(base_position, self._last_position_ratio + max_change),
                                    self._last_position_ratio - max_change)
         else:
             position_ratio = base_position
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 回撤保护增强：连续 3 日急跌（日跌幅 > 2%）时额外减仓 20%
+        # 作用：在极端下跌行情中快速降低风险暴露
+        # ═══════════════════════════════════════════════════════════════
+        if not math.isnan(data.stock_index_change):
+            if data.stock_index_change < -2.0:
+                self._sharp_decline_days += 1
+            else:
+                self._sharp_decline_days = 0
+        
+        if self._sharp_decline_days >= 3:
+            # 连续急跌 3 天，在现有仓位基础上再减 20%
+            drawdown_cap = 0.8
+            capped_pos = position_ratio * drawdown_cap
+            if capped_pos < position_ratio:
+                logger.debug(
+                    f"[DrawdownProt] 连续{self._sharp_decline_days}日急跌，"
+                    f"仓位从{position_ratio*100:.0f}%降至{capped_pos*100:.0f}%"
+                )
+                position_ratio = max(0.05, min(1.0, capped_pos))
         
         self._last_position_ratio = position_ratio
         

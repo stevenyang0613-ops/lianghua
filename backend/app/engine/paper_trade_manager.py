@@ -619,33 +619,20 @@ class PaperTradeManager:
                 else:
                     saved_states[attr] = val
 
-        # ── 确保今天在策略 _dates 和 _date_data_map 中 ──
-        if today_str not in original_dates:
-            strategy._dates = (original_dates or []) + [today_str]
-        today_idx = len(strategy._dates) - 1
+        # ── 使用策略真实的最后交易日（而非添加今天） ──
+        # 不要将 today_str 追加到 _dates，因为 _date_data_map 的 key
+        # 是实际交易日（datetime.date），追加字符串会导致格式不匹配，
+        # on_data 中 day_data = _date_data_map[current_date] 返回空 DataFrame。
+        if original_dates:
+            today_idx = len(original_dates) - 1
+        else:
+            today_idx = 0
+        strategy._dates = original_dates
 
-        # ── 从策略内部取最新交易日数据（比外部拼接的 df 更可靠） ──
-        #    策略 on_init 后，_date_data_map 或 _data 已含完整因子数据。
-        #    取策略记录的最新交易日数据作为 on_data 的输入，避免外部 df
-        #    缺少某些关键列（stock_change_pct、conversion_price 等）。
-        strategy_df = None
-        if hasattr(strategy, '_date_data_map') and strategy._date_data_map:
-            all_dates = sorted(strategy._date_data_map.keys())
-            latest_strategy_date = all_dates[-1] if all_dates else None
-            if latest_strategy_date:
-                strategy_df = strategy._date_data_map[latest_strategy_date].copy()
-                if today_str not in strategy._date_data_map:
-                    strategy._date_data_map[today_str] = strategy_df
-        elif hasattr(strategy, '_data') and isinstance(strategy._data, dict):
-            all_dates = sorted(strategy._data.keys())
-            latest_data_date = all_dates[-1] if all_dates else None
-            if latest_data_date:
-                strategy_df = strategy._data[latest_data_date].copy()
-                if today_str not in strategy._data:
-                    strategy._data[today_str] = strategy_df
-
-        # 若能从策略内部取到数据，优先用它；否则回退到外部 df
-        on_data_input = strategy_df if strategy_df is not None else df
+        # 使用外部 df（已含预计算因子列）作为 on_data 输入
+        # 原因: 策略内部 _date_data_map 的 code 格式可能与 valid_bonds 不匹配，
+        # 导致信号生成后被 valid_bonds 过滤掉。外部 df 的 code 格式一致。
+        on_data_input = df
 
         # ── 临时设置：rebalance_days=1 → 每次都是调仓日 ──
         strategy._params['rebalance_days'] = 1
@@ -668,7 +655,7 @@ class PaperTradeManager:
             try:
                 result = strategy.on_data(on_data_input, today_idx)
             except Exception as e:
-                logger.warning(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
+                logger.exception(f"[PaperTrade] force_rebalance: strategy.on_data failed: {e}")
                 return {"status": "no_signals", "message": f"策略执行异常: {e}", "signals": []}
 
             logger.info(
@@ -677,11 +664,12 @@ class PaperTradeManager:
             )
 
             if not result:
-                # 检查策略内部 on_data 是否生成了空列表
+                ddm = getattr(strategy, '_date_data_map', {})
+                ddm_keys = sorted(str(d) for d in ddm.keys())[:5]
                 logger.info(
                     f"[PaperTrade] force_rebalance {account_id[:8]}: no signals from strategy. "
-                    f"Check strategy._data keys={list(getattr(strategy,'_data',{}).keys())[:3]} "
-                    f"_date_data_map keys={list(getattr(strategy,'_date_data_map',{}).keys())[:3]}"
+                    f"_dates={list(strategy._dates)[:5]}... len={len(strategy._dates)} "
+                    f"_date_data_map has {len(ddm)} keys: {ddm_keys}"
                 )
                 return {"status": "no_signals", "message": "策略在当前行情下未产生买入信号", "signals": []}
 

@@ -5823,47 +5823,6 @@ def _refresh_north_cache():
         except Exception as e_stats:
             logger.warning(f"[DataEnrich] North stock_hsgt_stock_statistics_em primary failed: {e_stats}")
 
-        # 个股北向持仓：先尝试批量接口覆盖全 A 股，再对所有缺失股票单股补充
-        # Primary: stock_hsgt_stock_statistics_em（返回所有北向持仓股票）
-        try:
-            df_stats = _run_with_timeout(
-                lambda: ak.stock_hsgt_stock_statistics_em(symbol="北向持股", start_date="", end_date=""),
-                timeout=60, default=None, op_name="hsgt_stock_statistics_em",
-            )
-            if df_stats is not None and len(df_stats) > 0:
-                count_stats = 0
-                for _, r in df_stats.iterrows():
-                    code = str(r.get("代码", "")).strip()
-                    if not code or len(code) != 6 or not code.isdigit():
-                        continue
-                    entry = {"code": code, "name": str(r.get("名称", "")).strip(), "type": "北向"}
-                    hold_shares = _sf(r.get("持股数量"))
-                    if hold_shares is None:
-                        hold_shares = _sf(r.get("当日持股数量"))
-                    if hold_shares is not None:
-                        entry["hold_shares"] = hold_shares
-                    hold_market_cap = _sf(r.get("持股市值"))
-                    if hold_market_cap is None:
-                        hold_market_cap = _sf(r.get("当日持股市值"))
-                    if hold_market_cap is not None:
-                        entry["hold_market_cap"] = hold_market_cap
-                    hold_ratio = _sf(r.get("持股占流通股比例"))
-                    if hold_ratio is None:
-                        hold_ratio = _sf(r.get("持股比例"))
-                    if hold_ratio is not None:
-                        entry["hold_ratio"] = hold_ratio
-                    add_shares = _sf(r.get("增持数量"))
-                    if add_shares is None:
-                        add_shares = _sf(r.get("增减持股数量"))
-                    if add_shares is not None:
-                        entry["add_shares"] = add_shares
-                    if len(entry) > 3:
-                        result[code] = entry
-                        count_stats += 1
-                logger.info(f"[DataEnrich] North: stock_hsgt_stock_statistics_em primary {count_stats} stocks")
-        except Exception as e_stats:
-            logger.warning(f"[DataEnrich] North stock_hsgt_stock_statistics_em primary failed: {e_stats}")
-
         # 批量接口失败后，用全 A 股代码列表进行单股补齐（不限于 bond_codes）
         all_codes = []
         try:
