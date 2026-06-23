@@ -501,10 +501,25 @@ class EnhancedTimingModel:
     # 对冲触发阈值
     HEDGE_THRESHOLD = 30.0
     ALERT_LOW_SCORE = 35.0
+
+    # 各类别平滑窗口（EMA span，越大越平滑）
+    # 原则：变化慢的类别用长窗口，噪声大的用中等，事件驱动的用短窗口
+    CATEGORY_SMOOTH_SPANS = {
+        'valuation': 15,     # PE/PB 变化缓慢
+        'fundamental': 20,   # 宏观/盈利数据按月发布
+        'chip': 10,          # 筹码结构中等变化
+        'capital_flow': 8,   # 资金流每日变化但中度噪声
+        'liquidity': 6,      # 流动性短期变化快
+        'technical': 5,      # 技术面对价格敏感
+        'sentiment': 4,      # 情绪日度波动大，短窗口
+        'news': 3,           # 事件驱动，反应需快
+        'macro': 15,         # 宏观数据慢变量
+    }
     
     def __init__(self, initial_position: float = 0.5):
         self._history: List[EnhancedTimingSignal] = []
         self._factor_history: Dict[str, deque] = {}
+        self._category_ema: Dict[str, float] = {}  # 各类别 EMA 平滑值
         self._regime_history: deque = deque(maxlen=10)
         self._prev_regime: Optional[MarketRegime] = None
         self._regime_confirm_count: int = 0
@@ -522,6 +537,23 @@ class EnhancedTimingModel:
         self._sharp_decline_cooldown: int = 0  # 保护退出缓冲（天）
         # Vix 日度历史（用于 vol target 平滑）
         self._vix_history: deque = deque(maxlen=5)
+    
+    def _smooth_category_score(self, name: str, raw_score: float) -> float:
+        """对单一类别的原始得分应用 EMA 平滑
+
+        不同类别用不同的平滑窗口（CATEGORY_SMOOTH_SPANS）：
+        - 慢变量（估值/基本面/宏观）用长窗口 → 避免频繁切换
+        - 快变量（情绪/新闻）用短窗口 → 快速反应
+        - 首次调用返回原始值，初始化 EMA 状态
+        """
+        span = self.CATEGORY_SMOOTH_SPANS.get(name, 5)
+        alpha = 2.0 / (span + 1)
+        if name in self._category_ema:
+            smoothed = raw_score * alpha + self._category_ema[name] * (1.0 - alpha)
+        else:
+            smoothed = raw_score
+        self._category_ema[name] = smoothed
+        return smoothed
         
     # ========== 市场环境检测 ==========
     
@@ -1978,8 +2010,9 @@ class EnhancedTimingModel:
         # 计算各因子大类得分
         category_scores = {}
         
-        # 1. 估值面
+        # 1. 估值面（慢变量，长窗口 EMA=15）
         cat_val = self._score_valuation(data)
+        cat_val.score = self._smooth_category_score('valuation', cat_val.score)
         cat_val.weight = actual_weights.get('valuation', cat_val.weight)
         category_scores['valuation'] = cat_val
         if cat_val.score < 30:
@@ -1987,29 +2020,33 @@ class EnhancedTimingModel:
         elif cat_val.score > 80:
             risk_alerts.append(f"估值面极度低估({cat_val.score:.0f})，历史性配置机会")
         
-        # 2. 基本面
+        # 2. 基本面（最慢变量，EMA=20）
         cat_fund = self._score_fundamental(data)
+        cat_fund.score = self._smooth_category_score('fundamental', cat_fund.score)
         cat_fund.weight = actual_weights.get('fundamental', cat_fund.weight)
         category_scores['fundamental'] = cat_fund
         if cat_fund.score < 30:
             risk_alerts.append("基本面恶化，企业盈利承压")
         
-        # 3. 筹码面
+        # 3. 筹码面（中等变化，EMA=10）
         cat_chip = self._score_chip(data)
+        cat_chip.score = self._smooth_category_score('chip', cat_chip.score)
         cat_chip.weight = actual_weights.get('chip', cat_chip.weight)
         category_scores['chip'] = cat_chip
         if cat_chip.score < 25:
             risk_alerts.append("筹码面恶化，资金大量流出")
         
-        # 4. 资金面
+        # 4. 资金面（中度噪声，EMA=8）
         cat_cap = self._score_capital_flow(data)
+        cat_cap.score = self._smooth_category_score('capital_flow', cat_cap.score)
         cat_cap.weight = actual_weights.get('capital_flow', cat_cap.weight)
         category_scores['capital_flow'] = cat_cap
         if cat_cap.score < 25:
             risk_alerts.append("资金面极度紧缩，流动性危机风险")
         
-        # 5. 流动性面
+        # 5. 流动性面（短期变化快，EMA=6）
         cat_liq = self._score_liquidity(data)
+        cat_liq.score = self._smooth_category_score('liquidity', cat_liq.score)
         cat_liq.weight = actual_weights.get('liquidity', cat_liq.weight)
         category_scores['liquidity'] = cat_liq
         if cat_liq.score < 25:
@@ -2017,15 +2054,17 @@ class EnhancedTimingModel:
         elif cat_liq.score > 80:
             risk_alerts.append("流动性极度宽松，资金充裕")
         
-        # 6. 技术面
+        # 6. 技术面（价格敏感，EMA=5）
         cat_tech = self._score_technical(data)
+        cat_tech.score = self._smooth_category_score('technical', cat_tech.score)
         cat_tech.weight = actual_weights.get('technical', cat_tech.weight)
         category_scores['technical'] = cat_tech
         if cat_tech.score < 25:
             risk_alerts.append("技术面严重破位，趋势向下")
         
-        # 7. 情绪面
+        # 7. 情绪面（高日度波动，EMA=4）
         cat_sent = self._score_sentiment(data)
+        cat_sent.score = self._smooth_category_score('sentiment', cat_sent.score)
         cat_sent.weight = actual_weights.get('sentiment', cat_sent.weight)
         category_scores['sentiment'] = cat_sent
         if cat_sent.score < 20:
@@ -2033,13 +2072,15 @@ class EnhancedTimingModel:
         elif cat_sent.score > 85:
             risk_alerts.append("市场情绪过度亢奋，警惕回调风险")
         
-        # 8. 消息面
+        # 8. 消息面（事件驱动，最短窗口 EMA=3）
         cat_news = self._score_news(data)
+        cat_news.score = self._smooth_category_score('news', cat_news.score)
         cat_news.weight = actual_weights.get('news', cat_news.weight)
         category_scores['news'] = cat_news
         
-        # 9. 宏观面
+        # 9. 宏观面（慢变量，EMA=15）
         cat_macro = self._score_macro(data)
+        cat_macro.score = self._smooth_category_score('macro', cat_macro.score)
         cat_macro.weight = actual_weights.get('macro', cat_macro.weight)
         category_scores['macro'] = cat_macro
         

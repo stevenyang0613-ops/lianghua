@@ -268,5 +268,106 @@ class TestConvertFromLegacy:
         assert data.industry_net_inflow_ratio == 75
 
 
+# ==================== 各类别差异化平滑窗口 ====================
+
+class TestPerCategorySmoothing:
+    """验证每个类别使用不同 EMA 窗口（P1 2026-06-23）"""
+
+    def test_smooth_first_call_returns_raw(self):
+        """首次调用返回原始值，初始化 EMA 状态"""
+        model = EnhancedTimingModel()
+        smoothed = model._smooth_category_score('sentiment', 80.0)
+        assert smoothed == 80.0
+
+    def test_smooth_converges_toward_raw(self):
+        """连续同值输入，平滑值收敛于稳态值"""
+        model = EnhancedTimingModel()
+        raw_series = [80.0] * 10
+        results = [model._smooth_category_score('sentiment', r) for r in raw_series]
+        # 最后一轮应接近 80
+        assert abs(results[-1] - 80.0) < 1.0
+        # 第一次是 80，第二次应小于 80（因从 80 开始向 80 平滑实际不变）
+        # 但如果输入变化：先 80 后 20，第二次应接近两者中间
+        model2 = EnhancedTimingModel()
+        r1 = model2._smooth_category_score('sentiment', 80.0)
+        r2 = model2._smooth_category_score('sentiment', 20.0)
+        # EMA(4): alpha=0.4, r2 = 20*0.4 + 80*0.6 = 56
+        assert 50 < r2 < 65, f"Expected ~56, got {r2}"
+
+    def test_different_spans_converge_different_rates(self):
+        """短窗口（news=3）比长窗口（valuation=15）对变化反应更快"""
+        model = EnhancedTimingModel()
+        # 分别模拟新闻和估值的两轮调用
+        news_r1 = model._smooth_category_score('news', 100.0)
+        news_r2 = model._smooth_category_score('news', 0.0)
+        val_model = EnhancedTimingModel()
+        val_r1 = val_model._smooth_category_score('valuation', 100.0)
+        val_r2 = val_model._smooth_category_score('valuation', 0.0)
+        # 新闻（alpha=0.5）比估值（alpha=0.125）变化更大
+        news_change = abs(news_r2 - 100.0)
+        val_change = abs(val_r2 - 100.0)
+        assert news_change > val_change, \
+            f"News should react faster: news_change={news_change:.1f} val_change={val_change:.1f}"
+
+    def test_calculate_uses_smoothed_scores(self):
+        """calculate 方法使用平滑后的大类得分"""
+        model = EnhancedTimingModel()
+        # 使用足够的有效数据让所有类别都有有效得分
+        data = EnhancedMarketData(date=date.today())
+        data.stock_pe_median = 12.0
+        data.stock_pb_median = 1.2
+        data.cb_count = 300
+        data.avg_premium = 60.0
+        data.yield_diff_with_aa = 2.5
+        data.market_turnover = 3.0
+        data.cb_amount = 500
+        data.stock_index_change = 1.5
+        data.volume_ratio = 1.2
+        data.advance_decline_ratio = 1.5
+        data.limit_up_count = 80
+        data.limit_down_count = 20
+        data.new_high_count = 50
+        data.new_low_count = 10
+        data.industry_net_inflow_ratio = 60.0
+        data.industry_cycle_score = 80.0
+        data.bond_yield_3a = 2.5
+        data.bond_yield_aa_minus = 4.5
+        data.credit_spread = 2.0
+        data.term_spread = 0.8
+        data.vix_index = 15.0
+        data.five_day_vol_change = 0.05
+        data.pmi = 51.0
+        data.cpi = 2.0
+        data.m2_growth = 8.0
+        data.us_china_rate_diff = 1.5
+        data.us10y = 4.0
+        data.cb_below_par_count = 30
+        data.new_accounts = 80.0
+        data.pcr_ratio = 0.6
+        data.margin_buy_ratio = 5.0
+        data.five_day_delta_pcr = 0.0
+
+        # 第一轮：所有类别初始化 EMA
+        result1 = model.calculate(data)
+        cat_scores_1 = {k: v.score for k, v in result1.category_scores.items()}
+
+        # 第二轮：相同输入，平滑后得分差异不大
+        result2 = model.calculate(data)
+        cat_scores_2 = {k: v.score for k, v in result2.category_scores.items()}
+
+        # 类别得分应该一致（相同输入）
+        for cat in cat_scores_1:
+            assert abs(cat_scores_1[cat] - cat_scores_2[cat]) <= 15.0, \
+                f"{cat} diff too large: {cat_scores_1[cat]:.1f} vs {cat_scores_2[cat]:.1f}"
+
+        # 确认 EMAs 被更新
+        assert len(model._category_ema) > 0
+
+    def test_reset_model_clears_ema(self):
+        """新模型实例的 EMA 状态应为空"""
+        model = EnhancedTimingModel()
+        assert len(model._category_ema) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
