@@ -246,7 +246,6 @@ class XuanjiV8Strategy(Strategy):
         current_date = self._dates[idx]
         day_data = data.copy()
         if day_data.empty:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_249\n")
             return None
         
         # 计算当日日期索引
@@ -261,7 +260,6 @@ class XuanjiV8Strategy(Strategy):
             return self._generate_stop_all_signals(day_data)
         
         if self._portfolio_stopped:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_263\n")
             return None
         
         # === 单券止损 ===
@@ -273,7 +271,6 @@ class XuanjiV8Strategy(Strategy):
         
         # === 调仓日才生成信号 ===
         if not is_rebalance:
-            open('/tmp/fr_dbg.txt', 'a').write("V8_RETURN_NONE_LINE_274\n")
             return None
         
         # === 前置过滤 ===
