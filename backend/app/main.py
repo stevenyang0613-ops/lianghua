@@ -384,6 +384,27 @@ async def lifespan(app: FastAPI):
     app.state.analysis_engine = AnalysisEngine(cache_ttl=30, max_entries=100)
     print(f"[Startup 3/5] ✅ Engines ready (market, signal, trade, analysis)")
 
+    # 启动数据完整性检查（轻量查询，不阻塞启动）
+    try:
+        _row_count = storage.conn.execute("SELECT COUNT(*) FROM daily_snapshots").fetchone()[0]
+        _bond_count = storage.conn.execute("SELECT COUNT(DISTINCT code) FROM daily_snapshots").fetchone()[0]
+        _min_date = storage.conn.execute("SELECT MIN(snapshot_date) FROM daily_snapshots").fetchone()[0]
+        _max_date = storage.conn.execute("SELECT MAX(snapshot_date) FROM daily_snapshots").fetchone()[0]
+        _days = (_max_date - _min_date).days if _min_date and _max_date else 0
+        if _row_count < 5000 or _days < 180:
+            logger.warning(
+                f"[Startup] ⚠ DB数据不足: {_row_count}行, {_bond_count}只, "
+                f"{_min_date}~{_max_date}({_days}天). "
+                f"建议运行: python scripts/download_historical_data.py --days 540"
+            )
+            print(f"  ⚠ DB数据不足 ({_row_count}行/{_bond_count}只/{_days}天), 回测结果可能不准确")
+            print(f"  建议运行: python scripts/download_historical_data.py --days 540")
+        else:
+            print(f"[Startup] ✅ DB数据: {_row_count}行, {_bond_count}只, {_days}天 ({_min_date}~{_max_date})")
+    except Exception as _e:
+        logger.warning(f"[Startup] DB数据检查失败 (首次启动): {_e}")
+        print(f"  ⚠ DB为空或无法读取, 建议运行: python scripts/download_historical_data.py --days 540")
+
     # 初始化数据源管理器（东方财富+巨潮资讯，免费数据源）
     print(f"[Startup 4/5] Initializing data source manager...")
     try:

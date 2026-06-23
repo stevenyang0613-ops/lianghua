@@ -1,5 +1,5 @@
 import { Tag, Space, Typography, Button, Tooltip } from 'antd'
-import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined, WifiOutlined, DisconnectOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined, WifiOutlined, DisconnectOutlined, ThunderboltOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useAppStore } from '../stores/useAppStore'
 import { useMarketStore } from '../stores/useMarketStore'
 import { marketWs, signalsWs, refreshWsToken } from '../utils/wsInstances'

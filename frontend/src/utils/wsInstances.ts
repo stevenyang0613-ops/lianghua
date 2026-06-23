@@ -137,6 +137,7 @@ export function destroyWsInstances(): void {
     signalsWs.dispose()
   } catch { /* noop */ }
   cancelRefreshWsToken()
+  stopTokenRefreshTimer()
 }
 
 /**
@@ -178,5 +179,39 @@ export function refreshWsToken(): void {
     }, 500)
   } catch {
     _refreshing = false
+  }
+}
+
+let _tokenRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * 启动定期 token 刷新定时器（每30分钟检查一次）。
+ * 避免 token 过期后长时间无法连接 WebSocket。
+ */
+export function startTokenRefreshTimer(): void {
+  stopTokenRefreshTimer()
+  _tokenRefreshTimer = setInterval(async () => {
+    try {
+      const token = await fetchTokenFromHealth()
+      if (token) {
+        const current = getToken()
+        if (token !== current) {
+          console.log('[WS] Token refreshed by periodic timer')
+          refreshWsToken()
+        }
+      }
+    } catch (e) {
+      console.warn('[WS] Periodic token refresh failed:', e)
+    }
+  }, 30 * 60 * 1000) // 30分钟
+}
+
+/**
+ * 停止定期 token 刷新定时器。
+ */
+export function stopTokenRefreshTimer(): void {
+  if (_tokenRefreshTimer) {
+    clearInterval(_tokenRefreshTimer)
+    _tokenRefreshTimer = null
   }
 }
