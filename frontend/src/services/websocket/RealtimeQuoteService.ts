@@ -202,6 +202,9 @@ class RealtimeQuoteService extends EventEmitter {
     }
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('达到最大重连次数，停止重连')
+      // 状态更新：通知 UI 层重连已耗尽
+      this.emit('maxReconnectReached', this.reconnectAttempts)
+      this.emit('disconnected')
       return
     }
 

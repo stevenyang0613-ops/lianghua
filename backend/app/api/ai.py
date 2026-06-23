@@ -508,7 +508,8 @@ async def call_ai_model(prompt: str) -> str:
                         err_body = response.json()
                         if "error" in err_body:
                             err_detail += f": {err_body['error'].get('message', '')}"
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                     errors.append(err_detail)
                     if _should_log_failure(f"openai_{err_detail}"):
@@ -544,7 +545,8 @@ async def call_ai_model(prompt: str) -> str:
                         err_body = response.json()
                         if "error" in err_body:
                             err_detail += f": {err_body['error'].get('message', '')}"
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                     errors.append(err_detail)
                     if _should_log_failure(f"deepseek_{err_detail}"):
@@ -580,7 +582,8 @@ async def call_ai_model(prompt: str) -> str:
                         err_body = response.json()
                         if "error" in err_body:
                             err_detail += f": {err_body['error'].get('message', '')}"
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                     errors.append(err_detail)
                     if _should_log_failure(f"minimax_{err_detail}"):

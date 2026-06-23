@@ -4,6 +4,8 @@ from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+import logging
+logger = logging.getLogger(__name__)
 
 
 class StopLossType(Enum):
@@ -257,7 +259,8 @@ class StopLossManager:
                 for callback in self.on_trigger_callbacks:
                     try:
                         callback(order)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
         
         return triggered

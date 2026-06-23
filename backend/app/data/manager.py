@@ -18,6 +18,7 @@ import pandas as pd
 import logging
 
 from .adapters.base import DataSourceAdapter, DataSourceConfig, DataQuery, DataType
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +325,7 @@ async def init_data_sources(config: Dict[str, Any] = None) -> DataSourceManager:
         )
 
     # 注册巨潮资讯 - 公告数据源（默认关闭：cninfo 在 macOS sandbox 下 py_mini_racer 失败，见 AGENTS.md #48）
-    if config.get('cninfo', {}).get('enabled', os.environ.get('LH_CNINFO_ENABLED', '').lower() in ('1', 'true', 'yes')):
+    if config.get('cninfo', {}).get('enabled', settings.CNINFO_ENABLED):
         from .adapters.cninfo_adapter import CNInfoAdapter
         adapter = CNInfoAdapter(DataSourceConfig(name='cninfo'))
         manager.register(

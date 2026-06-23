@@ -154,9 +154,11 @@ async def sync_balance(account_id: str, request: Request = None):
                     qty = float(pos.quantity or 0)
                     market_value += current_price * qty
                     change_pct = float(getattr(q, 'change_pct', 0) or 0)
-                    if change_pct != 0:
+                    if change_pct != 0 and change_pct != -100:
                         prev_price = current_price / (1 + change_pct / 100)
                         profit_today += (current_price - prev_price) * qty
+                    else:
+                        profit_today += 0
                     profit_total += (current_price - cost_price) * qty
             except Exception:
                 continue

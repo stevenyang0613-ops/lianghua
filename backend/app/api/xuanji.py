@@ -128,7 +128,8 @@ def _compute_hv_estimate(df: pd.DataFrame) -> pd.DataFrame:
                 mapped = stock_codes.map(vol_map)
                 fill_mask = df['hv'].isna() | (df['hv'] <= 0)
                 df.loc[fill_mask & mapped.notna(), 'hv'] = mapped[fill_mask & mapped.notna()]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
     # 对剩余没有HV的行，使用单日涨跌幅年化近似 (与 IV 同公式)
@@ -710,7 +711,8 @@ async def get_delta_candidates(
                         if cached is not None and cached > 0:
                             hv_est = float(cached)
                             hv_source = "actual"
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                 if hv_est is None:
                     hv_est = abs(float(b.change_pct or 0)) * np.sqrt(252) * 0.6
@@ -841,11 +843,13 @@ async def get_alpha_sources(request: Request):
         fds = FactorDataSource()
         try:
             fds._refresh_industry_pmi()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
         try:
             fds._refresh_pledge()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
         sentiment = fds.get_market_sentiment()
         ad_ratio = float(sentiment.get("advance_decline_ratio", 1.0) or 1.0)
@@ -1251,7 +1255,8 @@ async def factor_correlation(
                         "correlations": correlations[:20],
                         "correlation_source": stored["source"],
                     }
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             return {
                 "market_state": actual_state,
@@ -1820,7 +1825,8 @@ async def data_source_health(request: Request):
             if engine:
                 all_quotes = await engine.get_all_quotes()
                 total_bonds = len(all_quotes)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
         sources_status = []

@@ -124,7 +124,8 @@ class DataStorage:
             try:
                 self._conn.execute("SELECT 1")
                 return
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
             logger.warning("[Storage] Connection lost, reconnecting...")
             try:
@@ -190,11 +191,13 @@ class DataStorage:
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
             try:
                 self._conn.execute("COMMIT")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
 
         self._conn.execute("""
@@ -273,11 +276,13 @@ class DataStorage:
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
             try:
                 self._conn.execute("COMMIT")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
 
         # 修复历史库中 iv_source 被误创建为 DOUBLE 的问题
@@ -292,11 +297,13 @@ class DataStorage:
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
             try:
                 self._conn.execute("COMMIT")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
 
         for ddl in (
@@ -360,11 +367,13 @@ class DataStorage:
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
             try:
                 self._conn.execute("COMMIT")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
 
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_code ON quotes_history(code)")
@@ -420,7 +429,8 @@ class DataStorage:
             except Exception:
                 try:
                     self._conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
 
         # Backfill: assign id to existing rows without one
@@ -650,10 +660,13 @@ class DataStorage:
         for ddl in (
             "ALTER TABLE paper_accounts ADD COLUMN cash_balance DOUBLE DEFAULT 0",
             "ALTER TABLE paper_accounts ADD COLUMN positions_json VARCHAR DEFAULT '[]'",
+            "ALTER TABLE paper_accounts ADD COLUMN sim_dates VARCHAR DEFAULT '[]'",
+            "ALTER TABLE paper_accounts ADD COLUMN last_trade_date VARCHAR DEFAULT ''",
         ):
             try:
                 self._conn.execute(ddl)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
 
     def _query_to_dicts(self, cursor) -> list[dict]:
@@ -873,7 +886,8 @@ class DataStorage:
             if "does not have a column" in str(e):
                 try:
                     self.conn.execute("ROLLBACK")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
                 logger.warning(f"[Storage] Schema mismatch detected, re-detecting columns...")
                 new_cols = self._detect_qh_actual_columns()
@@ -1125,7 +1139,8 @@ class DataStorage:
                 WHERE snapshot_date = ?
                   AND (iv IS NULL OR iv = 0)
             ''', (snapshot_date,))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
 
         # 全局前向填充: 对所有历史日期中 iv 为空的记录
@@ -1162,7 +1177,8 @@ class DataStorage:
                 WHERE snapshot_date = ?
                   AND (pe IS NULL OR pe = 0)
             ''', (snapshot_date,))
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
 
         # 全局前向填充 pe

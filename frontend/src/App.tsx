@@ -94,8 +94,13 @@ function registerServiceWorker() {
   }
 }
 
+import { clearStatusCacheOnStartup } from './utils/dataCache'
+
 export default function App() {
   useEffect(() => {
+    // 启动时清除状态类/配置类接口的旧缓存，避免错误状态残留
+    clearStatusCacheOnStartup().catch(() => {})
+
     // 全局 unhandledrejection 守卫：仅在生产环境阻止默认行为，开发环境保留原生错误
     const rejectionGuard = (event: PromiseRejectionEvent) => {
       const stack = event.reason instanceof Error ? event.reason.stack : undefined

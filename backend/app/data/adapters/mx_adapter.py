@@ -34,7 +34,7 @@ class MXAdapter(DataSourceAdapter):
         if config is None:
             config = DataSourceConfig(name="mx")
         super().__init__(config)
-        self._api_key = settings.MX_APIKEY or os.environ.get("MX_APIKEY", "") or config.extra.get("api_key", "")
+        self._api_key = settings.MX_APIKEY or config.extra.get("api_key", "")
         self._initialized = False
 
     async def connect(self) -> bool:

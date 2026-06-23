@@ -7,6 +7,8 @@ from datetime import datetime
 from collections import deque
 from enum import Enum
 import statistics
+import logging
+logger = logging.getLogger(__name__)
 
 
 class LatencyType(Enum):
@@ -282,7 +284,8 @@ class LatencyMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     def add_alert_callback(self, callback: Callable):

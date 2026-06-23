@@ -89,6 +89,32 @@ def _check_duckdb_lock(db_path: str) -> None:
         """自动查找并杀死持有DuckDB锁的进程"""
         print(f"[Main] 🔍 尝试自动清理DuckDB锁...")
         try:
+            import shutil as _shutil
+            # 防御性检查：lsof 在 Linux 上可能未安装
+            if not _shutil.which('lsof'):
+                print("[Main] ⚠️ lsof 未安装，尝试 fuser 回退...")
+                # 回退：尝试使用 fuser（Linux 上更常见）
+                if _shutil.which('fuser'):
+                    try:
+                        fuser_result = _sb.run(
+                            ['fuser', '-k', '-9', db_path],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if fuser_result.returncode == 0:
+                            print(f"[Main] fuser killed processes holding {db_path}")
+                            _tm.sleep(2)
+                            if Path(wal_path).exists():
+                                try:
+                                    Path(wal_path).unlink()
+                                except Exception as e:
+                                    logger.warning(f"[Main] 删除 WAL 文件失败: {e}")
+                            return True
+                    except Exception as e:
+                        print(f"[Main] fuser 回退失败: {e}")
+                # 如果 fuser 也不可用，跳过自动清理
+                print("[Main] ⚠️ lsof 和 fuser 均不可用，跳过自动清理")
+                return False
+
             result = _sb.run(
                 ['lsof', '-F', 'p', db_path],
                 capture_output=True, text=True, timeout=10
@@ -106,13 +132,19 @@ def _check_duckdb_lock(db_path: str) -> None:
                     for pid in pids:
                         try:
                             _sb.run(['kill', '-9', pid], capture_output=True, timeout=5)
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"[Main] 杀死进程 {pid} 失败: {e}")
                     _tm.sleep(2)
                     # 删除WAL文件
                     if Path(wal_path).exists():
-                        Path(wal_path).unlink()
+                        try:
+                            Path(wal_path).unlink()
+                        except Exception as e:
+                            logger.warning(f"[Main] 删除 WAL 文件失败: {e}")
                     return True
+            else:
+                # lsof 返回非零退出码，可能没有进程持有锁
+                print(f"[Main] lsof 未找到持有锁的进程 (returncode={result.returncode})")
         except Exception as ex:
             print(f"[Main] Auto-cleanup failed: {ex}")
         return False
@@ -136,7 +168,8 @@ def _check_duckdb_lock(db_path: str) -> None:
                             Path(wal_path).unlink()
                             print(f"[Main] Deleted WAL: {wal_path}")
                             continue
-                        except:
+                        except Exception as e:
+                            logger.debug(f"Suppressed: {e}")
                             pass
                     if not _try_auto_cleanup():
                         continue
@@ -358,6 +391,7 @@ async def lifespan(app: FastAPI):
         data_source_manager = await init_data_sources({
             'eastmoney': {'enabled': True},
             'cninfo': {'enabled': True},
+            'mx': {'enabled': True, 'api_key': _settings.MX_APIKEY},
             'wind': {'enabled': False},
             'tonghuashun': {'enabled': False},
         })
@@ -733,7 +767,8 @@ async def lifespan(app: FastAPI):
                 try:
                     p.terminate()
                     logger.info(f"Terminated enrich subprocess {p.pid}")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             # Wait briefly then SIGKILL if still alive
             await asyncio.sleep(0.5)
@@ -742,7 +777,8 @@ async def lifespan(app: FastAPI):
                     try:
                         p.kill()
                         logger.info(f"Killed enrich subprocess {p.pid}")
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
     except Exception as e:
         logger.error(f"Error cleaning up enrich subprocesses: {e}")
@@ -850,7 +886,8 @@ def _health_response(request: Request | None = None) -> dict:
     signal_engine_available = False
     try:
         engine_running = getattr(app.state, "engine", None) and app.state.engine.is_running
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     try:
         storage = getattr(app.state, "storage", None)
@@ -858,11 +895,13 @@ def _health_response(request: Request | None = None) -> dict:
             storage.ensure_connection()
             storage.conn.execute("SELECT 1")
             db_ok = True
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     try:
         signal_engine_available = getattr(app.state, "signal_engine", None) is not None
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     result = {
         "status": "ok",
@@ -871,6 +910,14 @@ def _health_response(request: Request | None = None) -> dict:
         "market_running": engine_running,
         "db_ok": db_ok,
         "signal_engine_available": signal_engine_available,
+        "data_sources": {
+            "mx": {"configured": bool(_settings.MX_APIKEY)},
+            "tavily": {"configured": bool(_settings.TAVILY_API_KEY)},
+            "minimax": {"configured": bool(_settings.MINIMAX_API_KEY)},
+            "deepseek": {"configured": bool(_settings.DEEPSEEK_API_KEY)},
+            "github": {"configured": bool(_settings.GITHUB_TOKEN)},
+            "akshare_proxy": {"enabled": _settings.AKSHARE_PROXY_ENABLED},
+        },
     }
     # ws_auth_token 仅在本地请求中返回，避免 SSRF 窃取
     if request is not None:

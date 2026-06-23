@@ -61,7 +61,8 @@ def fetch_ths_financial_single(code: str) -> dict:
                 # 解析 "6.28亿" → 6.28, "1.5万亿" → 15000
                 try:
                     rev = _parse_cn_number(rev_str)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             
             if roe is not None and roe > 0:
@@ -130,7 +131,8 @@ def batch_fetch_financial(stock_codes: list[str], max_workers: int = 8) -> dict:
                 data = future.result(timeout=30)
                 if data:
                     result[c] = data
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             done[0] += 1
             if done[0] % 100 == 0:

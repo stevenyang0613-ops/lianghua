@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import deque
 import asyncio
+import logging
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -354,7 +356,8 @@ class RiskMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     def add_alert_callback(self, callback: callable):

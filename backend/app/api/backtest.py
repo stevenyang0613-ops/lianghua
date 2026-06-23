@@ -684,7 +684,7 @@ async def _fetch_industry_etf_data(start_date: date, end_date: date) -> pd.DataF
     try:
         from app.config import settings
         import duckdb
-        db_path = str(getattr(settings, 'db_path', '')) or os.environ.get('LH_DB_PATH', '')
+        db_path = str(settings.db_path) if settings.db_path else ""
         if db_path and os.path.isfile(db_path):
             conn = duckdb.connect(db_path, read_only=True)
             try:
@@ -777,7 +777,8 @@ async def _fetch_industry_etf_data(start_date: date, end_date: date) -> pd.DataF
                                     "low": float(row[3] or close_v),
                                     "volume": float(row[5] or 0),
                                 })
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Suppressed: {e}")
                             pass
                 if records:
                     return records, "baostock"
@@ -859,7 +860,8 @@ async def _fetch_industry_etf_data(start_date: date, end_date: date) -> pd.DataF
                 recs, src = future.result()
                 all_records.extend(recs)
                 source_stats[src] = source_stats.get(src, 0) + len(recs)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             if (i + 1) % 5 == 0:
                 logger.info(f"[ETFData] 进度: {i+1}/{len(etf_map)}")
@@ -1036,7 +1038,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                         "gpm": float(latest.get("毛利率")) if latest.get("毛利率") is not None else None,
                         "npm": float(latest.get("净利率")) if latest.get("净利率") is not None else None,
                     }
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
         _ths_t1 = _time.time()
         logger.info(f"[BacktestData] THS财务摘要: {len(ths_financial)}只 ({_ths_t1-_ths_t0:.1f}s)")
@@ -1140,7 +1143,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
             try:
                 records = future.result()
                 all_records.extend(records)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             if (i + 1) % 100 == 0:
                 logger.info(f"[BacktestData] K线进度: {i+1}/{len(bond_codes)}")
@@ -1178,7 +1182,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                             continue
                         try:
                             dt = date.fromisoformat(row[0])
-                        except:
+                        except (ValueError, TypeError):
                             continue
                         cv = float(row[1] or 0)
                         if cv > 0:
@@ -1195,7 +1199,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                         if records:
                             stock_kline[sc] = records
                             _bs_ok += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
             logger.info(f"[BacktestData] BaoStock正股K线: {_bs_ok}/{len(unique_stocks)}只有数据")
             break
@@ -1219,7 +1224,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                 for _, r in df.iterrows():
                     try:
                         dt = r["date"] if isinstance(r["date"], date) else date.fromisoformat(str(r["date"])[:10])
-                    except:
+                    except (ValueError, TypeError):
                         continue
                     if dt < start_date or dt > end_date:
                         continue
@@ -1236,7 +1241,8 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                     sc, records = future.result()
                     if records:
                         stock_kline[sc] = records
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
     
     # 构建 {stock_code: {date: close_price}} 快速查询
@@ -1463,7 +1469,7 @@ async def _fetch_real_fallback_data(start_date: date, end_date: date) -> pd.Data
                         cf = 100 * (1 + cr / 100 + ar / 100)
                     pv += cf / ((1 + discount) ** yr)
                 return round(pv, 2)
-            except:
+            except (ValueError, ZeroDivisionError, OverflowError):
                 pass
         return float('nan')
     bv = df_kline.apply(_calc_bond_value, axis=1)
@@ -1505,7 +1511,7 @@ def _save_fallback_to_duckdb(df: pd.DataFrame, start_date: date, end_date: date)
     import os
     from pathlib import Path
 
-    db_path = os.environ.get("LH_DB_PATH", "")
+    db_path = str(settings.db_path) if settings.db_path else ""
     if not db_path:
         try:
             from app.config import settings
@@ -1559,7 +1565,8 @@ def _save_fallback_to_duckdb(df: pd.DataFrame, start_date: date, end_date: date)
             col_name = extra_col.split()[0]
             try:
                 conn.execute(f"ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS {extra_col}")
-            except:
+            except Exception as e:
+                logger.debug(f"添加列失败: {e}")
                 pass
 
         saved = 0
@@ -1693,7 +1700,8 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
                         pass
                     try:
                         progress_queue.put_nowait((pct, msg))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
             async def _drain_progress(phase: str):
@@ -1742,7 +1750,8 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
                     try:
                         pct = 40 + int(completed * 60 / max(total, 1))
                         loop.call_soon_threadsafe(progress_queue.put_nowait, (pct, msg))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
                 opt_task = asyncio.create_task(
@@ -1779,7 +1788,8 @@ async def run_backtest_stream(req: BacktestRequest, request: Request):
                 def _on_run_progress(pct, msg):
                     try:
                         loop.call_soon_threadsafe(progress_queue.put_nowait, (40 + int(pct * 0.6), msg))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
                 run_task = asyncio.create_task(

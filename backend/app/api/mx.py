@@ -37,8 +37,7 @@ async def _get_mx():
 async def query_mx_data(req: MXQueryRequest, request: Request):
     """查询妙想金融数据"""
     try:
-        api_key = settings.MX_APIKEY or os.environ.get("MX_APIKEY", "")
-        if not api_key:
+        if not settings.MX_APIKEY:
             raise HTTPException(status_code=400, detail="MX_APIKEY 未配置")
         
         mx = await _get_mx()
@@ -63,6 +62,6 @@ async def mx_status():
         return await mx.health_check()
     except Exception as e:
         return {
-            "configured": bool(settings.MX_APIKEY or os.environ.get("MX_APIKEY", "")),
+            "configured": bool(settings.MX_APIKEY),
             "error": str(e),
         }

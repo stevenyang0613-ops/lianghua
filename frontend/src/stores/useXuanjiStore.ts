@@ -27,6 +27,9 @@ interface RankingParams {
 }
 
 interface XuanjiState {
+  // 全局错误状态
+  error: string | null
+
   // Ranking data
   rankingData: XuanjiItem[]
   rankingInfo: RankingInfo | null
@@ -81,6 +84,8 @@ function getWsRefreshInterval(): number {
 }
 
 export const useXuanjiStore = create<XuanjiState>((set, get) => ({
+  error: null,
+
   rankingData: [],
   rankingInfo: null,
   rankingLoading: false,
@@ -115,7 +120,7 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
       return
     }
 
-    set({ rankingLoading: true })
+    set({ rankingLoading: true, error: null })
     try {
       const result = await fetchXuanjiRanking(params.topN, params.marketState, params.maxPremium, params.minPrice, params.maxPrice, params.volAdjust)
       set({
@@ -124,10 +129,11 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         rankingParams: params,
         rankingLoadedAt: Date.now(),
         rankingLoading: false,
+        error: null,
       })
     } catch (e) {
       console.error('[XuanjiStore] loadRanking failed:', e)
-      set({ rankingLoading: false })
+      set({ rankingLoading: false, error: String(e) })
     }
   },
 
@@ -150,9 +156,11 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         marketWeights: marketWeights.status === 'fulfilled' ? marketWeights.value : state.marketWeights,
         alphaSources: alphaSources.status === 'fulfilled' ? alphaSources.value : state.alphaSources,
         staticDataLoadedAt: Date.now(),
+        error: null,
       })
     } catch (e) {
       console.error('[XuanjiStore] loadStaticData failed:', e)
+      set({ error: String(e) })
     }
   },
 
@@ -170,34 +178,37 @@ export const useXuanjiStore = create<XuanjiState>((set, get) => ({
         factorContribution: factorContribution.status === 'fulfilled' ? factorContribution.value : null,
         factorCorrelation: factorCorrelation.status === 'fulfilled' ? factorCorrelation.value : null,
         comparison: comparison.status === 'fulfilled' ? comparison.value : null,
+        error: null,
       })
     } catch (e) {
       console.error('[XuanjiStore] loadComputedData failed:', e)
+      set({ error: String(e) })
     }
   },
 
   loadSingleDetail: async (code, params) => {
-    set({ detailLoading: true })
+    set({ detailLoading: true, error: null })
     try {
       const detail = await fetchXuanjiSingle(code, params.marketState, params.maxPremium, params.minPrice, params.maxPrice, params.volAdjust)
-      set({ selectedDetail: detail, detailLoading: false })
+      set({ selectedDetail: detail, detailLoading: false, error: null })
     } catch (e) {
       console.error('[XuanjiStore] loadSingleDetail failed:', e)
-      set({ detailLoading: false })
+      set({ detailLoading: false, error: String(e) })
     }
   },
 
   loadDeltaCandidates: async (params) => {
     try {
       const result = await fetchXuanjiDeltaCandidates(params.minIvHv, params.premiumLow, params.premiumHigh, params.topN)
-      set({ deltaCandidates: result })
+      set({ deltaCandidates: result, error: null })
     } catch (e) {
       console.error('[XuanjiStore] loadDeltaCandidates failed:', e)
+      set({ error: String(e) })
     }
   },
 
   invalidate: () => {
-    set({ rankingLoadedAt: 0, staticDataLoadedAt: 0 })
+    set({ rankingLoadedAt: 0, staticDataLoadedAt: 0, error: null })
   },
 
   // WS-driven auto-refresh: when market tick arrives, schedule a ranking refresh

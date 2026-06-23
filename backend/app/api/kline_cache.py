@@ -71,22 +71,22 @@ def cache_kline_data_bulk(stock_code: str, df: pd.DataFrame):
     rows = []
     for _, r in df.iterrows():
         d = pd.to_datetime(r["date"]).strftime("%Y-%m-%d")
+        _o = r.get("open")
+        _c = r.get("close")
+        _h = r.get("high")
+        _l = r.get("low")
+        _a = r.get("amount")
         rows.append((
             stock_code, d,
-            _o = r.get("open")
-            _c = r.get("close")
-            _h = r.get("high")
-            _l = r.get("low")
-            _a = r.get("amount")
-            rows.append((
-                stock_code, d,
-                float(_o) if _o is not None else None,
-                float(_c) if _c is not None else None,
-                float(_h) if _h is not None else None,
-                float(_l) if _l is not None else None,
-                float(_a) if _a is not None else None,
-            ))
+            float(_o) if _o is not None else None,
+            float(_c) if _c is not None else None,
+            float(_h) if _h is not None else None,
+            float(_l) if _l is not None else None,
+            float(_a) if _a is not None else None,
         ))
+    conn.executemany(
+        "INSERT OR REPLACE INTO kline_cache VALUES (?,?,?,?,?,?,?)", rows
+    )
     conn.executemany(
         "INSERT OR REPLACE INTO kline_cache VALUES (?,?,?,?,?,?,?)", rows
     )
@@ -167,7 +167,8 @@ def batch_fetch_stock_kline(
                     # 统一列名: 添加 trade_date
                     subset["trade_date"] = pd.to_datetime(subset["date"]).dt.strftime("%Y-%m-%d")
                     result[code] = subset
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
             done[0] += 1
             if done[0] % 100 == 0:

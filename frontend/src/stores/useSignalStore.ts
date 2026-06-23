@@ -54,24 +54,36 @@ export const useSignalStore = create<SignalState>((set, get) => ({
   },
 
   loadAvailableStrategies: async () => {
+    set({ loading: true, error: null })
     try {
       const data = await fetchAvailableSignalsStrategies()
-      set({ availableStrategies: data.strategies })
-    } catch (e) { console.error('[SignalStore] loadAvailableStrategies failed:', e) }
+      set({ availableStrategies: data.strategies, loading: false })
+    } catch (e) {
+      console.error('[SignalStore] loadAvailableStrategies failed:', e)
+      set({ error: String(e), loading: false })
+    }
   },
 
   loadHistory: async (strategy?, code?) => {
+    set({ loading: true, error: null })
     try {
       const data = await fetchSignalHistory(strategy, code, 200)
-      set({ history: data.signals })
-    } catch (e) { console.error('[SignalStore] loadHistory failed:', e) }
+      set({ history: data.signals, loading: false })
+    } catch (e) {
+      console.error('[SignalStore] loadHistory failed:', e)
+      set({ error: String(e), loading: false })
+    }
   },
 
   loadStats: async () => {
+    set({ loading: true, error: null })
     try {
       const data = await fetchSignalStats()
-      set({ stats: data })
-    } catch (e) { console.error('[SignalStore] loadStats failed:', e) }
+      set({ stats: data, loading: false })
+    } catch (e) {
+      console.error('[SignalStore] loadStats failed:', e)
+      set({ error: String(e), loading: false })
+    }
   },
 
   setStrategies: async (strategies) => {

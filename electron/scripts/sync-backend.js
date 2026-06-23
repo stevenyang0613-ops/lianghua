@@ -79,7 +79,7 @@ if (!existsSync(bundleAppDir)) {
 
 // 哈希目录中所有 .py 文件（排除 __pycache__）
 // Bug8 性能优化：先用 size+mtime 预过滤，只有 size 或 mtime 变化才计算 SHA256
-function hashDir(dir) {
+function hashDir(dir, rootDir = dir) {
   const out = {}  // rel -> { sha, size, mtime }
   if (!existsSync(dir)) return out
   for (const entry of readdirSync(dir)) {
@@ -88,9 +88,9 @@ function hashDir(dir) {
     let st
     try { st = statSync(full) } catch { continue }
     if (st.isDirectory()) {
-      Object.assign(out, hashDir(full))
+      Object.assign(out, hashDir(full, rootDir))
     } else if (entry.endsWith('.py')) {
-      const rel = path.relative(dir, full)
+      const rel = path.relative(rootDir, full)
       out[rel] = {
         sha: null,  // 懒计算
         size: st.size,

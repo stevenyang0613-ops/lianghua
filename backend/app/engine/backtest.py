@@ -47,7 +47,8 @@ except ImportError:
 if _HAS_NUMBA:
     try:
         _HAS_NUMBA = not numba.config.DISABLE_JIT
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed error: {e}")
         pass
     if not _HAS_NUMBA:
         logger.info("[numba] NUMBA_DISABLE_JIT=1 或 numba.config.DISABLE_JIT=True，已禁用 numba JIT")
@@ -648,7 +649,8 @@ def _run_single_backtest(
         def _internal_progress(pct, msg):
             try:
                 progress_queue.put_nowait((os.getpid(), pct, msg))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
         result = engine.run(strategy, data, on_progress=_internal_progress)
     else:
@@ -725,7 +727,8 @@ def _run_single_backtest_file(
         def _internal_progress(pct, msg):
             try:
                 progress_queue.put_nowait((os.getpid(), pct, msg))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed error: {e}")
                 pass
         result = engine.run(strategy, data, on_progress=_internal_progress)
     else:
@@ -805,7 +808,8 @@ def _normalize_date(d) -> date:
     if not isinstance(d, (str, bytes)) and hasattr(d, 'date') and callable(d.date):
         try:
             return d.date()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
     if isinstance(d, str):
         try:
@@ -1157,7 +1161,8 @@ def _compute_pareto_workers(data_size_bytes: int, n_combos: int) -> int:
                     f"[Pareto] 可用内存不足 {_avail_mem / 1024 / 1024:.0f}MB "
                     f"({_avail_mem / _total_mem * 100:.0f}%)，worker 数降至 {_pareto_workers}"
                 )
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
 
     # macOS 文件描述符限制检查
@@ -1170,7 +1175,8 @@ def _compute_pareto_workers(data_size_bytes: int, n_combos: int) -> int:
             logger.warning(
                 f"[Pareto] 文件描述符限制 {_soft_fd_limit} 过低，worker 数降至 {_pareto_workers}"
             )
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed error: {e}")
         pass
 
     # 改进 (2025-06-15ak): CPU 使用率检查——系统 CPU 满载时减少 worker 避免竞争
@@ -1189,7 +1195,8 @@ def _compute_pareto_workers(data_size_bytes: int, n_combos: int) -> int:
                 logger.warning(
                     f"[Pareto] CPU 使用率 {_cpu_percent:.0f}% 过高，worker 数降至 {_pareto_workers}"
                 )
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
 
     return _pareto_workers
@@ -1265,7 +1272,8 @@ def _get_memory_mb() -> float:
     if _HAS_PSUTIL:
         try:
             return psutil.Process().memory_info().rss / 1024 / 1024
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed error: {e}")
             pass
     return 0.0
 
@@ -1963,7 +1971,8 @@ class BacktestEngine:
                     _last_reported_pct = pct
                     try:
                         on_progress(pct, f"回测进度 {pct}% ({i+1}/{n_dates})")
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed error: {e}")
                         pass
             day_data = date_data_map[current_date]
 
@@ -2332,7 +2341,8 @@ class BacktestEngine:
                             if not use_file and data_path:
                                 try:
                                     _os.unlink(data_path)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Suppressed error: {e}")
                                     pass
                                 data_path = None
                     else:
@@ -2655,7 +2665,8 @@ class BacktestEngine:
                                         if _pct_now % 5 == 0 or completed == n_combos:
                                             try:
                                                 on_progress(completed, n_combos, f"优化进度 {completed}/{n_combos}")
-                                            except Exception:
+                                            except Exception as e:
+                                                logger.debug(f"Suppressed error: {e}")
                                                 pass
 
                                     # 改进 (2025-06-15h): 内存监控，超过阈值时警告并主动裁剪
@@ -2745,7 +2756,8 @@ class BacktestEngine:
                         if _pct_now % 5 == 0 or _total_done == n_combos:
                             try:
                                 on_progress(_total_done, n_combos, f"串行降级 {_total_done}/{n_combos}")
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Suppressed error: {e}")
                                 pass
                     # 改进 (2025-06-15g): 串行阶段也定期保存 checkpoint（如果启用）
                     if checkpoint_enabled and _serial_done % _checkpoint_batch == 0:
@@ -2825,7 +2837,8 @@ class BacktestEngine:
                     if _pct_now % 5 == 0 or (idx + 1) == n_combos:
                         try:
                             on_progress(idx + 1, n_combos, f"优化进度 {idx + 1}/{n_combos}")
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"Suppressed error: {e}")
                             pass
                 # 改进 (2025-06-15h): 顺序模式内存监控
                 if (idx + 1) % 100 == 0 and _HAS_PSUTIL:
@@ -3025,7 +3038,8 @@ class BacktestEngine:
                         if on_progress is not None and (evaluated_count % _progress_interval == 0 or evaluated_count == n_combos):
                             try:
                                 on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(f"Suppressed error: {e}")
                                 pass
                     except Exception as ex:
                         logger.warning(f"[Pareto] 组合 {idx} 串行评估失败: {ex}")
@@ -3066,7 +3080,8 @@ class BacktestEngine:
                                     _next_progress_pct = (_pct_now // 5 + 1) * 5
                                     try:
                                         on_progress(evaluated_count, n_combos, f"Pareto 评估 {evaluated_count}/{n_combos}")
-                                    except Exception:
+                                    except Exception as e:
+                                        logger.debug(f"Suppressed error: {e}")
                                         pass
                 except BrokenProcessPool as e:
                     logger.error(f"[Pareto] 子进程崩溃，回退到顺序评估: {e}")
@@ -3092,7 +3107,8 @@ class BacktestEngine:
                             if on_progress is not None and (evaluated_count % max(1, n_combos // 20) == 0 or evaluated_count == n_combos):
                                 try:
                                     on_progress(evaluated_count, n_combos, f"Pareto 顺序回退 {evaluated_count}/{n_combos}")
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"Suppressed error: {e}")
                                     pass
                         except Exception as ex:
                             logger.warning(f"[Pareto] 组合 {idx} 顺序评估失败: {ex}")
@@ -3208,7 +3224,8 @@ class BacktestEngine:
             if on_progress is not None and len(_buffer) % max(1, max_iter // 10) == 0:
                 try:
                     on_progress(len(_buffer), max_iter, f"贝叶斯优化 {len(_buffer)}/{max_iter}")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
 
             return getattr(item, metric_key, float('-inf'))
@@ -3307,7 +3324,8 @@ class BacktestEngine:
             if on_progress is not None:
                 try:
                     on_progress(i + 1, n, f"成本测试 {i+1}/{n}: 佣金{comm*100:.2f}% 滑点{slip*100:.2f}%")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed error: {e}")
                     pass
             
             # 临时修改成本配置

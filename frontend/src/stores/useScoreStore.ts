@@ -11,6 +11,9 @@ import {
 import { marketWs } from '../utils/wsInstances'
 
 interface ScoreState {
+  // 全局错误状态
+  error: string | null
+
   // Filtered ranking
   filteredData: { total: number; returned: number; items: ScoreRankingItem[] } | null
   filteredLoading: boolean
@@ -74,6 +77,8 @@ function getScoreWsRefreshInterval(): number {
 }
 
 export const useScoreStore = create<ScoreState>((set, get) => ({
+  error: null,
+
   filteredData: null,
   filteredLoading: false,
   filteredLoadedAt: 0,
@@ -108,13 +113,13 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
       return
     }
 
-    set({ filteredLoading: true })
+    set({ filteredLoading: true, error: null })
     try {
       const data = await fetchScoreRanking(params)
-      set({ filteredData: data, filteredLoading: false, filteredLoadedAt: Date.now() })
+      set({ filteredData: data, filteredLoading: false, filteredLoadedAt: Date.now(), error: null })
     } catch (e) {
       console.error('[ScoreStore] loadFilteredRanking failed:', e)
-      set({ filteredLoading: false })
+      set({ filteredLoading: false, error: String(e) })
     }
   },
 
@@ -125,13 +130,13 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
       return
     }
 
-    set({ fullLoading: true })
+    set({ fullLoading: true, error: null })
     try {
       const data = await fetchFullScoreRanking()
-      set({ fullData: data, fullLoading: false, fullLoadedAt: Date.now() })
+      set({ fullData: data, fullLoading: false, fullLoadedAt: Date.now(), error: null })
     } catch (e) {
       console.error('[ScoreStore] loadFullRanking failed:', e)
-      set({ fullLoading: false })
+      set({ fullLoading: false, error: String(e) })
     }
   },
 
@@ -140,22 +145,31 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
     if (state.alerts.length > 0 && Date.now() - state.alertsLoadedAt < STALE_MS) return
     try {
       const data = await fetchScoreAlerts()
-      set({ alerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now() })
-    } catch (e) { console.error('[ScoreStore] loadAlerts failed:', e) }
+      set({ alerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now(), error: null })
+    } catch (e) {
+      console.error('[ScoreStore] loadAlerts failed:', e)
+      set({ error: String(e) })
+    }
   },
 
   loadComboAlerts: async () => {
     try {
       const data = await fetchComboAlerts()
-      set({ comboAlerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now() })
-    } catch (e) { console.error('[ScoreStore] loadComboAlerts failed:', e) }
+      set({ comboAlerts: Array.isArray(data) ? data : data?.alerts || [], alertsLoadedAt: Date.now(), error: null })
+    } catch (e) {
+      console.error('[ScoreStore] loadComboAlerts failed:', e)
+      set({ error: String(e) })
+    }
   },
 
   loadAlertHistory: async () => {
     try {
       const data = await fetchAlertHistory()
-      set({ alertHistory: Array.isArray(data) ? data : data?.history || [], alertsLoadedAt: Date.now() })
-    } catch (e) { console.error('[ScoreStore] loadAlertHistory failed:', e) }
+      set({ alertHistory: Array.isArray(data) ? data : data?.history || [], alertsLoadedAt: Date.now(), error: null })
+    } catch (e) {
+      console.error('[ScoreStore] loadAlertHistory failed:', e)
+      set({ error: String(e) })
+    }
   },
 
   setBacktestResults: (results, summary) => set({ backtestResults: results, backtestSummary: summary }),
@@ -166,7 +180,7 @@ export const useScoreStore = create<ScoreState>((set, get) => ({
   setLoadingStates: (states) => set(states),
 
   invalidate: () => {
-    set({ filteredLoadedAt: 0, fullLoadedAt: 0, alertsLoadedAt: 0 })
+    set({ filteredLoadedAt: 0, fullLoadedAt: 0, alertsLoadedAt: 0, error: null })
   },
 
   // WS-driven auto-refresh for score ranking

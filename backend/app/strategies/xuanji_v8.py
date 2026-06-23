@@ -340,6 +340,7 @@ class XuanjiV8Strategy(Strategy):
                 row = day_data[day_data['code'] == code].iloc[0]
                 signals.append({
                     'code': code, 'action': 'buy', 'price': float(row['price']),
+                    'confidence': float(row['score']),
                     'score': float(row['score']),
                     'reason': f'v8评分{row["score"]:.3f}'
                 })

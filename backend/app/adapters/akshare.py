@@ -161,7 +161,8 @@ class AKShareAdapter(DataSourceAdapter):
                             stock_pb_map[code] = pb
                         if tr and tr > 0:
                             stock_turnover_map[code] = tr
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         except Exception as e:
@@ -197,7 +198,8 @@ class AKShareAdapter(DataSourceAdapter):
                             cached = json.load(f)
                             if isinstance(cached, dict):
                                 existing = {k: v for k, v in cached.items() if k != "_ts"}
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
                 all_stock_codes = set(stock_chg_map.keys()) | set(stock_price_map.keys()) | set(stock_pe_map.keys())
                 for code in all_stock_codes:
@@ -217,7 +219,8 @@ class AKShareAdapter(DataSourceAdapter):
                         existing[code]["net_main"] = fund_flow_map[code].get("net_main")
                         existing[code]["net_main_pct"] = fund_flow_map[code].get("net_main_pct")
                 _de._inject_spot_data(existing)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         # 6. 赎回/退市/可交换债 统一从 JSL bond_cb_redeem_jsl 拉取
@@ -474,7 +477,8 @@ class AKShareAdapter(DataSourceAdapter):
             if hasattr(value, "to_pydatetime"):
                 try:
                     return value.to_pydatetime().date()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             if hasattr(value, "date"):
                 return value.date()

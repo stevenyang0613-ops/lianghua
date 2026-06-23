@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # 妙想 MX 金融数据
     MX_APIKEY: str = ""
 
+    # 巨潮资讯（cninfo）在 macOS Electron 沙盒中可能失败，通过环境变量控制启用
+    CNINFO_ENABLED: bool = False
+
     # 日志
     LOG_DIR: str = str(Path.home() / "Library" / "Logs" / "LiangHua")
 
@@ -124,3 +127,29 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def reload_settings():
+    """运行时重新加载 .env 配置（仅更新用户可配置字段，不覆盖代码生成的值）
+    
+    注意：不重启调度器，数值字段更新后已运行的调度器间隔不会自动改变。
+    """
+    try:
+        import dotenv
+    except ImportError:
+        raise RuntimeError("python-dotenv 未安装，无法热重载配置。请安装: pip install python-dotenv")
+    dotenv.load_dotenv(_DEFAULT_ENV_FILE, override=False)
+    new_settings = Settings()
+    # 只同步简单类型字段，跳过运行时生成或路径类配置
+    skip_fields = {
+        'JWT_SECRET_KEY', 'ws_auth_token', 'db_path',
+        'DATABASE_URL', 'LOG_DIR', 'allowed_origins',
+    }
+    for name in new_settings.model_fields:
+        if name in skip_fields:
+            continue
+        val = getattr(new_settings, name)
+        old = getattr(settings, name, None)
+        if val != old:
+            setattr(settings, name, val)
+    return settings

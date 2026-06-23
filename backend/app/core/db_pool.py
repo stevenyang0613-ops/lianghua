@@ -263,7 +263,8 @@ class DatabaseConnectionManager:
                     # 无效连接，关闭
                     try:
                         conn.close()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                     conn = None
 
@@ -310,14 +311,16 @@ class DatabaseConnectionManager:
                 if conn_time and (datetime.now() - conn_time).total_seconds() > self.config.max_connection_age:
                     try:
                         conn.close()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                 elif self._validate_connection(conn):
                     self._pool.append(conn)
                 else:
                     try:
                         conn.close()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
                 self.monitor.update_metrics(
@@ -360,14 +363,16 @@ class DatabaseConnectionManager:
             for conn in self._pool:
                 try:
                     conn.close()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             self._pool.clear()
 
             for conn in self._in_use.values():
                 try:
                     conn.close()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             self._in_use.clear()
             self._connection_times.clear()

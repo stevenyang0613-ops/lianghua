@@ -5,7 +5,7 @@
 
 // 后端服务配置
 const BACKEND_HOST = '127.0.0.1'
-const BACKEND_PORT = 8765
+export const BACKEND_PORT = 8765
 let _actualPort = BACKEND_PORT
 let _portChangeListeners: ((port: number) => void)[] = []
 

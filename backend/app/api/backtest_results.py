@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -35,9 +35,16 @@ _STRATEGY_NAMES = {
 }
 
 
+def _week_start(d: date) -> date:
+    """将日期对齐到所在周的周一（周对齐缓存 key）"""
+    return d - timedelta(days=d.weekday())
+
+
 def _cache_path(strategy_key: str, start_date: date, end_date: date) -> str:
-    """生成缓存文件路径"""
-    return os.path.join(_CACHE_DIR, f"{strategy_key}_{start_date.isoformat()}_{end_date.isoformat()}.json")
+    """生成缓存文件路径（周对齐，避免每天生成新缓存）"""
+    start_week = _week_start(start_date)
+    end_week = _week_start(end_date)
+    return os.path.join(_CACHE_DIR, f"{strategy_key}_{start_week.isoformat()}_{end_week.isoformat()}.json")
 
 
 def _load_cache(strategy_key: str, start_date: date, end_date: date) -> Optional[dict]:

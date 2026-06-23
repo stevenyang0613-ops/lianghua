@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 from app.models.alert import AlertCondition, AlertTrigger, AlertType
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -165,7 +167,8 @@ async def test_alert_channel(request: Request):
     for callback in engine._callbacks:
         try:
             await callback(test_trigger)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
     return {"status": "ok", "test_trigger": test_trigger.model_dump()}
 

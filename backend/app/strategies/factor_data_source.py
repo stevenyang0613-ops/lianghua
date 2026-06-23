@@ -122,7 +122,8 @@ class FactorDataSource:
                                     if pd.notna(v) and 30 < float(v) < 70:
                                         base_pmi = float(v)
                                         break
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
                     result = {"default": base_pmi}
 

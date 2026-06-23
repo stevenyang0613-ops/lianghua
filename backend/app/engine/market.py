@@ -117,7 +117,8 @@ class MarketEngine:
                     set_bond_stock_codes(stock_codes)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[MarketEngine] set_bond_stock_codes suppressed: {e}")
                 pass
 
             # 数据增强：填充 industry/pe/pb/roe/gpm 等字段（等待完成，确保数据一致）
@@ -383,84 +384,19 @@ class MarketEngine:
             # 仅尝试 DuckDB 兜底，不调用 AKShare 以避免 C 扩展 segfault
             if self._storage:
                 try:
-                    rows = self._storage.get_latest_quotes()
-                    if rows:
-                        # 复用 _load_from_storage 的逻辑
-                        from app.models.convertible import ConvertibleQuote
-                        bonds = []
-                        from app.engine.filters import is_delisted_or_exchangeable
-                        for r in rows:
-                            try:
-                                price_raw = r.get("price")
-                                if price_raw is None:
-                                    continue
-                                price = float(price_raw)
-                                if price <= 0:
-                                    continue
-                                code = str(r.get("code", ""))
-                                name = str(r.get("name", ""))
-                                if not code or not name:
-                                    continue
-                                stock_code = str(r.get("stock_code", ""))
-                                _v = r.get("change_pct")
-                                change_pct = float(_v) if _v is not None else None
-                                _v = r.get("stock_price")
-                                stock_price = float(_v) if _v is not None else None
-                                _v = r.get("stock_change_pct")
-                                stock_change_pct = float(_v) if _v is not None else None
-                                _v = r.get("conversion_price")
-                                conversion_price = float(_v) if _v is not None else None
-                                _v = r.get("conversion_value")
-                                conversion_value = float(_v) if _v is not None else None
-                                _v = r.get("premium_ratio")
-                                premium_ratio = float(_v) if _v is not None else None
-                                _v = r.get("dual_low")
-                                dual_low = float(_v) if _v is not None else None
-                                _v = r.get("volume")
-                                volume = float(_v) if _v is not None else None
-                                _v = r.get("ytm")
-                                ytm = float(_v) if _v is not None else None
-                                _v = r.get("remaining_years")
-                                remaining_years = float(_v) if _v is not None else None
-                                _v = r.get("forced_call_days")
-                                forced_call_days = int(_v) if _v is not None else None
-                                is_called = bool(r.get("is_called", False))
-                                call_status = str(r.get("call_status", ""))
-                                last_trade_date = r.get("last_trade_date")
-                                maturity_date = r.get("maturity_date")
-                                _v = r.get("redemption_price")
-                                redemption_price = float(_v) if _v is not None else None
-                                rating = r.get("rating")
-                                if price <= 0:
-                                    continue
-                                bonds.append(ConvertibleQuote(
-                                    code=code, name=name, stock_code=stock_code,
-                                    price=price, change_pct=change_pct, stock_price=stock_price,
-                                    stock_change_pct=stock_change_pct, conversion_price=conversion_price,
-                                    conversion_value=conversion_value, premium_ratio=premium_ratio,
-                                    dual_low=dual_low, volume=volume, ytm=ytm,
-                                    remaining_years=remaining_years, forced_call_days=forced_call_days,
-                                    is_called=is_called, call_status=call_status,
-                                    last_trade_date=last_trade_date, maturity_date=maturity_date,
-                                    redemption_price=redemption_price, rating=rating,
-                                    turnover_rate=r.get("turnover_rate"),
-                                    net_capital_flow=r.get("net_capital_flow"),
-                                    net_capital_flow_pct=r.get("net_capital_flow_pct"),
-                                ))
-                            except (ValueError, TypeError, KeyError):
-                                continue
-                        if bonds:
-                            self._quotes = {b.code: b for b in bonds}
-                            logger.info(f"[MarketEngine] get_all_quotes loaded {len(bonds)} bonds from storage fallback")
-                            # Enrich immediately so caller sees pe/pb/industry/roe/gpm/iv/etc.
-                            try:
-                                from app.engine.data_enrich import enrich_quotes
-                                enriched = await enrich_quotes(bonds)
-                                if enriched:
-                                    self._quotes = {b.code: b for b in enriched}
-                                    logger.info(f"[MarketEngine] get_all_quotes enriched {len(enriched)} bonds")
-                            except Exception as enr_e:
-                                logger.warning(f"[MarketEngine] get_all_quotes enrich failed: {enr_e}")
+                    bonds = self._load_from_storage()
+                    if bonds:
+                        self._quotes = {b.code: b for b in bonds}
+                        logger.info(f"[MarketEngine] get_all_quotes loaded {len(bonds)} bonds from storage fallback")
+                        # Enrich immediately so caller sees pe/pb/industry/roe/gpm/iv/etc.
+                        try:
+                            from app.engine.data_enrich import enrich_quotes
+                            enriched = await enrich_quotes(bonds)
+                            if enriched:
+                                self._quotes = {b.code: b for b in enriched}
+                                logger.info(f"[MarketEngine] get_all_quotes enriched {len(enriched)} bonds")
+                        except Exception as enr_e:
+                            logger.warning(f"[MarketEngine] get_all_quotes enrich failed: {enr_e}")
                 except Exception as e:
                     logger.debug(f"[MarketEngine] get_all_quotes storage fallback failed: {e}")
 

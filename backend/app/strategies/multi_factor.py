@@ -132,8 +132,9 @@ class MultiFactorStrategy(Strategy):
         buy_list = selected[['code', 'price', 'score']].copy()
         buy_list['reason'] = buy_list['score'].apply(lambda x: f'评分{x:.3f}')
         signals.extend([
-            {'code': code, 'action': 'buy', 'price': float(price), 'reason': reason}
-            for code, price, reason in zip(buy_list['code'], buy_list['price'], buy_list['reason'])
+            {'code': code, 'action': 'buy', 'price': float(price),
+             'confidence': float(score), 'score': float(score), 'reason': reason}
+            for code, price, score, reason in zip(buy_list['code'], buy_list['price'], buy_list['score'], buy_list['reason'])
         ])
 
         self._prev_selected = new_codes

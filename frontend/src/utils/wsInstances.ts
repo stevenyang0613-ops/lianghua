@@ -80,40 +80,31 @@ const WS_BASE = getWsBase()
 
 /**
  * 构建 WebSocket URL。
- * 如果 token 为空，先尝试通过 health 接口异步获取；
- * 获取失败或仍为空时，直接返回不带 token 的 URL（避免发送无效 ?token= 请求）。
+ * 如果 token 为空，直接返回 path；
+ * 如果 URL 中已有 token 参数，不再重复添加（避免 refreshWsToken 后重复 ?token=）。
  */
 function buildUrl(path: string): string {
   const token = getToken()
-  if (token) {
-    const sep = path.includes('?') ? '&' : '?'
-    return `${path}${sep}token=${encodeURIComponent(token)}`
-  }
-  return path
+  if (!token) return path
+  // 防御：URL 已含 token 时不再追加
+  if (path.includes('token=')) return path
+  const sep = path.includes('?') ? '&' : '?'
+  return `${path}${sep}token=${encodeURIComponent(token)}`
 }
 
 /**
- * 创建 WSReconnect 实例并包装 connect() 方法。
- * 每次连接前重新从 localStorage 读取 token，确保永远使用最新 token。
- * 支持空 token 时通过 health 接口降级获取。
+ * 创建 WSReconnect 实例。
+ * 初始 URL 通过 buildUrl 构建，token 更新由 refreshWsToken 统一调用 reset+connect 处理。
+ * connect 与 url 设置逻辑统一在 WSReconnect 类内部（单一定义）。
  */
 function createWsReconnect(basePath: string, wsId: string): WSReconnect {
   const url = buildUrl(`${WS_BASE}${basePath}`)
-  const ws = new WSReconnect(url, {
+  return new WSReconnect(url, {
     initialDelay: 1000,
     maxDelay: 30000,
     heartbeatInterval: getHeartbeatInterval(),
     staleThresholdMs: getStaleThresholdMs(),
   }, wsId)
-
-  const origConnect = ws.connect.bind(ws)
-  ws.connect = async function(_overrideUrl?: string) {
-    const freshUrl = buildUrl(`${WS_BASE}${basePath}`)
-    this.url = freshUrl
-    return origConnect(freshUrl)
-  }
-
-  return ws
 }
 
 export const marketWs = createWsReconnect('/api/v1/ws/market', 'market')

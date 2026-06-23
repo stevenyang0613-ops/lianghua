@@ -162,7 +162,8 @@ def fresh(ttl: int, data, cache_path=None) -> bool:
             p = Path(cache_path)
             if p.exists():
                 ts = p.stat().st_mtime
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
     return time.time() - ts < ttl
 
@@ -231,7 +232,8 @@ def _acquire_file_lock(lock_path: Path, timeout: float = 5.0):
         f = open(lock_path, "w")
         portalocker.lock(f, portalocker.LOCK_EX, timeout=timeout)
         return f
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     if hasattr(os, "O_EXLOCK"):
         # BSD/macOS 专用：打开时直接加排他锁
@@ -257,7 +259,8 @@ class _BSDLock:
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
             os.close(self._fd)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
 
@@ -283,7 +286,8 @@ class _FallbackLock:
         try:
             if self.lock_path.exists():
                 self.lock_path.unlink()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
 

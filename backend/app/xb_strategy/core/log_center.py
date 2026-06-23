@@ -241,7 +241,8 @@ class LogstashHandler(Handler):
             if self._socket:
                 try:
                     self._socket.close()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             self._socket = None
             print(f"Logstash connection error: {e}")
@@ -263,7 +264,8 @@ class LogstashHandler(Handler):
         if self._socket:
             try:
                 self._socket.close()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         super().close()

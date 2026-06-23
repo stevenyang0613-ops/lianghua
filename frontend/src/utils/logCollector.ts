@@ -383,9 +383,13 @@ export class LogCollector {
       const merged = [...logs, ...existing].slice(0, this.config.maxStorageSize)
       localStorage.setItem(this.config.storageKey, JSON.stringify(merged))
     } catch (error) {
-      // 存储空间不足，清理旧日志
-      console.warn('[LogCollector] Storage full, clearing old logs')
-      const reduced = logs.slice(0, Math.floor(this.config.maxStorageSize / 2))
+      // 存储空间不足 — 保留最新的 maxStorageSize/2 条，而非丢弃全部日志
+      console.warn('[LogCollector] Storage full, keeping latest half of logs')
+      const existing = this.loadFromStorage()
+      const merged = [...logs, ...existing]
+      // 按时间戳降序排序，取最新的
+      merged.sort((a, b) => b.timestamp - a.timestamp)
+      const reduced = merged.slice(0, Math.floor(this.config.maxStorageSize / 2))
       try { localStorage.setItem(this.config.storageKey, JSON.stringify(reduced)) } catch { /* silent fail */ }
     }
   }

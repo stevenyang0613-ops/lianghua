@@ -13,6 +13,9 @@ interface StrategyState {
   signalStats: SignalStats | null
   statsLoadedAt: number
 
+  // 全局错误状态
+  error: string | null
+
   loadStrategies: () => Promise<void>
   selectStrategy: (strategy: StrategyInfo) => Promise<void>
   loadSignalHistory: (strategyId: string, limit?: number) => Promise<void>
@@ -34,36 +37,38 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   signalStats: null,
   statsLoadedAt: 0,
 
+  error: null,
+
   loadStrategies: async () => {
     const state = get()
     if (state.loading) return
     if (state.strategies.length > 0 && Date.now() - state.loadedAt < STALE_MS) return
 
-    set({ loading: true })
+    set({ loading: true, error: null })
     try {
       const list = await fetchStrategies()
       const selected = state.selectedStrategy || (list.length > 0 ? list[0] : null)
-      set({ strategies: list, selectedStrategy: selected, loading: false, loadedAt: Date.now() })
+      set({ strategies: list, selectedStrategy: selected, loading: false, loadedAt: Date.now(), error: null })
     } catch (e) {
       console.error('[StrategyStore] loadStrategies failed:', e)
-      set({ loading: false })
+      set({ loading: false, error: String(e) })
     }
   },
 
   selectStrategy: async (strategy) => {
-    set({ selectedStrategy: strategy })
+    set({ selectedStrategy: strategy, error: null })
     // Load history for the selected strategy
     await get().loadSignalHistory(strategy.id, 50)
   },
 
   loadSignalHistory: async (strategyId, limit = 50) => {
-    set({ signalHistoryLoading: true })
+    set({ signalHistoryLoading: true, error: null })
     try {
       const data = await fetchSignalHistory(strategyId, undefined, limit)
-      set({ signalHistory: data.signals || [], signalHistoryLoading: false })
+      set({ signalHistory: data.signals || [], signalHistoryLoading: false, error: null })
     } catch (e) {
       console.error('[StrategyStore] loadSignalHistory failed:', e)
-      set({ signalHistoryLoading: false })
+      set({ signalHistoryLoading: false, error: String(e) })
     }
   },
 
@@ -72,11 +77,14 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     if (state.signalStats && Date.now() - state.statsLoadedAt < STALE_MS) return
     try {
       const data = await fetchSignalStats()
-      set({ signalStats: data, statsLoadedAt: Date.now() })
-    } catch (e) { console.error('[StrategyStore] loadStats failed:', e) }
+      set({ signalStats: data, statsLoadedAt: Date.now(), error: null })
+    } catch (e) {
+      console.error('[StrategyStore] loadStats failed:', e)
+      set({ error: String(e) })
+    }
   },
 
   invalidate: () => {
-    set({ loadedAt: 0, statsLoadedAt: 0 })
+    set({ loadedAt: 0, statsLoadedAt: 0, error: null })
   },
 }))

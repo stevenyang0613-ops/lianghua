@@ -437,7 +437,8 @@ class FactorOrthogonalizer:
                 beta = np.linalg.lstsq(X, y, rcond=None)[0]
                 residual = y - X.dot(beta)
                 result[col] = residual
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         # 标准化

@@ -759,6 +759,7 @@ class XuanjiTwelveFactorStrategy(Strategy):
                 if not was_held and rank_i <= actual_hold:
                     signals.append({
                         'code': code, 'action': 'buy', 'price': float(row['price']),
+                        'confidence': float(row['score']),
                         'score': float(row['score']),
                         'reason': f'璇玑v5评分{row["score"]:.3f}[{market_state}]{reason}'
                     })

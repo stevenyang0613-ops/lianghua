@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from collections import Counter
 import json
+import logging
+logger = logging.getLogger(__name__)
 
 try:
     from transformers import pipeline, AutoModel, AutoTokenizer
@@ -57,7 +59,8 @@ class ReportAnalyzer:
                     model="uer/roberta-base-finetuned-chinanews-chinese",
                     device=-1
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
         
         # 自定义词典
@@ -188,7 +191,8 @@ class ReportAnalyzer:
                     label='正面' if sentiment_score > 0.3 else ('负面' if sentiment_score < -0.3 else '中性'),
                     confidence=score
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
         
         # 基于词典的情感分析

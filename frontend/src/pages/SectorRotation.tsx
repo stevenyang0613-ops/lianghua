@@ -247,7 +247,7 @@ export default function SectorRotation() {
   const loadStrategyInfo=async()=>{
     if (!isMountedRef.current) return
     try{const list=await fetchStrategies(); if (!isMountedRef.current) return; setStrategyInfo(list.find(s=>s.id==='sector_rotation')||null)}
-    catch(e:any){}
+    catch(e:any){ console.error('[SectorRotation] loadStrategyInfo failed:', e); }
   }
 
   useEffect(()=>{
@@ -287,14 +287,134 @@ export default function SectorRotation() {
     finally{ if (isMountedRef.current) setDsLoading(false)}
   }
 
-  const loadNorth=async()=>{ if (!isMountedRef.current) return; setNorthLoading(true);try{const data=await fetchNorthCapital(); if (!isMountedRef.current) return; setNorthData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('北向资金: '+e?.message)}finally{ if (isMountedRef.current) setNorthLoading(false)}}
-  const loadMargin=async()=>{ if (!isMountedRef.current) return; setMarginLoading(true);try{const data=await fetchMarginStocks(); if (!isMountedRef.current) return; setMarginData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('融资融券: '+e?.message)}finally{ if (isMountedRef.current) setMarginLoading(false)}}
-  const loadLhb=async()=>{ if (!isMountedRef.current) return; setLhbLoading(true);try{const data=await fetchLhb(); if (!isMountedRef.current) return; setLhbData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('龙虎榜: '+e?.message)}finally{ if (isMountedRef.current) setLhbLoading(false)}}
-  const loadBlock=async()=>{ if (!isMountedRef.current) return; setBlockLoading(true);try{const data=await fetchBlockTrade(); if (!isMountedRef.current) return; setBlockData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('大宗交易: '+e?.message)}finally{ if (isMountedRef.current) setBlockLoading(false)}}
-  const loadHolder=async()=>{ if (!isMountedRef.current) return; setHolderLoading(true);try{const data=await fetchHolderNum(); if (!isMountedRef.current) return; setHolderData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('股东户数: '+e?.message)}finally{ if (isMountedRef.current) setHolderLoading(false)}}
-  const loadForecast=async()=>{ if (!isMountedRef.current) return; setForecastLoading(true);try{const data=await fetchEarningsForecast(); if (!isMountedRef.current) return; setForecastData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('业绩预告: '+e?.message)}finally{ if (isMountedRef.current) setForecastLoading(false)}}
-  const loadExpress=async()=>{ if (!isMountedRef.current) return; setExpressLoading(true);try{const data=await fetchEarningsExpress(); if (!isMountedRef.current) return; setExpressData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('业绩快报: '+e?.message)}finally{ if (isMountedRef.current) setExpressLoading(false)}}
-  const loadRelease=async()=>{ if (!isMountedRef.current) return; setReleaseLoading(true);try{const data=await fetchRestrictedRelease(); if (!isMountedRef.current) return; setReleaseData(data)}catch(e:any){ if (!isMountedRef.current) return; message.error('限售解禁: '+e?.message)}finally{ if (isMountedRef.current) setReleaseLoading(false)}}
+  const loadNorth = async () => {
+    // 竞态防护：组件已卸载则直接返回
+    if (!isMountedRef.current) return
+    setNorthLoading(true)
+    try {
+      const data = await fetchNorthCapital()
+      if (!isMountedRef.current) return
+      setNorthData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('北向资金: ' + e?.message)
+      console.error('[SectorRotation] loadNorth failed:', e)
+    } finally {
+      if (isMountedRef.current) setNorthLoading(false)
+    }
+  }
+
+  const loadMargin = async () => {
+    if (!isMountedRef.current) return
+    setMarginLoading(true)
+    try {
+      const data = await fetchMarginStocks()
+      if (!isMountedRef.current) return
+      setMarginData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('融资融券: ' + e?.message)
+      console.error('[SectorRotation] loadMargin failed:', e)
+    } finally {
+      if (isMountedRef.current) setMarginLoading(false)
+    }
+  }
+
+  const loadLhb = async () => {
+    if (!isMountedRef.current) return
+    setLhbLoading(true)
+    try {
+      const data = await fetchLhb()
+      if (!isMountedRef.current) return
+      setLhbData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('龙虎榜: ' + e?.message)
+      console.error('[SectorRotation] loadLhb failed:', e)
+    } finally {
+      if (isMountedRef.current) setLhbLoading(false)
+    }
+  }
+
+  const loadBlock = async () => {
+    if (!isMountedRef.current) return
+    setBlockLoading(true)
+    try {
+      const data = await fetchBlockTrade()
+      if (!isMountedRef.current) return
+      setBlockData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('大宗交易: ' + e?.message)
+      console.error('[SectorRotation] loadBlock failed:', e)
+    } finally {
+      if (isMountedRef.current) setBlockLoading(false)
+    }
+  }
+
+  const loadHolder = async () => {
+    if (!isMountedRef.current) return
+    setHolderLoading(true)
+    try {
+      const data = await fetchHolderNum()
+      if (!isMountedRef.current) return
+      setHolderData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('股东户数: ' + e?.message)
+      console.error('[SectorRotation] loadHolder failed:', e)
+    } finally {
+      if (isMountedRef.current) setHolderLoading(false)
+    }
+  }
+
+  const loadForecast = async () => {
+    if (!isMountedRef.current) return
+    setForecastLoading(true)
+    try {
+      const data = await fetchEarningsForecast()
+      if (!isMountedRef.current) return
+      setForecastData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('业绩预告: ' + e?.message)
+      console.error('[SectorRotation] loadForecast failed:', e)
+    } finally {
+      if (isMountedRef.current) setForecastLoading(false)
+    }
+  }
+
+  const loadExpress = async () => {
+    if (!isMountedRef.current) return
+    setExpressLoading(true)
+    try {
+      const data = await fetchEarningsExpress()
+      if (!isMountedRef.current) return
+      setExpressData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('业绩快报: ' + e?.message)
+      console.error('[SectorRotation] loadExpress failed:', e)
+    } finally {
+      if (isMountedRef.current) setExpressLoading(false)
+    }
+  }
+
+  const loadRelease = async () => {
+    if (!isMountedRef.current) return
+    setReleaseLoading(true)
+    try {
+      const data = await fetchRestrictedRelease()
+      if (!isMountedRef.current) return
+      setReleaseData(data)
+    } catch (e: any) {
+      if (!isMountedRef.current) return
+      message.error('限售解禁: ' + e?.message)
+      console.error('[SectorRotation] loadRelease failed:', e)
+    } finally {
+      if (isMountedRef.current) setReleaseLoading(false)
+    }
+  }
 
   useEffect(()=>{
     isMountedRef.current = true

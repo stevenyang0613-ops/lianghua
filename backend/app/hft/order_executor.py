@@ -8,6 +8,8 @@ from enum import Enum
 from collections import deque
 import threading
 import queue
+import logging
+logger = logging.getLogger(__name__)
 
 
 class OrderStatus(Enum):
@@ -327,7 +329,8 @@ class OrderExecutor:
         for callback in self.on_fill_callbacks:
             try:
                 callback(report)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     def _notify_status_change(self, order: Order):
@@ -335,7 +338,8 @@ class OrderExecutor:
         for callback in self.on_status_callbacks:
             try:
                 callback(order)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     def add_fill_callback(self, callback: Callable):

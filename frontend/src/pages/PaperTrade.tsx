@@ -1,26 +1,33 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps, Modal } from 'antd'
+import { Card, Row, Col, Statistic, Button, Tabs, Table, Space, message, Spin, Tag, Empty, Form, InputNumber, Select, Input, Popconfirm, Alert, Typography, Steps } from 'antd'
 import { PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, RiseOutlined, FallOutlined, FundOutlined, SettingOutlined, DeleteOutlined, RocketOutlined, ThunderboltOutlined, LineChartOutlined } from '@ant-design/icons'
 import ReactEChartsCore from 'echarts-for-react/lib/core'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { fetchPaperAccounts, createPaperAccount, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount } from '../services/api'
+import { fetchPaperAccounts, createPaperAccount, startPaperAccount, stopPaperAccount, resetPaperAccount, fetchPaperPositions, fetchPaperOrders, fetchPaperEquityCurve, fetchPaperSignals, updatePaperParams, deletePaperAccount, fetchStrategies } from '../services/api'
 import { useEverRun } from '../hooks/useEverRun'
 import { useElectron } from '../hooks/useElectron'
+
+// StrategyInfo 用于动态 tab
+interface StrategyInfo { id: string; name: string; description?: string }
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 interface ParamDef { name: string; label: string; type: string; default: any; min_val?: number; max_val?: number; options?: string[]; description?: string }
-interface PaperAccountData { id: string; strategy_id: string; strategy_name: string; is_running: boolean; initial_cash: number; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number; params: Record<string, any>; param_defs: ParamDef[]; created_at: string }
+interface PaperAccountData { id: string; strategy_id: string; strategy_name: string; is_running: boolean; initial_cash: number; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number; params: Record<string, any>; param_defs: ParamDef[]; created_at: string; trade_day_count: number; rebalance_days: number }
 interface PositionData { code: string; name: string; volume: number; cost_price: number; current_price: number; market_value: number; profit_pct: number; profit_amount: number }
 interface OrderData { id: string; code: string; name: string; side: string; price: number; volume: number; filled_volume: number; status: string; created_at: string; reject_reason: string }
 interface EquityPoint { ts: string; total_asset: number; cash: number; market_value: number; total_profit: number; total_profit_pct: number }
 interface SignalData { id: string; code: string; name: string; action: string; price: number; reason: string; confidence: number; ts: string; executed: boolean }
 
-const STRATEGY_LABELS: Record<string, string> = { xuanji_twelve: '璇玑十二因子', xibu_seven: '西部七维', fusion: '融合策略' }
-const STRATEGY_IDS = ['xuanji_twelve', 'xibu_seven', 'fusion']
+const STRATEGY_LABELS: Record<string, string> = {
+  'xuanji_12_factor': '璇玑十二因子',
+  'xibu_seven_dimension': '西部七维',
+  'hybrid': '融合策略',
+}
+const STRATEGY_IDS = Object.keys(STRATEGY_LABELS)
 
 function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; accounts: PaperAccountData[]; onRefresh: () => void }) {
   const account = accounts.find(a => a.strategy_id === strategyId)
@@ -282,6 +289,17 @@ function StrategyTab({ strategyId, accounts, onRefresh }: { strategyId: string; 
               <Tag color={account.is_running ? 'green' : 'default'}>{account.is_running ? '运行中' : '已停止'}</Tag>
               <span style={{ color: '#999', fontSize: 12 }}>初始资金: ¥{account.initial_cash?.toLocaleString()}</span>
             </div>
+            {account.is_running && (
+              <div style={{ marginTop: 8, padding: '4px 8px', background: '#f6ffed', borderRadius: 4, border: '1px solid #b7eb8f' }}>
+                <span style={{ color: '#52c41a', fontSize: 12 }}>
+                  {(() => {
+                    const rd = account.rebalance_days || account.params?.rebalance_days || 7
+                    const d = (rd - ((account.trade_day_count || 0) % rd)) % rd
+                    return d <= 1 ? '⚡ 距离调仓还有 1 个交易日' : `⏳ 距离调仓还有 ${d} 个交易日`
+                  })()}
+                </span>
+              </div>
+            )}
           </Card>
         </Col>
         <Col xs={24} md={16}>
@@ -360,7 +378,28 @@ export default function PaperTrade() {
   // warningShownAt 由 useEffect 的 setTimeout 在 10 秒后清除，无需在此检查 Date.now()
   const showRefreshWarning = (refreshFailCount >= 5 || warningShownAt !== null) && !dismissRefreshWarning
   const [loadingAccounts, setLoadingAccounts] = useState(true)
-  const [activeTab, setActiveTab] = useState('xuanji_twelve')
+  const [activeTab, setActiveTab] = useState('')
+  const [strategyList, setStrategyList] = useState<StrategyInfo[]>([])
+  const [loadingStrategies, setLoadingStrategies] = useState(false)
+
+  // 加载策略列表（动态 tab）
+  useEffect(() => {
+    let cancelled = false
+    setLoadingStrategies(true)
+    fetchStrategies().then(list => {
+      if (cancelled) return
+      // 过滤只保留支持模拟交易的策略（params 中有 rebalance_days 的）
+      const supported = list.filter((s: any) => s.id && s.name)
+      setStrategyList(supported)
+      // 默认选中第一个
+      if (supported.length > 0 && !activeTab) {
+        setActiveTab(supported[0].id)
+      }
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setLoadingStrategies(false)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // useRef 缓存上次响应值，避免 30s 轮询导致 React 重渲染波纹
   const prevSnapshotRef = useRef<{ accounts: PaperAccountData[]; failCount: number; totalFails: number; threshold: number } | null>(null)
@@ -421,7 +460,12 @@ export default function PaperTrade() {
         setWarningShownAt(Date.now())
       }
       // 警告恢复由 useEffect 的 setTimeout 统一管理（最小显示 10 秒）
-    } catch (e: unknown) { console.warn('Load paper accounts failed:', e) }
+    } catch (e: unknown) {
+      console.warn('Load paper accounts failed:', e)
+      if (isMountedRef.current) {
+        message.error('加载账户失败，请检查网络连接')
+      }
+    }
     finally { if (isMountedRef.current) setLoadingAccounts(false) }
   }, [isElectron, showNotification])
 
@@ -473,17 +517,17 @@ export default function PaperTrade() {
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
-        items={STRATEGY_IDS.map(sid => ({
-          key: sid,
+        items={strategyList.map((s: StrategyInfo) => ({
+          key: s.id,
           label: (
             <span>
-              {STRATEGY_LABELS[sid] || sid}
-              {loadingAccounts && sid === activeTab && (
+              {s.name}
+              {loadingAccounts && s.id === activeTab && (
                 <Spin size="small" style={{ marginLeft: 8 }} />
               )}
             </span>
           ),
-          children: <StrategyTab strategyId={sid} accounts={accounts} onRefresh={loadAccounts} />,
+          children: <StrategyTab strategyId={s.id} accounts={accounts} onRefresh={loadAccounts} />,
         }))}
       />
     </div>

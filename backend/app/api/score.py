@@ -1977,7 +1977,8 @@ async def health_check(request: Request):
         try:
             storage.conn.execute("SELECT 1")
             storage_ok = True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
 
     cache_stats = _get_cache_stats()

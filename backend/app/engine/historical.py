@@ -707,7 +707,8 @@ class HistoricalDataLoader:
                                 WHERE snapshot_date = ? AND code = ? AND iv IS NULL
                             """, (hv, snap_date, code))
                             updated += 1
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f"[HistoricalFactors] IV update suppressed: {e}")
                             pass
             return updated
         except Exception as e:

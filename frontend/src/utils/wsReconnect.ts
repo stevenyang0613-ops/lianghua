@@ -105,10 +105,14 @@ export class WSReconnect {
     this.useIPC = typeof window !== 'undefined' && !!window.electronAPI?.wsConnect
   }
 
+  setUrl(url: string): void {
+    this.url = url
+  }
+
   async connect(overrideUrl?: string): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') return
     this.isManualClose = false
-    if (overrideUrl) this.url = overrideUrl
+    if (overrideUrl) this.setUrl(overrideUrl)
 
     // 空 token 降级：如果 URL 中没有 token 且配置了 fetchToken，先尝试获取 token
     if (this.config.fetchToken && !this.url.includes('token=')) {
@@ -249,7 +253,12 @@ export class WSReconnect {
     if (!this.ws) return
     this.ws.onopen = () => { this.clearConnectionTimeout(); this.onConnected() }
     this.ws.onclose = (e) => { this.clearConnectionTimeout(); this.onDisconnected(e.code, e.reason) }
-    this.ws.onerror = (e) => console.error('[WS] 错误:', e)
+    this.ws.onerror = (e) => {
+      console.error('[WS] 错误:', e)
+      this._addLog('error', `WebSocket error: ${(e as ErrorEvent).message || 'unknown'}`)
+      this.clearConnectionTimeout()
+      this.onDisconnected(1006, 'WebSocket error')
+    }
     this.ws.onmessage = (e) => this.handleMessage(e.data)
   }
 
@@ -561,7 +570,7 @@ export class WSReconnect {
 
   reset(url?: string): void {
     this.disconnect()
-    if (url) this.url = url
+    if (url) this.setUrl(url)
     this.attempts = 0
     this.currentDelay = 0
     this.messageQueue = []
@@ -603,6 +612,11 @@ export class WSReconnect {
         if (!this.isManualClose) {
           console.warn(`[WS ${this.wsId}] Stale detected (${elapsed}ms), auto-reconnecting`)
           this._addLog('reconnect', `Stale detected, auto-reconnecting`)
+          // 竞态防护：确认当前仍是 connected 状态，避免并发 staleCheck 重复触发重连
+          if (this.state !== 'connected') {
+            this._addLog('reconnect', `Stale check race avoided: state=${this.state}`)
+            return
+          }
           this.disconnect()
           this.connect()
         }

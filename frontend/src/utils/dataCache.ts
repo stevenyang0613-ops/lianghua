@@ -484,6 +484,36 @@ export async function clearAllCache(): Promise<void> {
   }
 }
 
+// 删除指定 key 的缓存
+export async function removeCacheKey(key: string): Promise<void> {
+  try {
+    const database = await openDB()
+    const tx = database.transaction('cache', 'readwrite')
+    const store = tx.objectStore('cache')
+    store.delete(key)
+  } catch (error) {
+    console.error('[Cache] Failed to remove key:', key, error)
+  }
+}
+
+// 启动时清除所有状态类/配置类接口的旧缓存
+// 避免缓存中残留错误状态（如 MX 未配置时的 configured: false）
+const STATUS_CACHE_KEYS = [
+  'mx_status',
+  'cache_stats',
+  'notification_channels',
+  'score_alerts',
+  'xuanji_ds_health',
+  'xuanji_summary',
+]
+
+export async function clearStatusCacheOnStartup(): Promise<void> {
+  for (const key of STATUS_CACHE_KEYS) {
+    await removeCacheKey(key)
+  }
+  console.log('[Cache] Cleared status/config cache keys on startup:', STATUS_CACHE_KEYS)
+}
+
 // 获取所有缓存数据
 export async function getAllCacheData(): Promise<{ key: string; data: unknown; timestamp: number; expiresAt: number }[]> {
   try {

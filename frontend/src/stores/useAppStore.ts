@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { marketWs, signalsWs } from '../utils/wsInstances'
 
+interface DataSourceStatus {
+  configured?: boolean
+  enabled?: boolean
+}
+
 interface AppState {
   backendConnected: boolean
   setBackendConnected: (v: boolean) => void
@@ -9,6 +14,8 @@ interface AppState {
   setSelectedBond: (code: string | null) => void
   marketWsConnected: boolean
   signalWsConnected: boolean
+  dataSources: Record<string, DataSourceStatus> | null
+  setDataSources: (v: Record<string, DataSourceStatus> | null) => void
 }
 
 // 使用模块级标志防止 HMR 热更新时重复注册监听器
@@ -43,6 +50,8 @@ export const useAppStore = create<AppState>()(
       setSelectedBond: (code) => set({ selectedBond: code }),
       marketWsConnected: marketWs.isConnected(),
       signalWsConnected: signalsWs.isConnected(),
+      dataSources: null,
+      setDataSources: (v) => set({ dataSources: v }),
     }),
     {
       name: 'lianghua-app',

@@ -6,6 +6,8 @@ from typing import Optional, Any, Dict, List
 from functools import wraps
 from collections import OrderedDict
 import time
+import logging
+logger = logging.getLogger(__name__)
 
 try:
     import redis.asyncio as aioredis
@@ -97,7 +99,8 @@ class CacheManager:
                     return parsed
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
         
         return None
@@ -112,7 +115,8 @@ class CacheManager:
                 await self.redis_client.setex(key, ttl, json.dumps(value))
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     async def delete(self, key: str):
@@ -122,7 +126,8 @@ class CacheManager:
                 await self.redis_client.delete(key)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     async def delete_pattern(self, pattern: str):
@@ -140,7 +145,8 @@ class CacheManager:
                     await self.redis_client.delete(*keys)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     async def get_stats(self) -> Dict:

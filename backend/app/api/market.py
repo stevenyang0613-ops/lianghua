@@ -448,7 +448,7 @@ def _save_rec_history(recs: dict, industries: list[dict] | None = None) -> None:
             if old_fp.stem < cutoff:
                 old_fp.unlink(missing_ok=True)
     except Exception:
-        pass  # 历史保存失败不影响主流程
+        logger.debug("[Market] Failed to cleanup old rec history files")
 
 
 def _load_rec_history(days: int = 30) -> list[dict]:
@@ -462,7 +462,8 @@ def _load_rec_history(days: int = 30) -> list[dict]:
                 data = _json.load(f)
             data["date"] = fp.stem
             result.append(data)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Suppressed: {e}")
         pass
     return result
 

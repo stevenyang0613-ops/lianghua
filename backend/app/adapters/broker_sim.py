@@ -63,7 +63,8 @@ class SimBroker:
                 pos = self._positions[code]
                 total_cost_existing = pos.cost_price * pos.volume
                 total_volume = pos.volume + volume
-                pos.cost_price = round((total_cost_existing + amount) / total_volume, 4)
+                if total_volume > 0:
+                    pos.cost_price = round((total_cost_existing + amount) / total_volume, 4)
                 pos.volume = total_volume
                 pos.available_volume = total_volume
             else:
@@ -117,7 +118,10 @@ class SimBroker:
             if q:
                 pos.current_price = q.price
                 pos.market_value = q.price * pos.volume
-                pos.profit_pct = round((q.price - pos.cost_price) / pos.cost_price * 100, 2)
+                if pos.cost_price and pos.cost_price > 0:
+                    pos.profit_pct = round((q.price - pos.cost_price) / pos.cost_price * 100, 2)
+                else:
+                    pos.profit_pct = 0.0
                 pos.profit_amount = round((q.price - pos.cost_price) * pos.volume, 2)
 
         self._account.market_value = sum(p.market_value for p in self._positions.values())

@@ -6,6 +6,8 @@ from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from app.models.convertible import ConvertibleQuote
+import logging
+logger = logging.getLogger(__name__)
 
 
 class AnalysisEngine:
@@ -284,7 +286,8 @@ class AnalysisEngine:
                 codes = [b.code for b in bonds if AnalysisEngine.is_valid_bond(b, min_volume=min_volume)]
                 if codes:
                     history_batch = storage.get_quote_history_batch(codes, limit=10, start_date=start_date, end_date=end_date)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         results = []
@@ -449,7 +452,8 @@ class AnalysisEngine:
                 try:
                     revision_history = storage.get_revision_history(b.code)
                     revision_history_count = len(revision_history) if revision_history else 0
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
 
             history_bonus = min(revision_history_count * 5, 15)
@@ -499,7 +503,8 @@ class AnalysisEngine:
                 codes = [b.code for b in bonds if AnalysisEngine.is_valid_bond(b, min_volume=min_volume)]
                 if codes:
                     history_batch = storage.get_quote_history_batch(codes, limit=30, start_date=start_date, end_date=end_date)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         results = []

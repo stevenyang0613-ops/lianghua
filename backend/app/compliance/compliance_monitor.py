@@ -359,7 +359,8 @@ class ComplianceMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(violation)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
     
     def add_alert_callback(self, callback: Callable):

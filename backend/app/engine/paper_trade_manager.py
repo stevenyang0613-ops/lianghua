@@ -59,6 +59,10 @@ class PaperAccount:
     _last_trade_date: str = ""
     _needs_init: bool = False  # 延迟初始化标记
 
+    # 模拟日期序列: 与策略 _dates 对齐，确保 idx 始终有效
+    _sim_dates: list[str] = field(default_factory=list)
+    _sim_idx: int = 0  # 策略运行索引（初始化为历史数据最后一个索引）
+
     def to_dict(self) -> dict:
         acc = self.trade_engine.account
         # 获取策略参数定义
@@ -66,7 +70,8 @@ class PaperAccount:
         try:
             from app.strategies import STRATEGY_REGISTRY
             strategy_cls = STRATEGY_REGISTRY.get(self.strategy_id)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Suppressed: {e}")
             pass
         param_defs = []
         if strategy_cls and hasattr(strategy_cls, 'params'):
@@ -97,6 +102,9 @@ class PaperAccount:
             "total_profit_pct": round(
                 (acc.total_asset - self.initial_cash) / self.initial_cash * 100, 2
             ) if self.initial_cash > 0 else 0.0,
+            # 调仓倒计时信息
+            "trade_day_count": self._trade_day_count,
+            "rebalance_days": self.params.get("rebalance_days", 7) if isinstance(self.params, dict) else 7,
         }
 
 
@@ -243,9 +251,12 @@ class PaperTradeManager:
         if init_df is not None and len(init_df) > 0:
             try:
                 account.strategy.on_init(init_df)
+                # 初始化模拟索引为历史数据的最后一个索引，使 idx 始终指向 "今天"
+                account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 logger.info(
                     f"[PaperTrade] Initialized strategy for account {account_id} "
-                    f"with {len(init_df)} bonds"
+                    f"with {len(init_df)} bonds, sim_idx={account._sim_idx}"
                 )
             except Exception as e:
                 logger.warning(
@@ -257,6 +268,8 @@ class PaperTradeManager:
                 "will initialize on first quote tick"
             )
             account._needs_init = True
+            account._sim_idx = 0
+            account._sim_dates = []
 
         account.is_running = True
 
@@ -296,6 +309,8 @@ class PaperTradeManager:
         account._trade_day_count = 0
         account._last_trade_date = ""
         account._needs_init = False
+        account._sim_dates = []
+        account._sim_idx = 0
 
         if was_running:
             # 重新初始化策略
@@ -306,10 +321,14 @@ class PaperTradeManager:
             if init_df is not None and len(init_df) > 0:
                 try:
                     account.strategy.on_init(init_df)
+                    account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after reset failed for {account_id}: {e}")
             else:
                 account._needs_init = True
+                account._sim_idx = 0
+                account._sim_dates = []
             account.is_running = True
 
         logger.info(f"[PaperTrade] Reset account {account_id}")
@@ -334,10 +353,14 @@ class PaperTradeManager:
             if init_df is not None and len(init_df) > 0:
                 try:
                     account.strategy.on_init(init_df)
+                    account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                 except Exception as e:
                     logger.warning(f"[PaperTrade] on_init after param update failed for {account_id}: {e}")
             else:
                 account._needs_init = True
+                account._sim_idx = 0
+                account._sim_dates = []
 
         # 持久化
         self._save_account(account)
@@ -649,7 +672,7 @@ class PaperTradeManager:
                     df = df.sort_values(["code", "date"])
                     df[col] = df.groupby("code")["price"].pct_change(periods=window) * 100
                 except Exception:
-                    pass  # 数据不足时保持 NaN
+                    logger.debug(f"[PaperTrade] Momentum {col} calculation failed (insufficient data), keeping NaN")
         
         return df
 
@@ -668,7 +691,8 @@ class PaperTradeManager:
             for account in running_accounts:
                 try:
                     account.trade_engine.update_prices(valid_bonds)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Suppressed: {e}")
                     pass
             return
 
@@ -709,6 +733,32 @@ class PaperTradeManager:
                 weekday = datetime.now().weekday()  # 0=Mon, 6=Sun
                 if weekday < 5:  # 周一到周五才算交易日
                     account._trade_day_count += 1
+                    # 动态扩展策略的日期序列，确保 idx 始终有效
+                    if account.strategy is not None:
+                        try:
+                            strategy_dates = list(getattr(account.strategy, '_dates', []))
+                            if not any(str(d) == today for d in strategy_dates):
+                                account._sim_idx += 1
+                                strategy_dates.append(today)
+                                account.strategy._dates = strategy_dates
+                                # 同步更新 _date_data_map
+                                if hasattr(account.strategy, '_date_data_map'):
+                                    dmap = dict(account.strategy._date_data_map)
+                                    dmap[today] = df
+                                    account.strategy._date_data_map = dmap
+                                # 同步更新 _data（限制保留最近90天防止无限增长）
+                                if hasattr(account.strategy, '_data') and not df.empty:
+                                    combined = pd.concat([account.strategy._data, df], ignore_index=True)
+                                    if 'date' in combined.columns:
+                                        unique_dates = combined['date'].unique()
+                                        if len(unique_dates) > 90:
+                                            cutoff = sorted(unique_dates)[-90]
+                                            combined = combined[combined['date'] >= cutoff]
+                                    account.strategy._data = combined
+                        except Exception as e:
+                            logger.debug(
+                                f"[PaperTrade] Strategy date extension failed for {account.id}: {e}"
+                            )
                 account._last_trade_date = today
 
             # 更新持仓价格
@@ -721,10 +771,12 @@ class PaperTradeManager:
             if getattr(account, '_needs_init', False) and account.strategy is not None:
                 try:
                     account.strategy.on_init(df)
+                    account._sim_idx = max(0, len(getattr(account.strategy, '_dates', [])) - 1)
+                    account._sim_dates = [str(d) for d in getattr(account.strategy, '_dates', [])]
                     account._needs_init = False
                     logger.info(
                         f"[PaperTrade] Delayed on_init for account {account.id} "
-                        f"with {len(df)} bonds"
+                        f"with {len(df)} bonds, sim_idx={account._sim_idx}"
                     )
                 except Exception as e:
                     logger.warning(
@@ -732,10 +784,21 @@ class PaperTradeManager:
                     )
                     account._needs_init = False
 
+            # 使用 _sim_idx 运行策略，确保与策略 _dates 对齐
+            idx = account._sim_idx
+            if account.strategy and hasattr(account.strategy, '_dates'):
+                max_idx = max(0, len(account.strategy._dates) - 1)
+                if idx > max_idx:
+                    logger.warning(
+                        f"[PaperTrade] idx {idx} exceeds strategy _dates length "
+                        f"{len(account.strategy._dates)} for account {account.id}, clamping to {max_idx}"
+                    )
+                    idx = max_idx
+
             # 运行策略（30 秒超时防止阻塞）
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(account.strategy.on_data, df, account._trade_day_count),
+                    asyncio.to_thread(account.strategy.on_data, df, idx),
                     timeout=30.0,
                 )
             except asyncio.TimeoutError:
@@ -818,6 +881,8 @@ class PaperTradeManager:
 
     def _execute_signals(self, account: PaperAccount, signals: list[dict]) -> None:
         """自动执行信号: 先卖后买，每个买入信号至少分配总资产的 _min_alloc_pct"""
+        if not signals:
+            return
         trade_engine = account.trade_engine
 
         # 1. 先卖
@@ -981,10 +1046,13 @@ class PaperTradeManager:
                     batch_size = 1000
                     total_deleted = 0
                     while True:
-                        old_count = conn.execute(
+                        row = conn.execute(
                             "SELECT COUNT(*) FROM paper_equity WHERE ts < ?",
                             (cutoff,),
-                        ).fetchone()[0]
+                        ).fetchone()
+                        if row is None or len(row) == 0:
+                            break
+                        old_count = row[0]
                         if old_count == 0:
                             break
                         conn.execute(
@@ -993,10 +1061,13 @@ class PaperTradeManager:
                             ")",
                             (cutoff, batch_size),
                         )
-                        deleted = old_count - conn.execute(
+                        row2 = conn.execute(
                             "SELECT COUNT(*) FROM paper_equity WHERE ts < ?",
                             (cutoff,),
-                        ).fetchone()[0]
+                        ).fetchone()
+                        if row2 is None or len(row2) == 0:
+                            break
+                        deleted = old_count - row2[0]
                         total_deleted += deleted
                         if deleted < batch_size:
                             break
@@ -1031,8 +1102,9 @@ class PaperTradeManager:
                 conn.execute("""
                     INSERT OR REPLACE INTO paper_accounts
                     (id, strategy_id, strategy_name, initial_cash, is_running, params_json,
-                     cash_balance, positions_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     cash_balance, positions_json, created_at, updated_at,
+                     sim_dates, last_trade_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     account.id,
                     account.strategy_id,
@@ -1044,6 +1116,8 @@ class PaperTradeManager:
                     json.dumps(positions_data),
                     account.created_at,
                     datetime.now(),
+                    json.dumps(account._sim_dates),
+                    account._last_trade_date,
                 ))
         except Exception as e:
             logger.warning(f"[PaperTrade] Failed to save account {account.id}: {e}")
@@ -1067,14 +1141,23 @@ class PaperTradeManager:
             return
         try:
             cursor = self._storage.conn.execute("""
-                SELECT id, strategy_id, strategy_name, initial_cash, is_running,
-                       params_json, created_at, cash_balance, positions_json
-                FROM paper_accounts
+                SELECT * FROM paper_accounts
             """)
+            columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
             for row in rows:
-                account_id, strategy_id, strategy_name, initial_cash, is_running, \
-                    params_json, created_at, cash_balance, positions_json = row
+                row_dict = dict(zip(columns, row))
+                account_id = row_dict['id']
+                strategy_id = row_dict['strategy_id']
+                strategy_name = row_dict['strategy_name']
+                initial_cash = row_dict['initial_cash']
+                is_running = row_dict['is_running']
+                params_json = row_dict.get('params_json', '{}')
+                created_at = row_dict.get('created_at')
+                cash_balance = row_dict.get('cash_balance')
+                positions_json = row_dict.get('positions_json', '[]')
+                sim_dates = row_dict.get('sim_dates', '[]')
+                last_trade_date = row_dict.get('last_trade_date', '')
                 params = {}
                 if params_json:
                     try:
@@ -1112,6 +1195,14 @@ class PaperTradeManager:
                     except Exception as e:
                         logger.warning(f"[PaperTrade] Failed to restore positions for {account_id}: {e}")
 
+                # 恢复 sim_dates
+                sim_dates_list = []
+                if sim_dates:
+                    try:
+                        sim_dates_list = json.loads(sim_dates)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 account = PaperAccount(
                     id=account_id,
                     strategy_id=strategy_id,
@@ -1120,6 +1211,9 @@ class PaperTradeManager:
                     initial_cash=initial_cash,
                     params=params,
                     created_at=created_at or datetime.now(),
+                    _sim_dates=sim_dates_list,
+                    _last_trade_date=last_trade_date,
+                    _sim_idx=max(0, len(sim_dates_list) - 1) if sim_dates_list else 0,
                 )
 
                 self._accounts[account_id] = account
@@ -1230,8 +1324,12 @@ class PaperTradeManager:
             self._tick_refresh_call_count()
             self._record_refresh_failure(str(e))
 
-    def ensure_default_accounts(self) -> list[PaperAccount]:
-        """确保三个核心策略都有默认账户，返回新创建的账户列表"""
+    def ensure_default_accounts(self, auto_start: bool = True) -> list[PaperAccount]:
+        """确保三个核心策略都有默认账户，返回新创建的账户列表
+
+        Args:
+            auto_start: 是否自动启动新创建的账户（默认True）
+        """
         from app.strategies import STRATEGY_REGISTRY
         existing_strategies = {a.strategy_id for a in self._accounts.values()}
         new_accounts = []
@@ -1252,4 +1350,10 @@ class PaperTradeManager:
                 f"[PaperTrade] Auto-created {strategy_name} with optimal params "
                 f"({len(optimal_params)} keys)"
             )
+            if auto_start:
+                try:
+                    self.start_account(account.id)
+                    logger.info(f"[PaperTrade] Auto-started {strategy_name} account {account.id}")
+                except Exception as e:
+                    logger.warning(f"[PaperTrade] Auto-start failed for {strategy_name}: {e}")
         return new_accounts

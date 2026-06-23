@@ -233,7 +233,8 @@ class MultiLevelCache:
         if self.l2_client:
             try:
                 self.l2_client.delete(key)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
     def get_stats(self) -> Dict:
@@ -633,7 +634,8 @@ class WebSocketPusher:
                         await session.websocket.send(message)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
     def push_order_update(self, client_id: str, order: Dict):
@@ -668,7 +670,8 @@ class WebSocketPusher:
                         await session.websocket.send(message)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Suppressed: {e}")
                         pass
 
     def _generate_client_id(self) -> str:

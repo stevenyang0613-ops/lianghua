@@ -17,8 +17,9 @@ export default function StatusBar() {
 
   const handleReconnect = async () => {
     try {
-      await healthCheck()
+      const res = await healthCheck()
       setBackendConnected(true)
+      useAppStore.setState({ dataSources: res.data_sources || null })
     } catch {
       // 单次重试失败不修改全局状态，让 health check 机制管理
     }
@@ -88,6 +89,19 @@ export default function StatusBar() {
       {updatedAt && <Text type="secondary" style={{ fontSize: 12 }}>更新: {updatedAt}</Text>}
       <div style={{ flex: 1 }} />
       <Text type="secondary" style={{ fontSize: 12 }}>数据源: AKShare</Text>
+      <DataSourceTags />
     </div>
   )
+}
+
+function DataSourceTags() {
+  const dataSources = useAppStore((s) => s.dataSources)
+  if (!dataSources) return null
+  const mxOk = dataSources.mx?.configured
+  const tavilyOk = dataSources.tavily?.configured
+  const items = []
+  if (mxOk) items.push('MX')
+  if (tavilyOk) items.push('TAVILY')
+  if (items.length === 0) return null
+  return <Tag color="success" style={{ fontSize: 11, lineHeight: '18px', padding: '0 4px' }}>+{items.join('/')}</Tag>
 }

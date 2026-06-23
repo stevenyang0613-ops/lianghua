@@ -357,7 +357,8 @@ class BayesianOptimizer:
                 # 简化处理
                 for i, pr in enumerate(param_ranges):
                     importance[pr.name] = 1.0 / len(param_ranges)  # 等权重
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Suppressed: {e}")
                 pass
 
         return OptimizationResult(
