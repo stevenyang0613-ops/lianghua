@@ -649,6 +649,9 @@ class PaperTradeManager:
 
         account._sim_idx = today_idx
 
+        print(f"[DBG] force_rebalance {account_id[:8]}: calling on_data "
+              f"strategy={type(strategy).__name__} input_shape={on_data_input.shape} "
+              f"today_idx={today_idx} dates_len={len(original_dates)} valid_bonds={len(valid_bonds)}", flush=True)
         logger.info(
             f"[PaperTrade] force_rebalance {account_id[:8]}: calling on_data "
             f"strategy={type(strategy).__name__} input_shape={on_data_input.shape} "

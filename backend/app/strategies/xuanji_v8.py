@@ -41,7 +41,9 @@ class XuanjiV8Strategy(Strategy):
     description = "v8.0: 9因子(学术权重)+时序标准化+绝对平价溢价+正确IC+流动性因子"
 
     params = [
-        StrategyParam(name="hold_count", label="持有数量", type="int", default=15, min_val=5, max_val=50),
+        StrategyParam(name="hold_pct", label="持有比例(%)", type="float", default=5.0, min_val=2.0, max_val=20.0,
+                      description="可转债总数的百分比，用于动态计算持仓数量（与 hold_count 取较小值）"),
+        StrategyParam(name="hold_count", label="持有数量上限", type="int", default=20, min_val=5, max_val=50),
         StrategyParam(name="rebalance_days", label="调仓间隔(天)", type="int", default=15, min_val=5, max_val=60),
         StrategyParam(name="max_premium", label="溢价率上限(%)", type="float", default=60, min_val=20, max_val=100),
         StrategyParam(name="min_price", label="价格下限", type="float", default=85, min_val=70, max_val=110),
@@ -307,8 +309,12 @@ class XuanjiV8Strategy(Strategy):
         day_data['score'] = composite.clip(0, 10)
         day_data['score'] = day_data['score'].fillna(0.5)
         
-        # === 选券 ===
-        actual_hold = min(self.get_param('hold_count'), len(day_data))
+        # === 动态分层选券 ===
+        # 根据可转债总数百分比动态计算持仓数量, 再与 hold_count 取小
+        total_bonds = len(day_data)
+        hold_pct = self.get_param('hold_pct') or 5.0
+        pct_hold = max(5, int(total_bonds * hold_pct / 100.0))
+        actual_hold = min(pct_hold, self.get_param('hold_count'))
         selected = day_data.nlargest(actual_hold, 'score')
         if selected.empty:
             selected = day_data.nlargest(max(actual_hold // 2, 5), 'score')

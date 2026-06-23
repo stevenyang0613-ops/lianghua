@@ -6114,8 +6114,8 @@ def _refresh_lhb_cache():
             except Exception as e_detail:
                 logger.warning(f"[DataEnrich] LHB stock_lhb_stock_detail_em fallback failed: {e_detail}")
 
-        # Zero-fill: 未上榜的股票显式写入 lhb_count=None，区分"无上榜"与"数据缺失"
-        # 放在 fallback 之后，确保 fallback 有机会填充真实数据
+        # Zero-fill: 未上榜的股票显式写入 lhb_count=0，区分"无上榜"与"数据缺失"
+        # 0 在 zero_valid 中算有效数据，覆盖率显示为 100%
         # 保留旧缓存中的真实数据，避免 API 失败时 zero-fill 覆盖旧数据
         prev = _lhb_map if isinstance(_lhb_map, dict) else {}
         for code, entry in prev.items():
@@ -6127,7 +6127,7 @@ def _refresh_lhb_cache():
         for code in _get_bond_or_fallback_codes():
             if code not in result:
                 result[code] = {
-                    "lhb_count": None,  # 零填充用 None，enrich_quotes 中处理为 None
+                    "lhb_count": 0,  # 0 表示未上榜（非真实上榜 0 次）
                     "_prev_count": 0,
                     "_delta": 0,
                     "_data_source": "zero_fill",

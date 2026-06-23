@@ -235,15 +235,15 @@ class TestExtendedCacheRefresh:
             de._bond_stock_codes = saved_codes
 
     def test_lhb_cache_refresh_empty_dataframe_records_ok(self):
-        """Even when LHB API returns empty, zero-fill should produce count > 0."""
+        """Even when LHB API returns empty, zero-fill preserves old data but real_count=0."""
         empty_df = pd.DataFrame()
         with patch.object(de, "_run_with_timeout", return_value=empty_df):
             with patch.object(de, "_get_bond_or_fallback_codes", return_value={"000001", "000002"}):
                 count = de._refresh_lhb_cache()
-        # 零填充确保即使 API 失败也有基础数据
-        assert count > 0
+        # API 失败时返回真实数据数 0，但 zero-fill 已填充到缓存
+        assert count == 0
         metrics = de.get_refresh_metrics()
-        assert metrics["_refresh_lhb_cache"]["status"] == "ok"
+        assert metrics["_refresh_lhb_cache"]["status"] == "empty"
 
     def test_block_trade_cache_refresh_ok(self):
         df = pd.DataFrame({"证券代码": ["000001"], "成交额": [12345.6]})

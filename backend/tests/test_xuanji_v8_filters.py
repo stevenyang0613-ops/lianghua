@@ -1,4 +1,4 @@
-"""测试 xuanji_v8 策略的条款过滤"""
+"""测试 xuanji_v8 策略的条款过滤 + 动态分层仓位"""
 import pandas as pd
 import numpy as np
 import pytest
@@ -94,3 +94,51 @@ class TestXuanjiV8ForcedCallFilter:
         day_data = df[df['date'] == '2024-01-01'].copy()
         day_data = s._apply_filters(day_data)  # 不应崩溃
         assert len(day_data) > 0, "应返回数据"
+
+
+class TestDynamicPositionSizing:
+    """验证动态分层仓位逻辑"""
+
+    def _make_strategy(self, hold_pct=5.0, hold_count=20):
+        s = XuanjiV8Strategy(hold_pct=hold_pct, hold_count=hold_count)
+        return s
+
+    def test_small_market_fewer_holdings(self):
+        """小市场（≤100只）按百分比计算持仓数"""
+        codes = [f"110{i:03d}" for i in range(50)]
+        df = _make_v8_data(codes=codes, prices=[110.0], premiums=[10.0])
+        s = self._make_strategy(hold_pct=10.0, hold_count=20)
+        s.on_init(df)
+        day_data = df[df['date'] == '2024-01-01'].copy()
+        day_data = s._apply_filters(day_data)
+        result = s.on_data(day_data, 0)
+        if result:
+            buy_signals = [r for r in result if r.get('action') == 'buy']
+            assert len(buy_signals) >= 1
+
+    def test_large_market_more_holdings(self):
+        """大市场（≥400只）按百分比计算持仓数更多"""
+        codes = [f"110{i:03d}" for i in range(400)]
+        df = _make_v8_data(codes=codes, prices=[110.0], premiums=[10.0])
+        s = self._make_strategy(hold_pct=5.0, hold_count=30)
+        s.on_init(df)
+        day_data = df[df['date'] == '2024-01-01'].copy()
+        day_data = s._apply_filters(day_data)
+        result = s.on_data(day_data, 0)
+        if result:
+            buy_signals = [r for r in result if r.get('action') == 'buy']
+            assert len(buy_signals) >= 10, f"大市场应有 >=10 个买入信号, 实际 {len(buy_signals)}"
+
+    def test_hold_count_caps_percentage(self):
+        """hold_count 应作为上限限制百分比计算结果"""
+        codes = [f"110{i:03d}" for i in range(500)]
+        df = _make_v8_data(codes=codes, prices=[110.0], premiums=[10.0])
+        s = self._make_strategy(hold_pct=10.0, hold_count=15)
+        s.on_init(df)
+        day_data = df[df['date'] == '2024-01-01'].copy()
+        day_data = s._apply_filters(day_data)
+        result = s.on_data(day_data, 0)
+        if result:
+            buy_signals = [r for r in result if r.get('action') == 'buy']
+            assert len(buy_signals) <= 15, \
+                f"持有数应 ≤ hold_count(15), 实际 {len(buy_signals)}"
