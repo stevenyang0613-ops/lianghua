@@ -239,41 +239,51 @@ class MXAdapter(DataSourceAdapter):
         """
         if not self._initialized:
             return {"success": False, "error": "MX adapter not initialized"}
+        
+        mx_error = None
         try:
             if data_type == "news":
                 mod = self._import_mx_module("mx-search")
                 client = mod.MXSearch(api_key=self._api_key)
                 result = client.search(query_text)
-                items = []
-                for item in result.get("data", {}).get("items", []):
-                    items.append({
-                        "title": item.get("title", ""),
-                        "content": item.get("content", ""),
-                        "date": item.get("date", ""),
-                        "source": item.get("source", ""),
-                        "type": item.get("type", ""),
-                    })
-                return {"success": True, "data": items, "total": len(items), "source": "mx_search"}
+                # MXSearch 返回错误时也可能没有抛出异常
+                if result.get("status", 0) != 0 or result.get("code", 0) != 0:
+                    mx_error = result.get("message", "MX 资讯搜索返回错误")
+                else:
+                    items = []
+                    for item in result.get("data", {}).get("items", []):
+                        items.append({
+                            "title": item.get("title", ""),
+                            "content": item.get("content", ""),
+                            "date": item.get("date", ""),
+                            "source": item.get("source", ""),
+                            "type": item.get("type", ""),
+                        })
+                    return {"success": True, "data": items, "total": len(items), "source": "mx_search"}
             else:
                 mod = self._import_mx_module("mx-data")
                 client = mod.MXData(api_key=self._api_key)
                 result = client.query(query_text)
                 tables, _, total_rows, err = client.parse_result(result)
                 if err:
-                    return {"success": False, "error": err}
-                rows = []
-                for table in tables:
-                    rows.extend(table.get("rows", []))
-                return {
-                    "success": True,
-                    "data": rows,
-                    "tables": tables,
-                    "total_rows": total_rows,
-                    "source": "mx_data",
-                }
+                    mx_error = err
+                else:
+                    rows = []
+                    for table in tables:
+                        rows.extend(table.get("rows", []))
+                    return {
+                        "success": True,
+                        "data": rows,
+                        "tables": tables,
+                        "total_rows": total_rows,
+                        "source": "mx_data",
+                    }
         except Exception as e:
-            logger.warning(f"[MX] Query failed, attempting fallback to EastmoneyAdapter: {e}")
-            # 降级策略：MX 失败时回退到 EastmoneyAdapter（直接 HTTP 调用，无需 Key）
+            mx_error = str(e)
+        
+        # 如果走到这里，说明 MX 查询失败（有错误或有异常），触发降级回退
+        if mx_error:
+            logger.warning(f"[MX] Query failed, attempting fallback to EastmoneyAdapter: {mx_error}")
             try:
                 em = EastmoneyAdapter(DataSourceConfig(name="eastmoney"))
                 await em.connect()
@@ -286,15 +296,13 @@ class MXAdapter(DataSourceAdapter):
                     codes = code_matches[:20]
                 
                 if data_type == "news":
-                    # 资讯搜索暂无可直接回退的接口，返回提示
                     return {
                         "success": False,
                         "error": "MX API 暂不可用，资讯搜索暂无降级方案。请检查 MX_APIKEY 配置。",
                         "fallback": True,
-                        "fallback_reason": str(e),
+                        "fallback_reason": mx_error,
                     }
                 elif codes:
-                    # 有代码 → 尝试获取实时行情
                     df = await em.get_realtime_quotes(codes)
                     if not df.empty:
                         rows = df.to_dict("records")
@@ -305,32 +313,32 @@ class MXAdapter(DataSourceAdapter):
                             "total_rows": len(rows),
                             "source": "eastmoney_fallback",
                             "fallback": True,
-                            "fallback_reason": str(e),
+                            "fallback_reason": mx_error,
                         }
                     else:
-                        # Eastmoney 也返回空 → 标记已尝试降级
                         return {
                             "success": False,
-                            "error": f"MX API 不可用（{str(e)[:80]}…），Eastmoney 降级回退也未返回数据。",
+                            "error": f"MX API 不可用（{mx_error[:80]}…），Eastmoney 降级回退也未返回数据。",
                             "fallback": True,
-                            "fallback_reason": str(e),
+                            "fallback_reason": mx_error,
                         }
                 
-                # 无代码或行情失败 → 回退到宏观/行业数据
                 return {
                     "success": False,
-                    "error": f"MX API 暂不可用（{str(e)[:80]}…），且当前查询暂无降级方案。请检查 MX_APIKEY 配置。",
+                    "error": f"MX API 暂不可用（{mx_error[:80]}…），且当前查询暂无降级方案。请检查 MX_APIKEY 配置。",
                     "fallback": True,
-                    "fallback_reason": str(e),
+                    "fallback_reason": mx_error,
                 }
             except Exception as fallback_err:
                 logger.error(f"[MX] Fallback to EastmoneyAdapter also failed: {fallback_err}")
                 return {
                     "success": False,
-                    "error": f"MX API 错误: {str(e)[:80]}…；降级回退也失败: {str(fallback_err)[:80]}…",
+                    "error": f"MX API 错误: {mx_error[:80]}…；降级回退也失败: {str(fallback_err)[:80]}…",
                     "fallback": True,
-                    "fallback_reason": str(e),
+                    "fallback_reason": mx_error,
                 }
+        
+        return {"success": False, "error": "未知错误"}
 
     # ------------------------------------------------------------------
     # 内部工具
