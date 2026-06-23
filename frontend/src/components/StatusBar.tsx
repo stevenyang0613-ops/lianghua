@@ -12,6 +12,7 @@ export default function StatusBar() {
   const setBackendConnected = useAppStore((s) => s.setBackendConnected)
   const wsConnected = useAppStore((s) => s.marketWsConnected)
   const signalWsConnected = useAppStore((s) => s.signalWsConnected)
+  const marketRunning = useAppStore((s) => s.marketRunning)
   const updatedAt = useMarketStore((s) => s.updatedAt)
   const bondCount = useMarketStore((s) => Array.isArray(s.allBonds) ? s.allBonds.length : 0)
 
